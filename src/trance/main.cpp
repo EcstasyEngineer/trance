@@ -466,7 +466,7 @@ int main(int argc, char** argv)
     save_system(system, system_path);
   }
 
-  auto root_path = std::tr2::sys::path{session_path}.parent_path().string();
+  auto root_path = std::filesystem::path{session_path}.parent_path().string();
   if (FLAGS_validate_session) {
     return validate_session(root_path, session);
   }

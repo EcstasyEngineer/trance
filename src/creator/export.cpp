@@ -50,10 +50,10 @@ ExportFrame::ExportFrame(CreatorFrame* parent, trance_pb::System& system,
 , _system{system}
 , _parent{parent}
 {
-  auto default_path = (executable_path / *--std::tr2::sys::path{session_path}.end()).string();
+  auto default_path = (std::filesystem::path{executable_path} / *--std::filesystem::path{session_path}.end()).string();
   const auto& settings = system.last_export_settings();
 
-  std::tr2::sys::path last_path =
+  std::filesystem::path last_path =
       settings.path().empty() ? default_path + ".h264" : settings.path();
   auto patterns = EXPORT_FILE_PATTERNS;
   for (std::size_t i = 0; i < patterns.size(); ++i) {

@@ -482,7 +482,7 @@ ThemePage::ThemePage(wxNotebook* parent, CreatorFrame& creator_frame, trance_pb:
   });
 
   _button_open->Bind(wxEVT_COMMAND_BUTTON_CLICKED, [&](wxCommandEvent&) {
-    auto root = std::tr2::sys::path{_session_path}.parent_path().string();
+    auto root = std::filesystem::path{_session_path}.parent_path().string();
     for (const auto& pair : _tree_lookup) {
       if (pair.second == _tree->GetSelection()) {
         auto path = root + "\\" + pair.first;
@@ -493,7 +493,7 @@ ThemePage::ThemePage(wxNotebook* parent, CreatorFrame& creator_frame, trance_pb:
   });
 
   _button_rename->Bind(wxEVT_COMMAND_BUTTON_CLICKED, [&](wxCommandEvent&) {
-    auto root = std::tr2::sys::path{_session_path}.parent_path().string();
+    auto root = std::filesystem::path{_session_path}.parent_path().string();
     std::string old_relative_path;
     for (const auto& pair : _tree_lookup) {
       if (pair.second == _tree->GetSelection()) {
@@ -514,23 +514,23 @@ ThemePage::ThemePage(wxNotebook* parent, CreatorFrame& creator_frame, trance_pb:
       return;
     }
     auto rename_file = [&](const std::string old_abs, const std::string& new_abs) {
-      auto old_path = std::tr2::sys::path{old_abs};
-      auto new_path = std::tr2::sys::path{new_abs};
+      auto old_path = std::filesystem::path{old_abs};
+      auto new_path = std::filesystem::path{new_abs};
       std::error_code ec;
-      auto parent = std::tr2::sys::canonical(new_path.parent_path(), ec);
-      if (!std::tr2::sys::is_directory(parent) &&
-          (ec || !std::tr2::sys::create_directories(parent))) {
+      auto parent = std::filesystem::canonical(new_path.parent_path(), ec);
+      if (!std::filesystem::is_directory(parent) &&
+          (ec || !std::filesystem::create_directories(parent))) {
         wxMessageBox("Couldn't create directory " + parent.string(), "", wxICON_ERROR, this);
         return false;
       }
-      bool exists = std::tr2::sys::exists(new_path, ec);
+      bool exists = std::filesystem::exists(new_path, ec);
       if (exists || ec) {
         wxMessageBox(
             "Couldn't rename " + old_path.string() + ": " + new_path.string() + " already exists",
             "", wxICON_ERROR, this);
         return false;
       }
-      std::tr2::sys::rename(old_path, new_path, ec);
+      std::filesystem::rename(old_path, new_path, ec);
       if (ec) {
         wxMessageBox("Couldn't rename " + old_path.string() + " to " + new_path.string(), "",
                      wxICON_ERROR, this);
@@ -552,12 +552,12 @@ ThemePage::ThemePage(wxNotebook* parent, CreatorFrame& creator_frame, trance_pb:
     };
     auto old_root = root + "/" + old_relative_path;
     auto new_root = root + "/" + new_relative_path;
-    if (std::tr2::sys::is_regular_file(old_root)) {
+    if (std::filesystem::is_regular_file(old_root)) {
       rename_file(old_root, new_root);
     } else {
-      for (auto it = std::tr2::sys::recursive_directory_iterator(old_root);
-           it != std::tr2::sys::recursive_directory_iterator(); ++it) {
-        if (!std::tr2::sys::is_regular_file(it->status())) {
+      for (auto it = std::filesystem::recursive_directory_iterator(old_root);
+           it != std::filesystem::recursive_directory_iterator(); ++it) {
+        if (!std::filesystem::is_regular_file(it->status())) {
           continue;
         }
         auto rel_rel = make_relative(old_root, it->path().string());
@@ -840,10 +840,10 @@ void ThemePage::RefreshDirectory(const std::string& directory)
   std::size_t file_count = 0;
   std::size_t unused_count = 0;
   for (const auto& path_str : paths) {
-    std::tr2::sys::path path{path_str};
+    std::filesystem::path path{path_str};
     for (auto it = ++path.begin(); it != path.end(); ++it) {
-      std::tr2::sys::path component;
-      std::tr2::sys::path parent;
+      std::filesystem::path component;
+      std::filesystem::path parent;
       for (auto jt = path.begin(); jt != it; ++jt) {
         component.append(*jt);
         parent.append(*jt);
@@ -957,7 +957,7 @@ void ThemePage::RefreshTree(wxTreeListItem item)
   auto data = _tree->GetItemData(item);
   if (data != nullptr) {
     std::string path = ((const wxStringClientData*) data)->GetData();
-    auto root = std::tr2::sys::path{_session_path}.parent_path().string();
+    auto root = std::filesystem::path{_session_path}.parent_path().string();
     const auto& images = _complete_theme->image_path();
     const auto& anims = _complete_theme->animation_path();
     const auto& fonts = _complete_theme->font_path();
@@ -1007,7 +1007,7 @@ void ThemePage::GenerateFontPreview()
   }
   std::string text;
   if (_current_text_line.empty()) {
-    text = (--std::tr2::sys::path{_current_font}.end())->string();
+    text = (--std::filesystem::path{_current_font}.end())->string();
   } else {
     text = _current_text_line;
   }
