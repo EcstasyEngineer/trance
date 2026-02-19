@@ -1,12 +1,16 @@
 cmake_minimum_required(VERSION 3.20)
+cmake_policy(SET CMP0091 NEW)
 project(trance CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(DEPS ${CMAKE_SOURCE_DIR}/dependencies)
 
-# MSVC runtime: /MDd debug, /MD release
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL$<$<CONFIG:Debug>:Debug>")
+# MSVC runtime: /MDd debug, /MD release (set directly to avoid CMP0091 quirks)
+add_compile_options(
+  $<$<CONFIG:Debug>:/MDd>
+  $<$<NOT:$<CONFIG:Debug>>:/MD>
+)
 
 # ---------------------------------------------------------------------------
 # Shared compiler options / definitions
@@ -23,20 +27,26 @@ add_compile_definitions(
 
 # ---------------------------------------------------------------------------
 # Protobuf codegen
+# protoc preserves the proto_path-relative path, so with --proto_path=src
+# and input src/common/trance.proto it outputs to ${CMAKE_BINARY_DIR}/common/
 # ---------------------------------------------------------------------------
-set(PROTO_OUT ${CMAKE_BINARY_DIR}/common)
-file(MAKE_DIRECTORY ${PROTO_OUT})
-
 add_custom_command(
   OUTPUT
-    ${PROTO_OUT}/trance.pb.h
-    ${PROTO_OUT}/trance.pb.cc
+    ${CMAKE_BINARY_DIR}/common/trance.pb.h
+    ${CMAKE_BINARY_DIR}/common/trance.pb.cc
   COMMAND ${DEPS}/x64/protoc.exe
-    --cpp_out=${CMAKE_BINARY_DIR}/common
+    --cpp_out=${CMAKE_BINARY_DIR}
     --proto_path=${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/common/trance.proto
   DEPENDS ${CMAKE_SOURCE_DIR}/src/common/trance.proto
   VERBATIM
+)
+
+# Custom target so other targets can depend on the generated files
+add_custom_target(proto_gen
+  DEPENDS
+    ${CMAKE_BINARY_DIR}/common/trance.pb.h
+    ${CMAKE_BINARY_DIR}/common/trance.pb.cc
 )
 
 # ---------------------------------------------------------------------------
@@ -57,10 +67,12 @@ set(SHARED_INCLUDES
 add_library(common_lib STATIC
   src/common/media/image.cpp
   src/common/media/streamer.cpp
-  src/common/session.cpp
+  src/common/session.cpp   # #includes common/trance.pb.cc directly
   src/jpgd/jpgd.cpp
-  ${PROTO_OUT}/trance.pb.cc
 )
+
+# Ensure protobuf files are generated before we compile session.cpp
+add_dependencies(common_lib proto_gen)
 
 target_include_directories(common_lib PUBLIC ${SHARED_INCLUDES})
 target_link_directories(common_lib PUBLIC ${LIB_DIR})
@@ -94,7 +106,7 @@ target_link_libraries(trance PRIVATE
   glew
   freetype
   jpeg
-  libgif.a
+  "$<IF:$<CONFIG:Debug>,${DEPS}/x64/Debug/libgif.a,${DEPS}/x64/Release/libgif.a>"
   openvr_api
   $<IF:$<CONFIG:Debug>,sfml-system-s-d,sfml-system-s>
   $<IF:$<CONFIG:Debug>,sfml-window-s-d,sfml-window-s>
@@ -166,7 +178,7 @@ target_link_libraries(creator PRIVATE
   $<IF:$<CONFIG:Debug>,vpxmdd,vpxmd>
   opengl32
   jpeg
-  libgif.a
+  "$<IF:$<CONFIG:Debug>,${DEPS}/x64/Debug/libgif.a,${DEPS}/x64/Release/libgif.a>"
   $<IF:$<CONFIG:Debug>,sfml-system-s-d,sfml-system-s>
   $<IF:$<CONFIG:Debug>,sfml-graphics-s-d,sfml-graphics-s>
   $<IF:$<CONFIG:Debug>,sfml-window-s-d,sfml-window-s>
