@@ -1,0 +1,17 @@
+{
+  "name": "trance",
+  "version": "0.1.0",
+  "description": "Dependency manifest — all deps currently vendored under dependencies/",
+  "dependencies": [
+    "protobuf",
+    "sfml",
+    "glew",
+    "freetype",
+    "libvpx",
+    "libwebm",
+    "x264",
+    "giflib",
+    "gflags",
+    "wxwidgets"
+  ]
+}
