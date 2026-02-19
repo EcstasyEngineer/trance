@@ -101,7 +101,6 @@
 #elif defined(_MSC_VER)
 # if _MSC_VER >= 1600  // Since Visual Studio 2010
 #  define GOOGLE_PROTOBUF_HAS_CXX11_HASH
-#  define GOOGLE_PROTOBUF_HASH_COMPARE std::hash_compare
 # elif _MSC_VER >= 1500  // Since Visual Studio 2008
 #  undef GOOGLE_PROTOBUF_HAVE_HASH_MAP
 #  undef GOOGLE_PROTOBUF_HAVE_HASH_SET
@@ -222,21 +221,22 @@ class hash_set : public std::set<Key, HashFcn> {
 #elif defined(_MSC_VER) && !defined(_STLPORT_VERSION)
 
 template <typename Key>
-struct hash : public GOOGLE_PROTOBUF_HASH_COMPARE<Key> {
+struct hash : public std::hash<Key> {
 };
 
-// MSVC's hash_compare<const char*> hashes based on the string contents but
-// compares based on the string pointer.  WTF?
-class CstringLess {
- public:
+template <>
+struct hash<const char*> {
+  inline size_t operator()(const char* str) const {
+    size_t result = 0;
+    for (; *str != '\0'; str++) {
+      result = 5 * result + *str;
+    }
+    return result;
+  }
   inline bool operator()(const char* a, const char* b) const {
     return strcmp(a, b) < 0;
   }
 };
-
-template <>
-struct hash<const char*>
-    : public GOOGLE_PROTOBUF_HASH_COMPARE<const char*, CstringLess> {};
 
 template <typename Key, typename Data,
           typename HashFcn = hash<Key>,
