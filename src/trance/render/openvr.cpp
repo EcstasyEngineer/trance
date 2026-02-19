@@ -14,6 +14,7 @@ OpenVrRenderer::OpenVrRenderer(const trance_pb::System& system)
 , _success{false}
 , _width{0}
 , _height{0}
+, _eye_spacing_multiplier{150.f}
 , _system{nullptr}
 , _compositor{nullptr}
 {
@@ -42,6 +43,25 @@ OpenVrRenderer::OpenVrRenderer(const trance_pb::System& system)
   }
 
   _system->GetRecommendedRenderTargetSize(&_width, &_height);
+
+  // Compute eye_spacing_multiplier from actual HMD IPD and projection FOV.
+  // eye_offset = eye_spacing_multiplier * eye_spacing_setting. At the shader's
+  // near_plane=1 and nominal far_plane=129, the NDC parallax shift is
+  // eye_offset / far_plane. We want that to equal half_ipd / half_fov_tangent
+  // (the physical eye separation in view-space units), so:
+  // eye_spacing_multiplier = 16 * nominal_far * half_ipd / half_fov_width
+  {
+    auto left_eye = _system->GetEyeToHeadTransform(vr::Eye_Left);
+    float half_ipd = -left_eye.m[0][3];
+    if (half_ipd <= 0.f) {
+      half_ipd = 0.032f;
+    }
+    float proj_left, proj_right, proj_top, proj_bottom;
+    _system->GetProjectionRaw(vr::Eye_Left, &proj_left, &proj_right, &proj_top, &proj_bottom);
+    const float half_fov_width = (proj_right - proj_left) / 2.0f;
+    const float nominal_far_plane = 1.f + 0.5f * 256.f;
+    _eye_spacing_multiplier = 16.f * nominal_far_plane * half_ipd / half_fov_width;
+  }
   for (int i = 0; i < 2; ++i) {
     GLuint fbo;
     GLuint fb_tex;
@@ -101,7 +121,6 @@ uint32_t OpenVrRenderer::view_width() const
 
 uint32_t OpenVrRenderer::width() const
 {
-  // TODO: ???
   return _width;
 }
 
@@ -112,8 +131,7 @@ uint32_t OpenVrRenderer::height() const
 
 float OpenVrRenderer::eye_spacing_multiplier() const
 {
-  // TODO: ???
-  return 150.f;
+  return _eye_spacing_multiplier;
 }
 
 void OpenVrRenderer::init()
@@ -145,8 +163,8 @@ void OpenVrRenderer::render(const std::function<void(State)>& render_fn)
     render_fn(eye ? State::VR_RIGHT : State::VR_LEFT);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
   }
-  vr::Texture_t left = {(void*) (uintptr_t) _fbo[0], vr::TextureType_OpenGL, vr::ColorSpace_Gamma};
-  vr::Texture_t right = {(void*) (uintptr_t) _fbo[1], vr::TextureType_OpenGL, vr::ColorSpace_Gamma};
+  vr::Texture_t left = {(void*) (uintptr_t) _fb_tex[0], vr::TextureType_OpenGL, vr::ColorSpace_Gamma};
+  vr::Texture_t right = {(void*) (uintptr_t) _fb_tex[1], vr::TextureType_OpenGL, vr::ColorSpace_Gamma};
   error = vr::VRCompositor()->Submit(vr::Eye_Left, &left);
   if (error != vr::VRCompositorError_None) {
     std::cerr << "compositor submit failed: " << static_cast<uint32_t>(error) << std::endl;

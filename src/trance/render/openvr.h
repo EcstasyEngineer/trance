@@ -31,6 +31,7 @@ private:
   bool _success;
   uint32_t _width;
   uint32_t _height;
+  float _eye_spacing_multiplier;
 
   vr::IVRSystem* _system;
   vr::IVRCompositor* _compositor;
