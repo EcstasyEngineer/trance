@@ -6,7 +6,11 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(DEPS ${CMAKE_SOURCE_DIR}/dependencies)
 
-# MSVC runtime: /MDd debug, /MD release (set directly to avoid CMP0091 quirks)
+# WORKAROUND: CMAKE_MSVC_RUNTIME_LIBRARY is broken with the VS 18 2026 generator
+# in CMake 4.1.2 — it rejects "MultiThreadedDLLDebug" as an unknown value.
+# Set /MDd and /MD directly instead. Once CMake adds proper VS 18 support, replace
+# these two lines with:
+#   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL$<$<CONFIG:Debug>:Debug>")
 add_compile_options(
   $<$<CONFIG:Debug>:/MDd>
   $<$<NOT:$<CONFIG:Debug>>:/MD>
@@ -42,7 +46,16 @@ add_custom_command(
   VERBATIM
 )
 
-# Custom target so other targets can depend on the generated files
+# Custom target so other targets can declare an explicit dependency on the
+# generated files. Normally we'd just list trance.pb.cc as a source in
+# common_lib and CMake would track the dependency automatically — but
+# session.cpp does `#include <common/trance.pb.cc>` directly instead of
+# including the header and linking against the compiled TU, so pb.cc must
+# NOT be a separate compilation unit here.
+# WORKAROUND: if session.cpp is ever refactored to #include <common/trance.pb.h>
+# (and trance.pb.cc is removed from the include), replace this block and the
+# add_dependencies() below with a single source entry in common_lib:
+#   ${CMAKE_BINARY_DIR}/common/trance.pb.cc
 add_custom_target(proto_gen
   DEPENDS
     ${CMAKE_BINARY_DIR}/common/trance.pb.h
