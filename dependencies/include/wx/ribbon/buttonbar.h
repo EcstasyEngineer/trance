@@ -18,6 +18,7 @@
 #include "wx/ribbon/control.h"
 #include "wx/dynarray.h"
 
+class wxRibbonButtonBar;
 class wxRibbonButtonBarButtonBase;
 class wxRibbonButtonBarLayout;
 class wxRibbonButtonBarButtonInstance;
@@ -131,6 +132,7 @@ public:
     virtual wxRibbonButtonBarButtonBase *GetItem(size_t n) const;
     virtual wxRibbonButtonBarButtonBase *GetItemById(int id) const;
     virtual int GetItemId(wxRibbonButtonBarButtonBase *button) const;
+    virtual wxRect GetItemRect(int button_id) const;
 
 
     virtual bool Realize() wxOVERRIDE;
@@ -138,6 +140,22 @@ public:
     virtual bool DeleteButton(int button_id);
     virtual void EnableButton(int button_id, bool enable = true);
     virtual void ToggleButton(int button_id, bool checked);
+
+    virtual void SetButtonIcon(
+                int button_id,
+                const wxBitmap& bitmap,
+                const wxBitmap& bitmap_small = wxNullBitmap,
+                const wxBitmap& bitmap_disabled = wxNullBitmap,
+                const wxBitmap& bitmap_small_disabled = wxNullBitmap);
+
+    virtual void SetButtonText(int button_id, const wxString& label);
+    virtual void SetButtonTextMinWidth(int button_id,
+                int min_width_medium, int min_width_large);
+    virtual void SetButtonTextMinWidth(int button_id, const wxString& label);
+    virtual void SetButtonMinSizeClass(int button_id,
+                wxRibbonButtonBarButtonState min_size_class);
+    virtual void SetButtonMaxSizeClass(int button_id,
+                wxRibbonButtonBarButtonState max_size_class);
 
     virtual wxRibbonButtonBarButtonBase *GetActiveItem() const;
     virtual wxRibbonButtonBarButtonBase *GetHoveredItem() const;
@@ -171,9 +189,9 @@ protected:
 
     void CommonInit(long style);
     void MakeLayouts();
-    bool TryCollapseLayout(wxRibbonButtonBarLayout* original, size_t first_btn, size_t* last_button);
-    static wxBitmap MakeResizedBitmap(const wxBitmap& original, wxSize size);
-    static wxBitmap MakeDisabledBitmap(const wxBitmap& original);
+    void TryCollapseLayout(wxRibbonButtonBarLayout* original,
+                     size_t first_btn, size_t* last_button,
+                     wxRibbonButtonBarButtonState target_size);
     void FetchButtonSizeInfo(wxRibbonButtonBarButtonBase* button,
         wxRibbonButtonBarButtonState size, wxDC& dc);
     virtual void UpdateWindowUI(long flags) wxOVERRIDE;
@@ -190,6 +208,9 @@ protected:
     bool m_layouts_valid;
     bool m_lock_active_state;
     bool m_show_tooltips_for_disabled;
+
+private:
+    wxRibbonBar* m_ribbonBar;
 
 #ifndef SWIG
     wxDECLARE_CLASS(wxRibbonButtonBar);
@@ -208,13 +229,6 @@ public:
         , m_bar(bar), m_button(button)
     {
     }
-#ifndef SWIG
-    wxRibbonButtonBarEvent(const wxRibbonButtonBarEvent& e) : wxCommandEvent(e)
-    {
-        m_bar = e.m_bar;
-        m_button = e.m_button;
-    }
-#endif
     wxEvent *Clone() const wxOVERRIDE { return new wxRibbonButtonBarEvent(*this); }
 
     wxRibbonButtonBar* GetBar() {return m_bar;}

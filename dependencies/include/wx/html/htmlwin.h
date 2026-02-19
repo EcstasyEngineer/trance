@@ -21,7 +21,7 @@
 #include "wx/filesys.h"
 #include "wx/html/htmlfilt.h"
 #include "wx/filename.h"
-#include "wx/bitmap.h"
+#include "wx/bmpbndl.h"
 
 class wxHtmlProcessor;
 class wxHtmlWinModule;
@@ -106,7 +106,7 @@ public:
     virtual void SetHTMLBackgroundColour(const wxColour& clr) = 0;
 
     /// Sets window's background to given bitmap.
-    virtual void SetHTMLBackgroundImage(const wxBitmap& bmpBg) = 0;
+    virtual void SetHTMLBackgroundImage(const wxBitmapBundle& bmpBg) = 0;
 
     /// Sets status bar text.
     virtual void SetHTMLStatusText(const wxString& text) = 0;
@@ -146,7 +146,7 @@ protected:
     /**
         Virtual dtor.
 
-        It is not really needed in this case but at leats it prevents gcc from
+        It is not really needed in this case, but at least it prevents gcc from
         complaining about its absence.
      */
     virtual ~wxHtmlWindowMouseHelper() { }
@@ -260,7 +260,7 @@ public:
 
     // Set HTML page and display it. !! source is HTML document itself,
     // it is NOT address/filename of HTML document. If you want to
-    // specify document location, use LoadPage() istead
+    // specify document location, use LoadPage() instead
     // Return value : false if an error occurred, true otherwise
     virtual bool SetPage(const wxString& source);
 
@@ -315,7 +315,7 @@ public:
 
     // Sets the bitmap to use for background (currnetly it will be tiled,
     // when/if we have CSS support we could add other possibilities...)
-    void SetBackgroundImage(const wxBitmap& bmpBg) { m_bmpBg = bmpBg; }
+    void SetBackgroundImage(const wxBitmapBundle& bmpBg) { m_bmpBg = bmpBg; }
 
 #if wxUSE_CONFIG
     // Saves custom settings into cfg config. it will use the path 'path'
@@ -405,9 +405,11 @@ protected:
     void OnPaint(wxPaintEvent& event);
     void OnEraseBackground(wxEraseEvent& event);
     void OnSize(wxSizeEvent& event);
+    void OnDPIChanged(wxDPIChangedEvent& event);
     void OnMouseMove(wxMouseEvent& event);
     void OnMouseDown(wxMouseEvent& event);
     void OnMouseUp(wxMouseEvent& event);
+    void OnFocusEvent(wxFocusEvent& event);
 #if wxUSE_CLIPBOARD
     void OnKeyUp(wxKeyEvent& event);
     void OnDoubleClick(wxMouseEvent& event);
@@ -458,7 +460,7 @@ public:
     virtual wxWindow* GetHTMLWindow() wxOVERRIDE;
     virtual wxColour GetHTMLBackgroundColour() const wxOVERRIDE;
     virtual void SetHTMLBackgroundColour(const wxColour& clr) wxOVERRIDE;
-    virtual void SetHTMLBackgroundImage(const wxBitmap& bmpBg) wxOVERRIDE;
+    virtual void SetHTMLBackgroundImage(const wxBitmapBundle& bmpBg) wxOVERRIDE;
     virtual void SetHTMLStatusText(const wxString& text) wxOVERRIDE;
     virtual wxCursor GetHTMLCursor(HTMLCursor type) const wxOVERRIDE;
 
@@ -502,8 +504,8 @@ protected:
     bool m_makingSelection;
 
 #if wxUSE_CLIPBOARD
-    // time of the last doubleclick event, used to detect tripleclicks
-    // (tripleclicks are used to select whole line):
+    // time of the last double-click event, used to detect triple clicks
+    // (triple clicks are used to select whole line):
     wxMilliClock_t m_lastDoubleClick;
 
     // helper class to automatically scroll the window if the user is selecting
@@ -521,7 +523,7 @@ private:
     wxBitmap m_backBuffer;
 
     // background image, may be invalid
-    wxBitmap m_bmpBg;
+    wxBitmapBundle m_bmpBg;
 
     // variables used when user is selecting text
     wxPoint     m_tmpSelFromPos;
@@ -578,10 +580,10 @@ public:
                     wxHtmlCell *cell, const wxPoint &pt,
                     const wxMouseEvent &ev)
         : wxCommandEvent(commandType, id)
+        , m_mouseEvent(ev)
+        , m_pt(pt)
     {
         m_cell = cell;
-        m_pt = pt;
-        m_mouseEvent = ev;
         m_bLinkWasClicked = false;
     }
 
@@ -602,7 +604,7 @@ private:
 
     bool m_bLinkWasClicked;
 
-    wxDECLARE_DYNAMIC_CLASS_NO_ASSIGN(wxHtmlCellEvent);
+    wxDECLARE_DYNAMIC_CLASS_NO_ASSIGN_DEF_COPY(wxHtmlCellEvent);
 };
 
 
@@ -617,8 +619,8 @@ public:
     wxHtmlLinkEvent() {}
     wxHtmlLinkEvent(int id, const wxHtmlLinkInfo &linkinfo)
         : wxCommandEvent(wxEVT_HTML_LINK_CLICKED, id)
+        , m_linkInfo(linkinfo)
     {
-        m_linkInfo = linkinfo;
     }
 
     const wxHtmlLinkInfo &GetLinkInfo() const { return m_linkInfo; }
@@ -629,7 +631,7 @@ public:
 private:
     wxHtmlLinkInfo m_linkInfo;
 
-    wxDECLARE_DYNAMIC_CLASS_NO_ASSIGN(wxHtmlLinkEvent);
+    wxDECLARE_DYNAMIC_CLASS_NO_ASSIGN_DEF_COPY(wxHtmlLinkEvent);
 };
 
 

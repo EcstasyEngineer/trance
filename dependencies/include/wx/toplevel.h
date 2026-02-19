@@ -24,8 +24,6 @@
 // the default names for various classes
 extern WXDLLIMPEXP_DATA_CORE(const char) wxFrameNameStr[];
 
-class WXDLLIMPEXP_FWD_CORE wxTopLevelWindowBase;
-
 // ----------------------------------------------------------------------------
 // constants
 // ----------------------------------------------------------------------------
@@ -121,6 +119,13 @@ enum
     wxUSER_ATTENTION_ERROR = 2
 };
 
+// Values for Get/SetContentProtection
+enum wxContentProtection
+{
+    wxCONTENT_PROTECTION_NONE,
+    wxCONTENT_PROTECTION_ENABLED
+};
+
 // ----------------------------------------------------------------------------
 // wxTopLevelWindow: a top level (as opposed to child) window
 // ----------------------------------------------------------------------------
@@ -166,7 +171,8 @@ public:
     // set the frame icons
     virtual void SetIcons(const wxIconBundle& icons) { m_icons = icons; }
 
-    virtual bool EnableFullScreenView(bool WXUNUSED(enable) = true)
+    virtual bool EnableFullScreenView(bool WXUNUSED(enable) = true,
+                                      long WXUNUSED(style) = wxFULLSCREEN_ALL)
     {
         return false;
     }
@@ -182,6 +188,11 @@ public:
 
     // return true if the frame is in fullscreen mode
     virtual bool IsFullScreen() const = 0;
+
+    virtual wxContentProtection GetContentProtection() const
+        { return wxCONTENT_PROTECTION_NONE; }
+    virtual bool SetContentProtection(wxContentProtection WXUNUSED(contentProtection))
+        { return false; }
 
     // the title of the top level window: the text which the
     // window shows usually at the top of the frame/dialog in dedicated bar
@@ -240,6 +251,35 @@ public:
     wxWindow *SetTmpDefaultItem(wxWindow *win)
         { wxWindow *old = GetDefaultItem(); m_winTmpDefault = win; return old; }
 
+
+    // Class for saving/restoring fields describing the window geometry.
+    //
+    // This class is used by the functions below to allow saving the geometry
+    // of the window and restoring it later. The components describing geometry
+    // are platform-dependent, so there is no struct containing them and
+    // instead the methods of this class are used to save or [try to] restore
+    // whichever components are used under the current platform.
+    class GeometrySerializer
+    {
+    public:
+        virtual ~GeometrySerializer() {}
+
+        // If saving a field returns false, it's fatal error and SaveGeometry()
+        // will return false.
+        virtual bool SaveField(const wxString& name, int value) const = 0;
+
+        // If restoring a field returns false, it just means that the field is
+        // not present and RestoreToGeometry() still continues with restoring
+        // the other values.
+        virtual bool RestoreField(const wxString& name, int* value) = 0;
+    };
+
+    // Save the current window geometry using the provided serializer and
+    // restore the window to the previously saved geometry.
+    bool SaveGeometry(const GeometrySerializer& ser) const;
+    bool RestoreToGeometry(GeometrySerializer& ser);
+
+
     // implementation only from now on
     // -------------------------------
 
@@ -249,9 +289,13 @@ public:
     virtual bool IsTopNavigationDomain(NavigationKind kind) const wxOVERRIDE;
     virtual bool IsVisible() const { return IsShown(); }
 
+    // override to do TLW-specific layout: we resize our unique child to fill
+    // the entire client area
+    virtual bool Layout() wxOVERRIDE;
+
     // event handlers
     void OnCloseWindow(wxCloseEvent& event);
-    void OnSize(wxSizeEvent& WXUNUSED(event)) { DoLayout(); }
+    void OnSize(wxSizeEvent& WXUNUSED(event)) { Layout(); }
 
     // Get rect to be used to center top-level children
     virtual void GetRectForTopLevelChildren(int *x, int *y, int *w, int *h);
@@ -299,12 +343,16 @@ protected:
     // send the iconize event, return true if processed
     bool SendIconizeEvent(bool iconized = true);
 
-    // do TLW-specific layout: we resize our unique child to fill the entire
-    // client area
-    void DoLayout();
+    // this method is only kept for compatibility, call Layout() instead.
+    void DoLayout() { Layout(); }
 
     static int WidthDefault(int w) { return w == wxDefaultCoord ? GetDefaultSize().x : w; }
     static int HeightDefault(int h) { return h == wxDefaultCoord ? GetDefaultSize().y : h; }
+
+    // Stub virtual functions for forward binary compatibility. DO NOT USE.
+    virtual void* WXReservedTLW1(void*);
+    virtual void* WXReservedTLW2(void*);
+    virtual void* WXReservedTLW3(void*);
 
 
     // the frame icon
@@ -364,7 +412,7 @@ protected:
                    const wxPoint& pos = wxDefaultPosition,
                    const wxSize& size = wxDefaultSize,
                    long style = wxDEFAULT_FRAME_STYLE,
-                   const wxString& name = wxFrameNameStr)
+                   const wxString& name = wxASCII_STR(wxFrameNameStr))
             : wxTopLevelWindowNative(parent, winid, title,
                                      pos, size, style, name)
         {

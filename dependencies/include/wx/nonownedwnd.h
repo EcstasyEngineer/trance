@@ -72,7 +72,7 @@ public:
     {
         // Non owned windows don't inherit attributes from their parent window
         // (if the parent frame is red, it doesn't mean that all dialogs shown
-        // by it should be red as well), so don't do anything here neither.
+        // by it should be red as well), so don't do anything here either.
     }
 
 protected:
@@ -102,6 +102,8 @@ protected:
     #include "wx/osx/nonownedwnd.h"
 #elif defined(__WXMSW__)
     #include "wx/msw/nonownedwnd.h"
+#elif defined(__WXQT__)
+    #include "wx/qt/nonownedwnd.h"
 #else
     // No special class needed in other ports, they can derive both wxTLW and
     // wxPopupWindow directly from wxWindow and don't implement SetShape().

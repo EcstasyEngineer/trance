@@ -17,11 +17,11 @@
 
 class WXDLLIMPEXP_FWD_CORE wxButton;
 class WXDLLIMPEXP_FWD_CORE wxStaticBitmap;
-class WXDLLIMPEXP_FWD_ADV wxWizardEvent;
+class WXDLLIMPEXP_FWD_CORE wxWizardEvent;
 class WXDLLIMPEXP_FWD_CORE wxBoxSizer;
-class WXDLLIMPEXP_FWD_ADV wxWizardSizer;
+class WXDLLIMPEXP_FWD_CORE wxWizardSizer;
 
-class WXDLLIMPEXP_ADV wxWizard : public wxWizardBase
+class WXDLLIMPEXP_CORE wxWizard : public wxWizardBase
 {
 public:
     // ctor
@@ -29,7 +29,7 @@ public:
     wxWizard(wxWindow *parent,
              int id = wxID_ANY,
              const wxString& title = wxEmptyString,
-             const wxBitmap& bitmap = wxNullBitmap,
+             const wxBitmapBundle& bitmap = wxBitmapBundle(),
              const wxPoint& pos = wxDefaultPosition,
              long style = wxDEFAULT_DIALOG_STYLE)
     {
@@ -39,7 +39,7 @@ public:
     bool Create(wxWindow *parent,
              int id = wxID_ANY,
              const wxString& title = wxEmptyString,
-             const wxBitmap& bitmap = wxNullBitmap,
+             const wxBitmapBundle& bitmap = wxBitmapBundle(),
              const wxPoint& pos = wxDefaultPosition,
              long style = wxDEFAULT_DIALOG_STYLE);
     void Init();
@@ -55,8 +55,8 @@ public:
     virtual void SetBorder(int border) wxOVERRIDE;
 
     /// set/get bitmap
-    const wxBitmap& GetBitmap() const { return m_bitmap; }
-    void SetBitmap(const wxBitmap& bitmap);
+    wxBitmap GetBitmap() const { return m_bitmap.GetBitmapFor(this); }
+    void SetBitmap(const wxBitmapBundle& bitmap);
 
     // implementation only from now on
     // -------------------------------
@@ -116,6 +116,9 @@ protected:
     void AddBackNextPair(wxBoxSizer *buttonRow);
     void AddButtonRow(wxBoxSizer *mainColumn);
 
+    // This function can be used as event handle for wxEVT_DPI_CHANGED event.
+    void WXHandleDPIChanged(wxDPIChangedEvent& event);
+
     // the page size requested by user
     wxSize m_sizePage;
 
@@ -123,14 +126,18 @@ protected:
     wxPoint m_posWizard;
 
     // wizard state
-    wxWizardPage *m_page;       // the current page or NULL
-    wxWizardPage *m_firstpage;  // the page RunWizard started on or NULL
-    wxBitmap      m_bitmap;     // the default bitmap to show
+    wxWizardPage  *m_page;       // the current page or NULL
+    wxWizardPage  *m_firstpage;  // the page RunWizard started on or NULL
+    wxBitmapBundle m_bitmap;     // the default bitmap to show
 
     // wizard controls
     wxButton    *m_btnPrev,     // the "<Back" button
                 *m_btnNext;     // the "Next>" or "Finish" button
     wxStaticBitmap *m_statbmp;  // the control for the bitmap
+
+    // cached labels so their translations stay consistent
+    wxString    m_nextLabel,
+                m_finishLabel;
 
     // Border around page area sizer requested using SetBorder()
     int m_border;

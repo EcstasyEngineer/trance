@@ -17,7 +17,8 @@
 
 #include "wx/event.h"
 
-class WXDLLIMPEXP_FWD_ADV wxTaskBarIconEvent;
+class WXDLLIMPEXP_FWD_CORE wxTaskBarIconEvent;
+class wxBitmapBundle;
 
 // ----------------------------------------------------------------------------
 
@@ -38,7 +39,7 @@ enum wxTaskBarIconType
 // wxTaskBarIconBase: define wxTaskBarIcon interface
 // ----------------------------------------------------------------------------
 
-class WXDLLIMPEXP_ADV wxTaskBarIconBase : public wxEvtHandler
+class WXDLLIMPEXP_CORE wxTaskBarIconBase : public wxEvtHandler
 {
 public:
     wxTaskBarIconBase() { }
@@ -50,7 +51,7 @@ public:
 #endif
 
     // Operations:
-    virtual bool SetIcon(const wxIcon& icon,
+    virtual bool SetIcon(const wxBitmapBundle& icon,
                          const wxString& tooltip = wxEmptyString) = 0;
     virtual bool RemoveIcon() = 0;
     virtual bool PopupMenu(wxMenu *menu) = 0;
@@ -59,8 +60,15 @@ public:
     void Destroy();
 
 protected:
+    // Note: only one of the following functions should be overridden, if both
+    // of them are, GetPopupMenu() has the priority, i.e. CreatePopupMenu()
+    // won't be called if GetPopupMenu() returns a non-null pointer.
+
     // creates menu to be displayed when user clicks on the icon
     virtual wxMenu *CreatePopupMenu() { return NULL; }
+
+    // same as CreatePopupMenu but the returned menu won't be destroyed
+    virtual wxMenu *GetPopupMenu() { return NULL; }
 
 private:
     // default events handling, calls CreatePopupMenu:
@@ -91,7 +99,7 @@ private:
 // wxTaskBarIcon events
 // ----------------------------------------------------------------------------
 
-class WXDLLIMPEXP_ADV wxTaskBarIconEvent : public wxEvent
+class WXDLLIMPEXP_CORE wxTaskBarIconEvent : public wxEvent
 {
 public:
     wxTaskBarIconEvent(wxEventType evtType, wxTaskBarIcon *tbIcon)
@@ -103,20 +111,20 @@ public:
     virtual wxEvent *Clone() const wxOVERRIDE { return new wxTaskBarIconEvent(*this); }
 
 private:
-    wxDECLARE_NO_ASSIGN_CLASS(wxTaskBarIconEvent);
+    wxDECLARE_NO_ASSIGN_DEF_COPY(wxTaskBarIconEvent);
 };
 
 typedef void (wxEvtHandler::*wxTaskBarIconEventFunction)(wxTaskBarIconEvent&);
 
-wxDECLARE_EXPORTED_EVENT( WXDLLIMPEXP_ADV, wxEVT_TASKBAR_MOVE, wxTaskBarIconEvent );
-wxDECLARE_EXPORTED_EVENT( WXDLLIMPEXP_ADV, wxEVT_TASKBAR_LEFT_DOWN, wxTaskBarIconEvent );
-wxDECLARE_EXPORTED_EVENT( WXDLLIMPEXP_ADV, wxEVT_TASKBAR_LEFT_UP, wxTaskBarIconEvent );
-wxDECLARE_EXPORTED_EVENT( WXDLLIMPEXP_ADV, wxEVT_TASKBAR_RIGHT_DOWN, wxTaskBarIconEvent );
-wxDECLARE_EXPORTED_EVENT( WXDLLIMPEXP_ADV, wxEVT_TASKBAR_RIGHT_UP, wxTaskBarIconEvent );
-wxDECLARE_EXPORTED_EVENT( WXDLLIMPEXP_ADV, wxEVT_TASKBAR_LEFT_DCLICK, wxTaskBarIconEvent );
-wxDECLARE_EXPORTED_EVENT( WXDLLIMPEXP_ADV, wxEVT_TASKBAR_RIGHT_DCLICK, wxTaskBarIconEvent );
-wxDECLARE_EXPORTED_EVENT( WXDLLIMPEXP_ADV, wxEVT_TASKBAR_BALLOON_TIMEOUT, wxTaskBarIconEvent );
-wxDECLARE_EXPORTED_EVENT( WXDLLIMPEXP_ADV, wxEVT_TASKBAR_BALLOON_CLICK, wxTaskBarIconEvent );
+wxDECLARE_EXPORTED_EVENT( WXDLLIMPEXP_CORE, wxEVT_TASKBAR_MOVE, wxTaskBarIconEvent );
+wxDECLARE_EXPORTED_EVENT( WXDLLIMPEXP_CORE, wxEVT_TASKBAR_LEFT_DOWN, wxTaskBarIconEvent );
+wxDECLARE_EXPORTED_EVENT( WXDLLIMPEXP_CORE, wxEVT_TASKBAR_LEFT_UP, wxTaskBarIconEvent );
+wxDECLARE_EXPORTED_EVENT( WXDLLIMPEXP_CORE, wxEVT_TASKBAR_RIGHT_DOWN, wxTaskBarIconEvent );
+wxDECLARE_EXPORTED_EVENT( WXDLLIMPEXP_CORE, wxEVT_TASKBAR_RIGHT_UP, wxTaskBarIconEvent );
+wxDECLARE_EXPORTED_EVENT( WXDLLIMPEXP_CORE, wxEVT_TASKBAR_LEFT_DCLICK, wxTaskBarIconEvent );
+wxDECLARE_EXPORTED_EVENT( WXDLLIMPEXP_CORE, wxEVT_TASKBAR_RIGHT_DCLICK, wxTaskBarIconEvent );
+wxDECLARE_EXPORTED_EVENT( WXDLLIMPEXP_CORE, wxEVT_TASKBAR_BALLOON_TIMEOUT, wxTaskBarIconEvent );
+wxDECLARE_EXPORTED_EVENT( WXDLLIMPEXP_CORE, wxEVT_TASKBAR_BALLOON_CLICK, wxTaskBarIconEvent );
 
 #define wxTaskBarIconEventHandler(func) \
     wxEVENT_HANDLER_CAST(wxTaskBarIconEventFunction, func)

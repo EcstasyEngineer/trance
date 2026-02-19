@@ -12,6 +12,10 @@
 
 #include "wx/platform.h"
 
+// before including windows.h, define version macros at (currently) maximal
+// values because we do all our checks at run-time anyhow
+#include "wx/msw/winver.h"
+
 // strict type checking to detect conversion from HFOO to HBAR at compile-time
 #ifndef STRICT
     #define STRICT 1
@@ -23,35 +27,44 @@
     #define NOMINMAX
 #endif // NOMINMAX
 
+// Disable any warnings inside Windows headers.
+#ifdef __VISUALC__
+    #pragma warning(push, 1)
 
-// before including windows.h, define version macros at (currently) maximal
-// values because we do all our checks at run-time anyhow
-#ifndef WINVER
-    #define WINVER 0x0603
+    // Some warnings, which are disabled by default but could be enabled by the
+    // application code before including wx headers, are somehow not disabled
+    // even by switching to warning level 1, so disable them explicitly.
+
+    // expression before comma has no effect; expected expression with
+    // side-effect
+    #pragma warning(disable:4548)
+
+    // 'symbol' is not defined as a preprocessor macro, replacing with '0' for
+    // 'directives'
+    #pragma warning(disable:4668)
 #endif
 
-// define _WIN32_WINNT and _WIN32_IE to the highest possible values because we
-// always check for the version of installed DLLs at runtime anyway (see
-// wxGetWinVersion() and wxApp::GetComCtl32Version()) unless the user really
-// doesn't want to use APIs only available on later OS versions and had defined
-// them to (presumably lower) values
-#ifndef _WIN32_WINNT
-    #define _WIN32_WINNT 0x0603
-#endif
+// When the application wants to use <winsock2.h> (this is required for IPv6
+// support, for example), we must include it before winsock.h, and as windows.h
+// includes winsock.h, we have to do it before including it.
+#if wxUSE_SOCKETS && wxUSE_WINSOCK2
+    // Avoid warnings about Winsock 1.x functions deprecated in Winsock 2 that
+    // we still use (and that will certainly remain available for the
+    // foreseeable future anyhow).
+    #ifndef _WINSOCK_DEPRECATED_NO_WARNINGS
+        #define _WINSOCK_DEPRECATED_NO_WARNINGS
+    #endif
 
-#ifndef _WIN32_IE
-    #define _WIN32_IE 0x0700
-#endif
-
-// For IPv6 support, we must include winsock2.h before winsock.h, and
-// windows.h include winsock.h so do it before including it
-#if wxUSE_IPV6
     #include <winsock2.h>
 #endif
 
 #include <windows.h>
 
-// #undef the macros defined in winsows.h which conflict with code elsewhere
+#ifdef __VISUALC__
+    #pragma warning(pop)
+#endif
+
+// #undef the macros defined in windows.h which conflict with code elsewhere
 #include "wx/msw/winundef.h"
 
 #endif // _WX_WRAPWIN_H_

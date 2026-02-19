@@ -171,6 +171,12 @@ target_compile_definitions(creator PRIVATE
   _UNICODE
 )
 
+# wxWidgets header setup: the wx 3.2.x MSVC redirect (include/msvc/wx/setup.h)
+# must be found BEFORE the generic include/ so that #include "wx/setup.h"
+# resolves to the MSVC-specific version, which then pulls in the real
+# build-config setup.h from ${DEPS}/lib/vc_x64_lib/msw{u,ud}/wx/setup.h.
+target_include_directories(creator PRIVATE ${DEPS}/include/msvc)
+
 # wxWidgets auto-links its own libs via #pragma comment(lib, ...) in its headers,
 # so we only need to put the lib directory on the search path — we don't list wx
 # libs explicitly here.

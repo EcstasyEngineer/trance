@@ -81,7 +81,6 @@ public:
                             int imageId = NO_IMAGE) wxOVERRIDE;
     virtual int SetSelection(size_t n) wxOVERRIDE { return DoSetSelection(n, SetSelection_SendEvent); }
     virtual int ChangeSelection(size_t n) wxOVERRIDE { return DoSetSelection(n); }
-    virtual void SetImageList(wxImageList *imageList) wxOVERRIDE;
 
     virtual bool DeleteAllPages() wxOVERRIDE;
     virtual int HitTest(const wxPoint& pt, long *flags = NULL) const wxOVERRIDE;
@@ -91,6 +90,10 @@ public:
 
     // get the underlying toolbar
     wxToolBarBase* GetToolBar() const { return (wxToolBarBase*)m_bookctrl; }
+
+    // enable/disable a page
+    bool EnablePage(wxWindow *page, bool enable);
+    bool EnablePage(size_t page, bool enable);
 
     // must be called in OnIdle or by application to realize the toolbar and
     // select the initial page.
@@ -112,12 +115,17 @@ protected:
     // whether the toolbar needs to be realized
     bool m_needsRealizing;
 
-    // maximum bitmap size
-    wxSize m_maxBitmapSize;
-
 private:
     // common part of all constructors
     void Init();
+
+    // returns the tool identifier for the specified page
+    int PageToToolId(size_t page) const;
+
+    // returns the page index for the specified tool ID or
+    // wxNOT_FOUND if there is no page with that tool ID
+    int ToolIdToPage(int toolId) const;
+
 
     wxDECLARE_EVENT_TABLE();
     wxDECLARE_DYNAMIC_CLASS_NO_COPY(wxToolbook);

@@ -282,7 +282,10 @@ extern WXDLLIMPEXP_BASE void wxOnAssert(const char *file,
     // the need for the ugly global flag.
     #define wxASSERT_MSG_AT(cond, msg, file, line, func)                      \
         wxSTATEMENT_MACRO_BEGIN                                               \
-            if ( wxTheAssertHandler && !(cond) &&                             \
+            if ( cond )                                                       \
+            {                                                                 \
+            }                                                                 \
+            else if ( wxTheAssertHandler &&                                   \
                     (wxOnAssert(file, line, func, #cond, msg),                \
                      wxTrapInAssert) )                                        \
             {                                                                 \
@@ -328,6 +331,8 @@ extern WXDLLIMPEXP_BASE void wxOnAssert(const char *file,
     #define wxFAIL
     #define wxFAIL_MSG(msg)
     #define wxFAIL_COND_MSG(cond, msg)
+    #define wxFAIL_MSG_AT(msg, file, line, func)
+    #define wxFAIL_COND_MSG_AT(cond, msg, file, line, func)
 #endif  // wxDEBUG_LEVEL
 
 #if wxDEBUG_LEVEL >= 2
@@ -368,7 +373,7 @@ extern void WXDLLIMPEXP_BASE wxAbort();
         wxFAIL_COND_MSG(#cond, msg);                                      \
         op;                                                               \
     }                                                                     \
-    struct wxDummyCheckStruct /* just to force a semicolon */
+    struct wxMAKE_UNIQUE_NAME(wxDummyCheckStruct) /* to force a semicolon */
 
 // check which returns with the specified return code if the condition fails
 #define wxCHECK_MSG(cond, rc, msg)   wxCHECK2_MSG(cond, return rc, msg)
