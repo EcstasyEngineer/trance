@@ -1,52 +1,65 @@
-**trance** is a program designed to aid self-hypnosis by displaying images,
-animations and text in randomly-generated patterns.
+# trance
 
-Features
-========
+**trance** is a self-hypnosis tool that displays images, animations, and text in
+randomly-generated patterns designed to aid induction and deepening.
 
-* Randomly-generated: no two sessions are the same.
-* Graphical user interface for creating sessions.
-* Hardware-accelerated rendering of images, animations and fonts.
-* Audio support with multiple independent channels.
-* Programmable playlist.
-* Oculus Rift and SteamVR support.
-* Video export.
+## Features
 
-Sessions
-========
+- Randomly-generated visuals — no two sessions are the same
+- Eight distinct visual modes (slow flash, subliminal text, parallel images, animation bursts, and more)
+- Graphical session editor (`creator.exe`) with full control over all settings
+- Hardware-accelerated rendering via OpenGL
+- Audio support with multiple independent channels
+- Programmable playlist with conditionals and subroutines
+- Video export (`.webm`, `.h264`, frame-by-frame `.jpg`/`.png`/`.bmp`)
+- SteamVR (OpenVR) support
 
-The `creator.exe` program can be used to create and edit `.session` files. This
-allows full control over the behaviour. Sessions can be launched or exported as
-video from within `creator.exe`.
+## Quick start
 
-Alternatively, the session player `trance.exe` can be executed from any
-directory containing media files. This will generate a default session based
-on media files found in the directory structure.
+1. Download the [latest release](../../releases/latest) and extract it anywhere.
+2. Run `creator.exe` to build a session, or drop a folder of images/GIFs into the same
+   directory and run `trance.exe` directly — it will auto-generate a default session
+   from whatever media it finds.
+3. Press **Escape** to exit fullscreen.
 
-Data model
-==========
+## Data model
 
-* A **theme** is a combination of images, animations, fonts and text. Typically
-  each theme combines images and animations with relevant text on a particular
-  subject.
-* A **program** is a selection of themes along with settings to control how they
-  are displayed (e.g. playback speed; what configurations the images and text
-  should be displayed in).
-* A **playlist** determines how the session proceeds. Each item in the playlist
-  is associated with a particular program, determines which item in the playlist
-  should be played next, and can also trigger audio events (e.g. playing a file,
-  fading the volume on a particular channel). In this way, the session can be
-  synchronized with audio recordings.
-* A **session** is a collection of themes and programs along with a playlist.
+| Concept | Description |
+|---|---|
+| **Theme** | A collection of images, animations, fonts, and text lines, usually grouped around a subject |
+| **Program** | A selection of themes plus display settings (speed, visual mode weights, etc.) |
+| **Playlist** | A sequence of programs with timing, transitions, audio triggers, and optional branching/subroutines |
+| **Session** | A complete file (`.session`) containing themes, programs, and a playlist |
 
-All parts of a session can be edited with the provided GUI (`creator.exe`).
+All parts of a session are edited with `creator.exe`.
 
-Supported file formats
-======================
+## Supported file formats
 
-* Images: `.jpg`, `.png`, `.bmp`
-* Animations: `.gif`, `.webm`
-* Fonts: `.ttf`
-* Text: `.txt` (only used for generating default sessions)
-* Audio files: `.wav`, `.flac`, `.ogg`, `.aiff`
-* Video export: `.webm`, `.h264`, and (frame-by-frame) `.jpg`, `.png`, or `.bmp`
+| Type | Formats |
+|---|---|
+| Images | `.jpg` `.png` `.bmp` |
+| Animations | `.gif` `.webm` |
+| Fonts | `.ttf` |
+| Text | `.txt` (for auto-generated sessions) |
+| Audio | `.wav` `.flac` `.ogg` `.aiff` |
+| Video export | `.webm` `.h264` `.jpg` `.png` `.bmp` |
+
+## Building from source
+
+**Requirements:** Windows 10/11 x64, Visual Studio 2022 or later
+
+```
+git clone https://github.com/EcstasyEngineer/trance
+cd trance
+# Open build/trance.sln in Visual Studio, select Release|x64, build
+# Or from the command line:
+cmake --build build --config Release --parallel
+```
+
+Outputs land in `build/Release/`. All dependencies are vendored under `dependencies/` —
+no separate install step needed.
+
+## Contributing
+
+Bug reports and pull requests are welcome. See the
+[open issues](../../issues) for current work items.
