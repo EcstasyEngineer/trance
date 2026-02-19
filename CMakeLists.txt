@@ -17,7 +17,7 @@ add_compile_options(
 )
 
 # ---------------------------------------------------------------------------
-# Shared compiler options / definitions
+# Shared compiler options / definitions (all targets in this project share them)
 # ---------------------------------------------------------------------------
 add_compile_options(/W3 /WX /MP /wd4800 /wd4005)
 add_compile_definitions(
@@ -42,19 +42,19 @@ add_custom_command(
     --cpp_out=${CMAKE_BINARY_DIR}
     --proto_path=${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/common/trance.proto
-  DEPENDS ${CMAKE_SOURCE_DIR}/src/common/trance.proto
+  DEPENDS
+    ${CMAKE_SOURCE_DIR}/src/common/trance.proto
+    ${DEPS}/x64/protoc.exe
   VERBATIM
 )
 
-# Custom target so other targets can declare an explicit dependency on the
-# generated files. Normally we'd just list trance.pb.cc as a source in
-# common_lib and CMake would track the dependency automatically — but
-# session.cpp does `#include <common/trance.pb.cc>` directly instead of
-# including the header and linking against the compiled TU, so pb.cc must
-# NOT be a separate compilation unit here.
-# WORKAROUND: if session.cpp is ever refactored to #include <common/trance.pb.h>
-# (and trance.pb.cc is removed from the include), replace this block and the
-# add_dependencies() below with a single source entry in common_lib:
+# WORKAROUND: session.cpp does `#include <common/trance.pb.cc>` directly instead
+# of including the header and linking against the compiled TU, so trance.pb.cc
+# must NOT be listed as a compiled source (it would be compiled twice — once
+# by the compiler and once textually by the #include). We use a custom target
+# + add_dependencies to ensure the files are generated before session.cpp compiles.
+# If session.cpp is ever refactored to #include <common/trance.pb.h>, replace this
+# block and the add_dependencies() below with a single source entry in common_lib:
 #   ${CMAKE_BINARY_DIR}/common/trance.pb.cc
 add_custom_target(proto_gen
   DEPENDS
@@ -63,16 +63,11 @@ add_custom_target(proto_gen
 )
 
 # ---------------------------------------------------------------------------
-# Lib dir (generator expression — picks Debug or Release folder)
+# Helper: full path to a vendored lib (same filename in Debug and Release)
 # ---------------------------------------------------------------------------
-set(LIB_DIR "$<IF:$<CONFIG:Debug>,${DEPS}/x64/Debug,${DEPS}/x64/Release>")
-
-# Shared include dirs
-set(SHARED_INCLUDES
-  ${DEPS}/include
-  src/
-  ${CMAKE_BINARY_DIR}
-)
+set(D ${DEPS}/x64/Debug)
+set(R ${DEPS}/x64/Release)
+# Usage: "$<IF:$<CONFIG:Debug>,${D}/foo.lib,${R}/foo.lib>"
 
 # ---------------------------------------------------------------------------
 # Common static library
@@ -80,15 +75,17 @@ set(SHARED_INCLUDES
 add_library(common_lib STATIC
   src/common/media/image.cpp
   src/common/media/streamer.cpp
-  src/common/session.cpp   # #includes common/trance.pb.cc directly
+  src/common/session.cpp   # #includes common/trance.pb.cc directly (see WORKAROUND above)
   src/jpgd/jpgd.cpp
 )
 
-# Ensure protobuf files are generated before we compile session.cpp
 add_dependencies(common_lib proto_gen)
 
-target_include_directories(common_lib PUBLIC ${SHARED_INCLUDES})
-target_link_directories(common_lib PUBLIC ${LIB_DIR})
+target_include_directories(common_lib PUBLIC
+  ${DEPS}/include
+  src/
+  ${CMAKE_BINARY_DIR}
+)
 
 # ---------------------------------------------------------------------------
 # trance executable
@@ -110,53 +107,47 @@ add_executable(trance
   src/trance/visual/visual.cpp
 )
 
+# Libs with the same filename in both Debug and Release
+foreach(LIB IN ITEMS
+    LibOVR flac freetype gflags glew jpeg
+    libprotobuf libwebm libx264 ogg openal32
+    openvr_api vorbis vorbisfile)
+  target_link_libraries(trance PRIVATE
+    "$<IF:$<CONFIG:Debug>,${D}/${LIB}.lib,${R}/${LIB}.lib>")
+endforeach()
+
+# Libs with different filenames between Debug and Release
 target_link_libraries(trance PRIVATE
-  common_lib
-  ws2_32
-  winmm
-  shlwapi
-  opengl32
-  glew
-  freetype
-  jpeg
-  "$<IF:$<CONFIG:Debug>,${DEPS}/x64/Debug/libgif.a,${DEPS}/x64/Release/libgif.a>"
-  openvr_api
-  $<IF:$<CONFIG:Debug>,sfml-system-s-d,sfml-system-s>
-  $<IF:$<CONFIG:Debug>,sfml-window-s-d,sfml-window-s>
-  $<IF:$<CONFIG:Debug>,sfml-graphics-s-d,sfml-graphics-s>
-  $<IF:$<CONFIG:Debug>,sfml-audio-s-d,sfml-audio-s>
-  libx264
-  libwebm
-  $<IF:$<CONFIG:Debug>,vpxmdd,vpxmd>
-  LibOVR
-  libprotobuf
-  gflags
-  openal32
-  flac
-  ogg
-  vorbis
-  vorbisfile
+  common_lib   # also propagates include dirs
+  # Windows SDK — no path needed
+  ws2_32 winmm shlwapi opengl32
+  # SFML static libs (debug suffix differs)
+  "$<IF:$<CONFIG:Debug>,${D}/sfml-system-s-d.lib,${R}/sfml-system-s.lib>"
+  "$<IF:$<CONFIG:Debug>,${D}/sfml-window-s-d.lib,${R}/sfml-window-s.lib>"
+  "$<IF:$<CONFIG:Debug>,${D}/sfml-graphics-s-d.lib,${R}/sfml-graphics-s.lib>"
+  "$<IF:$<CONFIG:Debug>,${D}/sfml-audio-s-d.lib,${R}/sfml-audio-s.lib>"
+  # VPX (debug/release have different names)
+  "$<IF:$<CONFIG:Debug>,${D}/vpxmdd.lib,${R}/vpxmd.lib>"
+  # libgif ships as a .a (GNU archive), must use full path so MSVC doesn't mangle to .lib
+  "$<IF:$<CONFIG:Debug>,${D}/libgif.a,${R}/libgif.a>"
 )
 
 target_link_options(trance PRIVATE /NODEFAULTLIB:libcmt)
 
 # ---------------------------------------------------------------------------
 # DLL copy for trance (post-build)
-# libx264.dll: Debug folder for Debug, Release folder for Release
+# libx264.dll differs by config folder; the rest only ship from Release/
 # ---------------------------------------------------------------------------
 add_custom_command(TARGET trance POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    "$<IF:$<CONFIG:Debug>,${DEPS}/x64/Debug/libx264.dll,${DEPS}/x64/Release/libx264.dll>"
+    "$<IF:$<CONFIG:Debug>,${D}/libx264.dll,${R}/libx264.dll>"
     "$<TARGET_FILE_DIR:trance>"
   VERBATIM
 )
-
-# These DLLs only exist in the Release folder and are used by both configs
-foreach(DLL openal32.dll openvr_api.dll libwinpthread-1.dll)
+foreach(DLL IN ITEMS openal32.dll openvr_api.dll libwinpthread-1.dll)
   add_custom_command(TARGET trance POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "${DEPS}/x64/Release/${DLL}"
-      "$<TARGET_FILE_DIR:trance>"
+      "${R}/${DLL}" "$<TARGET_FILE_DIR:trance>"
     VERBATIM
   )
 endforeach()
@@ -180,22 +171,31 @@ target_compile_definitions(creator PRIVATE
   _UNICODE
 )
 
+# wxWidgets auto-links its own libs via #pragma comment(lib, ...) in its headers,
+# so we only need to put the lib directory on the search path — we don't list wx
+# libs explicitly here.
+target_link_directories(creator PRIVATE
+  "$<IF:$<CONFIG:Debug>,${D},${R}>")
+
+# Libs with the same filename in both Debug and Release
+foreach(LIB IN ITEMS
+    freetype jpeg libprotobuf libwebm libx264)
+  target_link_libraries(creator PRIVATE
+    "$<IF:$<CONFIG:Debug>,${D}/${LIB}.lib,${R}/${LIB}.lib>")
+endforeach()
+
 target_link_libraries(creator PRIVATE
-  common_lib
-  ws2_32
-  winmm
-  shlwapi
-  libx264
-  libwebm
-  freetype
-  $<IF:$<CONFIG:Debug>,vpxmdd,vpxmd>
-  opengl32
-  jpeg
-  "$<IF:$<CONFIG:Debug>,${DEPS}/x64/Debug/libgif.a,${DEPS}/x64/Release/libgif.a>"
-  $<IF:$<CONFIG:Debug>,sfml-system-s-d,sfml-system-s>
-  $<IF:$<CONFIG:Debug>,sfml-graphics-s-d,sfml-graphics-s>
-  $<IF:$<CONFIG:Debug>,sfml-window-s-d,sfml-window-s>
-  libprotobuf
+  common_lib   # also propagates include dirs
+  # Windows SDK
+  ws2_32 winmm shlwapi opengl32
+  # SFML
+  "$<IF:$<CONFIG:Debug>,${D}/sfml-system-s-d.lib,${R}/sfml-system-s.lib>"
+  "$<IF:$<CONFIG:Debug>,${D}/sfml-graphics-s-d.lib,${R}/sfml-graphics-s.lib>"
+  "$<IF:$<CONFIG:Debug>,${D}/sfml-window-s-d.lib,${R}/sfml-window-s.lib>"
+  # VPX
+  "$<IF:$<CONFIG:Debug>,${D}/vpxmdd.lib,${R}/vpxmd.lib>"
+  # libgif
+  "$<IF:$<CONFIG:Debug>,${D}/libgif.a,${R}/libgif.a>"
 )
 
 target_link_options(creator PRIVATE
