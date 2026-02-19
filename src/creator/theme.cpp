@@ -845,10 +845,10 @@ void ThemePage::RefreshDirectory(const std::string& directory)
       std::filesystem::path component;
       std::filesystem::path parent;
       for (auto jt = path.begin(); jt != it; ++jt) {
-        component.append(*jt);
-        parent.append(*jt);
+        component /= *jt;
+        parent /= *jt;
       }
-      component.append(*it);
+      component /= *it;
 
       if (_tree_lookup.find(component.string()) == _tree_lookup.end()) {
         wxClientData* data = nullptr;

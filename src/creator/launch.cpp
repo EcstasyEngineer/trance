@@ -3,6 +3,7 @@
 #include <common/session.h>
 #include <creator/main.h>
 #include <deque>
+#include <limits>
 
 #pragma warning(push, 0)
 #include <wx/button.h>
@@ -15,7 +16,7 @@
 namespace
 {
   struct TimeBounds {
-    uint64_t min_seconds = -1;
+    uint64_t min_seconds = std::numeric_limits<uint64_t>::max();
     uint64_t max_seconds = 0;
   };
   struct PlayTime {
