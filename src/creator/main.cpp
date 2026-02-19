@@ -574,8 +574,8 @@ bool CreatorFrame::OpenSession(const std::string& path)
 {
   try {
     _session = load_session(path);
-    SetStatusText("Read " + _session_path);
     SetSessionPath(path);
+    SetStatusText("Read " + _session_path);
     _menu_bar->Enable(ID_LAUNCH_SESSION, true);
     _menu_bar->Enable(ID_VALIDATE_SESSION, true);
     _menu_bar->Enable(ID_EXPORT_VIDEO, true);
@@ -658,12 +658,6 @@ public:
     SetTopWindow(_frame);
     return true;
   };
-
-  int OnExit() override
-  {
-    // Deleting _frame causes a crash. Shrug.
-    return 0;
-  }
 
   void OnInitCmdLine(wxCmdLineParser& parser) override
   {

@@ -143,7 +143,7 @@ SettingsFrame::SettingsFrame(CreatorFrame* parent, trance_pb::System& system)
   left->Add(label, 0, wxALL, DEFAULT_BORDER);
   left->Add(_animation_buffer_size, 0, wxALL | wxEXPAND, DEFAULT_BORDER);
   label = new wxStaticText{panel, wxID_ANY, "Font cache size:"};
-  label->SetToolTip(IMAGE_CACHE_SIZE_TOOLTIP);
+  label->SetToolTip(FONT_CACHE_SIZE_TOOLTIP);
   left->Add(label, 0, wxALL, DEFAULT_BORDER);
   left->Add(_font_cache_size, 0, wxALL | wxEXPAND, DEFAULT_BORDER);
   label = new wxStaticText{panel, wxID_ANY, "Rendering mode:"};

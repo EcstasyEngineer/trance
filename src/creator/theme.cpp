@@ -541,7 +541,7 @@ ThemePage::ThemePage(wxNotebook* parent, CreatorFrame& creator_frame, trance_pb:
         auto c = [&](google::protobuf::RepeatedPtrField<std::string>& field) {
           auto it = std::find(field.begin(), field.end(), make_relative(root, old_abs));
           if (it != field.end()) {
-            *field.Add() = make_relative(root, new_abs);
+            *it = make_relative(root, new_abs);
           }
         };
         c(*theme.mutable_font_path());
@@ -765,8 +765,8 @@ void ThemePage::RefreshOurData()
     _text_list->DeleteAllItems();
   }
   _button_new->Enable(!_item_selected.empty());
-  _button_edit->Enable(!_item_selected.empty() && it->second.text_line_size());
-  _button_delete->Enable(!_item_selected.empty() && it->second.text_line_size());
+  _button_edit->Enable(!_item_selected.empty() && it != _session.theme_map().end() && it->second.text_line_size());
+  _button_delete->Enable(!_item_selected.empty() && it != _session.theme_map().end() && it->second.text_line_size());
 
   if (!_path_selected.empty() && _tree_lookup.find(_path_selected) != _tree_lookup.end()) {
     RefreshTree(_tree_lookup[_path_selected]);
