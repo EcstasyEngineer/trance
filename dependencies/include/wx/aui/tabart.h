@@ -25,7 +25,7 @@
 #include "wx/font.h"
 #include "wx/pen.h"
 #include "wx/brush.h"
-#include "wx/bitmap.h"
+#include "wx/bmpbndl.h"
 
 
 class wxAuiNotebookPage;
@@ -47,7 +47,8 @@ public:
     virtual void SetFlags(unsigned int flags) = 0;
 
     virtual void SetSizingInfo(const wxSize& tabCtrlSize,
-                               size_t tabCount) = 0;
+                               size_t tabCount,
+                               wxWindow* wnd = NULL) = 0;
 
     virtual void SetNormalFont(const wxFont& font) = 0;
     virtual void SetSelectedFont(const wxFont& font) = 0;
@@ -87,7 +88,7 @@ public:
                          wxDC& dc,
                          wxWindow* wnd,
                          const wxString& caption,
-                         const wxBitmap& bitmap,
+                         const wxBitmapBundle& bitmap,
                          bool active,
                          int closeButtonState,
                          int* xExtent) = 0;
@@ -109,6 +110,9 @@ public:
                          wxWindow* wnd,
                          const wxAuiNotebookPageArray& pages,
                          const wxSize& requiredBmpSize) = 0;
+
+    // Provide opportunity for subclasses to recalculate colours
+    virtual void UpdateColoursFromSystem() {}
 };
 
 
@@ -123,7 +127,8 @@ public:
     wxAuiTabArt* Clone() wxOVERRIDE;
     void SetFlags(unsigned int flags) wxOVERRIDE;
     void SetSizingInfo(const wxSize& tabCtrlSize,
-                       size_t tabCount) wxOVERRIDE;
+                       size_t tabCount,
+                       wxWindow* wnd = NULL) wxOVERRIDE;
 
     void SetNormalFont(const wxFont& font) wxOVERRIDE;
     void SetSelectedFont(const wxFont& font) wxOVERRIDE;
@@ -171,7 +176,7 @@ public:
                  wxDC& dc,
                  wxWindow* wnd,
                  const wxString& caption,
-                 const wxBitmap& bitmap,
+                 const wxBitmapBundle& bitmap,
                  bool active,
                  int closeButtonState,
                  int* xExtent) wxOVERRIDE;
@@ -185,6 +190,9 @@ public:
                  const wxAuiNotebookPageArray& pages,
                  const wxSize& requiredBmpSize) wxOVERRIDE;
 
+    // Provide opportunity for subclasses to recalculate colours
+    virtual void UpdateColoursFromSystem() wxOVERRIDE;
+
 protected:
 
     wxFont m_normalFont;
@@ -195,14 +203,14 @@ protected:
     wxPen m_borderPen;
     wxBrush m_baseColourBrush;
     wxColour m_activeColour;
-    wxBitmap m_activeCloseBmp;
-    wxBitmap m_disabledCloseBmp;
-    wxBitmap m_activeLeftBmp;
-    wxBitmap m_disabledLeftBmp;
-    wxBitmap m_activeRightBmp;
-    wxBitmap m_disabledRightBmp;
-    wxBitmap m_activeWindowListBmp;
-    wxBitmap m_disabledWindowListBmp;
+    wxBitmapBundle m_activeCloseBmp;
+    wxBitmapBundle m_disabledCloseBmp;
+    wxBitmapBundle m_activeLeftBmp;
+    wxBitmapBundle m_disabledLeftBmp;
+    wxBitmapBundle m_activeRightBmp;
+    wxBitmapBundle m_disabledRightBmp;
+    wxBitmapBundle m_activeWindowListBmp;
+    wxBitmapBundle m_disabledWindowListBmp;
 
     int m_fixedTabWidth;
     int m_tabCtrlHeight;
@@ -222,7 +230,8 @@ public:
     void SetFlags(unsigned int flags) wxOVERRIDE;
 
     void SetSizingInfo(const wxSize& tabCtrlSize,
-                       size_t tabCount) wxOVERRIDE;
+                       size_t tabCount,
+                       wxWindow* wnd = NULL) wxOVERRIDE;
 
     void SetNormalFont(const wxFont& font) wxOVERRIDE;
     void SetSelectedFont(const wxFont& font) wxOVERRIDE;
@@ -270,7 +279,7 @@ public:
                  wxDC& dc,
                  wxWindow* wnd,
                  const wxString& caption,
-                 const wxBitmap& bitmap,
+                 const wxBitmapBundle& bitmap,
                  bool active,
                  int closeButtonState,
                  int* xExtent) wxOVERRIDE;
@@ -289,21 +298,19 @@ protected:
     wxFont m_normalFont;
     wxFont m_selectedFont;
     wxFont m_measuringFont;
-    wxColour m_normalTextColour;
-    wxColour m_selectedTextColour;
     wxPen m_normalBkPen;
     wxPen m_selectedBkPen;
     wxBrush m_normalBkBrush;
     wxBrush m_selectedBkBrush;
     wxBrush m_bkBrush;
-    wxBitmap m_activeCloseBmp;
-    wxBitmap m_disabledCloseBmp;
-    wxBitmap m_activeLeftBmp;
-    wxBitmap m_disabledLeftBmp;
-    wxBitmap m_activeRightBmp;
-    wxBitmap m_disabledRightBmp;
-    wxBitmap m_activeWindowListBmp;
-    wxBitmap m_disabledWindowListBmp;
+    wxBitmapBundle m_activeCloseBmp;
+    wxBitmapBundle m_disabledCloseBmp;
+    wxBitmapBundle m_activeLeftBmp;
+    wxBitmapBundle m_disabledLeftBmp;
+    wxBitmapBundle m_activeRightBmp;
+    wxBitmapBundle m_disabledRightBmp;
+    wxBitmapBundle m_activeWindowListBmp;
+    wxBitmapBundle m_disabledWindowListBmp;
 
     int m_fixedTabWidth;
     unsigned int m_flags;
@@ -314,7 +321,7 @@ protected:
         #define wxHAS_NATIVE_TABART
         #include "wx/aui/tabartgtk.h"
         #define wxAuiDefaultTabArt wxAuiGtkTabArt
-    #elif defined(__WXMSW__)
+    #elif defined(__WXMSW__) && wxUSE_UXTHEME
         #define wxHAS_NATIVE_TABART
         #include "wx/aui/tabartmsw.h"
         #define wxAuiDefaultTabArt wxAuiMSWTabArt

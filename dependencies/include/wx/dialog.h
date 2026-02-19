@@ -105,7 +105,10 @@ public:
     // check whether it contains wxDIALOG_NO_PARENT bit.
     //
     // This function always returns a valid top level window or NULL.
-    wxWindow *GetParentForModalDialog(wxWindow *parent, long style) const;
+    wxWindow *GetParentForModalDialog(wxWindow *parent, long style) const
+    {
+        return DoGetParentForDialog(wxDIALOG_MODALITY_APP_MODAL, parent, style);
+    }
 
     // This overload can only be used for already initialized windows, i.e. not
     // from the ctor. It uses the current window parent and style.
@@ -114,15 +117,27 @@ public:
         return GetParentForModalDialog(GetParent(), GetWindowStyle());
     }
 
+    // This function is similar to GetParentForModalDialog() but should be used
+    // for modeless dialogs and skips the checks irrelevant for them (currently
+    // just the one checking that the candidate parent window is visible, as it
+    // is possible to create a modeless dialog before its parent is shown if it
+    // is only shown later, after showing the parent).
+    wxWindow *GetParentForModelessDialog(wxWindow *parent, long style) const
+    {
+        return DoGetParentForDialog(wxDIALOG_MODALITY_NONE, parent, style);
+    }
+
 #if wxUSE_STATTEXT // && wxUSE_TEXTCTRL
     // splits text up at newlines and places the lines into a vertical
-    // wxBoxSizer
-    wxSizer *CreateTextSizer( const wxString& message );
+    // wxBoxSizer, with the given maximum width, lines will not be wrapped
+    // for negative values of widthMax
+    wxSizer *CreateTextSizer(const wxString& message, int widthMax = -1);
 
     // same as above but uses a customized wxTextSizerWrapper to create
     // non-standard controls for the lines
-    wxSizer *CreateTextSizer( const wxString& message,
-                              wxTextSizerWrapper& wrapper );
+    wxSizer *CreateTextSizer(const wxString& message,
+                             wxTextSizerWrapper& wrapper,
+                             int widthMax = -1);
 #endif // wxUSE_STATTEXT // && wxUSE_TEXTCTRL
 
     // returns a horizontal wxBoxSizer containing the given buttons
@@ -241,9 +256,15 @@ protected:
     static bool                         sm_layoutAdaptation;
 
 private:
-    // helper of GetParentForModalDialog(): returns the passed in window if it
-    // can be used as our parent or NULL if it can't
-    wxWindow *CheckIfCanBeUsedAsParent(wxWindow *parent) const;
+    // Common implementation of GetParentFor{Modal,Modeless}Dialog().
+    wxWindow *DoGetParentForDialog(wxDialogModality modality,
+                                   wxWindow *parent,
+                                   long style) const;
+
+    // helper of DoGetParentForDialog(): returns the passed in window if it
+    // can be used as parent for this kind of dialog or NULL if it can't
+    wxWindow *CheckIfCanBeUsedAsParent(wxDialogModality modality,
+                                       wxWindow *parent) const;
 
     // Helper of OnCharHook() and OnCloseWindow(): find the appropriate button
     // for closing the dialog and send a click event for it.
@@ -376,7 +397,7 @@ public:
     virtual wxEvent *Clone() const wxOVERRIDE { return new wxWindowModalDialogEvent (*this); }
 
 private:
-    wxDECLARE_DYNAMIC_CLASS_NO_ASSIGN(wxWindowModalDialogEvent);
+    wxDECLARE_DYNAMIC_CLASS_NO_ASSIGN_DEF_COPY(wxWindowModalDialogEvent);
 };
 
 wxDECLARE_EXPORTED_EVENT(WXDLLIMPEXP_CORE, wxEVT_WINDOW_MODAL_DIALOG_CLOSED , wxWindowModalDialogEvent );

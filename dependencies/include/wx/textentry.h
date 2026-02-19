@@ -3,7 +3,7 @@
 // Purpose:     declares wxTextEntry interface defining a simple text entry
 // Author:      Vadim Zeitlin
 // Created:     2007-09-24
-// Copyright:   (c) 2007 Vadim Zeitlin <vadim@wxwindows.org>
+// Copyright:   (c) 2007 Vadim Zeitlin <vadim@wxwidgets.org>
 // Licence:     wxWindows licence
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -248,6 +248,12 @@ protected:
     virtual bool DoAutoCompleteFileNames(int WXUNUSED(flags)) // wxFILE | wxDIR
         { return false; }
     virtual bool DoAutoCompleteCustom(wxTextCompleter *completer);
+
+
+    // Stub virtual functions for forward binary compatibility. DO NOT USE.
+    virtual void* WXReservedTextEntry1(void*);
+    virtual void* WXReservedTextEntry2(void*);
+    virtual void* WXReservedTextEntry3(void*);
 
 
     // class which should be used to temporarily disable text change events

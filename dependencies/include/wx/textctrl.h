@@ -57,11 +57,9 @@ const wxTextCoord wxInvalidTextCoord    = -2;
 // wxTextCtrl style flags
 // ----------------------------------------------------------------------------
 
-#define wxTE_NO_VSCROLL     0x0002
+// Some of wxTE_XXX are defined in wx/defs.h, they take 0x0C70 bits.
 
-#define wxTE_READONLY       0x0010
-#define wxTE_MULTILINE      0x0020
-#define wxTE_PROCESS_TAB    0x0040
+#define wxTE_NO_VSCROLL     0x0002
 
 // alignment flags
 #define wxTE_LEFT           0x0000                    // 0x0000
@@ -72,9 +70,6 @@ const wxTextCoord wxInvalidTextCoord    = -2;
 // this style means to use RICHEDIT control and does something only under wxMSW
 // and Win32 and is silently ignored under all other platforms
 #define wxTE_RICH           0x0080
-
-#define wxTE_PROCESS_ENTER  0x0400
-#define wxTE_PASSWORD       0x0800
 
 // automatically detect the URLs and generate the events when mouse is
 // moved/clicked over an URL
@@ -130,6 +125,76 @@ enum wxTextCtrlHitTestResult
     wxTE_HT_BEYOND          // after [the end of line]
 };
 // ... the character returned
+
+#if wxUSE_SPELLCHECK
+
+// ----------------------------------------------------------------------------
+// This object can be passed to wxTextCtrl::EnableProofCheck() to configure the
+// proofing options for this control.
+// ----------------------------------------------------------------------------
+class wxTextProofOptions
+{
+public:
+    // Return the object corresponding to the default options: current
+    // language, spell checking enabled, grammar checking disabled.
+    static wxTextProofOptions Default()
+    {
+        wxTextProofOptions opts;
+        return opts.SpellCheck(true);
+    }
+
+    // Return the object with all checks disabled.
+    static wxTextProofOptions Disable()
+    {
+        return wxTextProofOptions();
+    }
+
+    // Default copy ctor, assignment operator and dtor are ok
+
+    // Methods that can be used to set the various options.
+    wxTextProofOptions& SpellCheck(bool enable = true)
+    {
+        m_EnableSpellCheck = enable;
+        return *this;
+    }
+
+    wxTextProofOptions& GrammarCheck(bool enable = true)
+    {
+        m_EnableGrammarCheck = enable;
+        return *this;
+    }
+
+    wxTextProofOptions& Language(const wxString& lang)
+    {
+        m_lang = lang;
+        return *this;
+    }
+
+    // And the corresponding accessors.
+    bool IsSpellCheckEnabled() const { return m_EnableSpellCheck; }
+    bool IsGrammarCheckEnabled() const { return m_EnableGrammarCheck; }
+    const wxString& GetLang() const { return m_lang; }
+
+    bool AnyChecksEnabled() const
+    {
+        return IsSpellCheckEnabled() || IsGrammarCheckEnabled();
+    }
+
+private:
+    // Ctor is private, use static factory methods to create objects of this
+    // class.
+    wxTextProofOptions()
+    {
+        m_EnableSpellCheck =
+        m_EnableGrammarCheck = false;
+    }
+
+    wxString m_lang;
+    bool m_EnableSpellCheck;
+    bool m_EnableGrammarCheck;
+};
+
+#endif // wxUSE_SPELLCHECK
 
 // ----------------------------------------------------------------------------
 // Types for wxTextAttr
@@ -270,6 +335,14 @@ enum wxTextAttrLineSpacing
     wxTEXT_ATTR_LINE_SPACING_TWICE          = 20
 };
 
+enum wxTextAttrUnderlineType
+{
+     wxTEXT_ATTR_UNDERLINE_NONE,
+     wxTEXT_ATTR_UNDERLINE_SOLID,
+     wxTEXT_ATTR_UNDERLINE_DOUBLE,
+     wxTEXT_ATTR_UNDERLINE_SPECIAL
+};
+
 // ----------------------------------------------------------------------------
 // wxTextAttr: a structure containing the visual attributes of a text
 // ----------------------------------------------------------------------------
@@ -320,7 +393,13 @@ public:
     void SetFontStyle(wxFontStyle fontStyle) { m_fontStyle = fontStyle; m_flags |= wxTEXT_ATTR_FONT_ITALIC; }
     void SetFontWeight(wxFontWeight fontWeight) { m_fontWeight = fontWeight; m_flags |= wxTEXT_ATTR_FONT_WEIGHT; }
     void SetFontFaceName(const wxString& faceName) { m_fontFaceName = faceName; m_flags |= wxTEXT_ATTR_FONT_FACE; }
-    void SetFontUnderlined(bool underlined) { m_fontUnderlined = underlined; m_flags |= wxTEXT_ATTR_FONT_UNDERLINE; }
+    void SetFontUnderlined(bool underlined) { SetFontUnderlined(underlined ? wxTEXT_ATTR_UNDERLINE_SOLID : wxTEXT_ATTR_UNDERLINE_NONE); }
+    void SetFontUnderlined(wxTextAttrUnderlineType type, const wxColour& colour = wxNullColour)
+    {
+        m_flags |= wxTEXT_ATTR_FONT_UNDERLINE;
+        m_fontUnderlineType = type;
+        m_colUnderline = colour;
+    }
     void SetFontStrikethrough(bool strikethrough) { m_fontStrikethrough = strikethrough; m_flags |= wxTEXT_ATTR_FONT_STRIKETHROUGH; }
     void SetFontEncoding(wxFontEncoding encoding) { m_fontEncoding = encoding; m_flags |= wxTEXT_ATTR_FONT_ENCODING; }
     void SetFontFamily(wxFontFamily family) { m_fontFamily = family; m_flags |= wxTEXT_ATTR_FONT_FAMILY; }
@@ -359,7 +438,9 @@ public:
     int GetFontSize() const { return m_fontSize; }
     wxFontStyle GetFontStyle() const { return m_fontStyle; }
     wxFontWeight GetFontWeight() const { return m_fontWeight; }
-    bool GetFontUnderlined() const { return m_fontUnderlined; }
+    bool GetFontUnderlined() const { return m_fontUnderlineType != wxTEXT_ATTR_UNDERLINE_NONE; }
+    wxTextAttrUnderlineType GetUnderlineType() const { return m_fontUnderlineType; }
+    const wxColour& GetUnderlineColour() const { return m_colUnderline; }
     bool GetFontStrikethrough() const { return m_fontStrikethrough; }
     const wxString& GetFontFaceName() const { return m_fontFaceName; }
     wxFontEncoding GetFontEncoding() const { return m_fontEncoding; }
@@ -508,7 +589,8 @@ private:
     wxFontStyle         m_fontStyle;
     wxFontWeight        m_fontWeight;
     wxFontFamily        m_fontFamily;
-    bool                m_fontUnderlined;
+    wxTextAttrUnderlineType m_fontUnderlineType;
+    wxColour            m_colUnderline;
     bool                m_fontStrikethrough;
     wxString            m_fontFaceName;
 
@@ -561,6 +643,8 @@ public:
         else
             DiscardEdits();
     }
+
+    virtual void EmptyUndoBuffer() { }
 
 
     // styles handling
@@ -742,11 +826,26 @@ public:
         return GetCompositeControlsDefaultAttributes(variant);
     }
 
+    virtual const wxTextEntry* WXGetTextEntry() const wxOVERRIDE { return this; }
+
+#if wxUSE_SPELLCHECK
+    // Use native spelling and grammar checking functions.
+    virtual bool EnableProofCheck(const wxTextProofOptions& WXUNUSED(options)
+                                    = wxTextProofOptions::Default())
+    {
+        return false;
+    }
+    virtual wxTextProofOptions GetProofCheckOptions() const
+    {
+        return wxTextProofOptions::Disable();
+    }
+#endif // wxUSE_SPELLCHECK
+
 protected:
     // Override wxEvtHandler method to check for a common problem of binding
     // wxEVT_TEXT_ENTER to a control without wxTE_PROCESS_ENTER style, which is
     // never going to work.
-    virtual bool OnDynamicBind(wxDynamicEventTableEntry& entry);
+    virtual bool OnDynamicBind(wxDynamicEventTableEntry& entry) wxOVERRIDE;
 
     // override streambuf method
 #if wxHAS_TEXT_WINDOW_STREAM

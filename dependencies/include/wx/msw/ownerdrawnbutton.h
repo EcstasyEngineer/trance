@@ -10,6 +10,15 @@
 #ifndef _WX_MSW_OWNERDRAWNBUTTON_H_
 #define _WX_MSW_OWNERDRAWNBUTTON_H_
 
+// With MSVC 2017 and earlier, explicitly defining the destructor below
+// _causes_ exactly the kind of compiler warnings (C4265) the definition
+// was meant to avoid (on GCC). With later versions of MSVC, there is no
+// warning either way. We'll disable C4265 temporarily here.
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4265) // non-virtual destructor with virtual functions
+#endif
+
 // ----------------------------------------------------------------------------
 // wxMSWOwnerDrawnButton: base class for any kind of Windows buttons
 // ----------------------------------------------------------------------------
@@ -37,14 +46,7 @@ protected:
     // has virtual functions, but no virtual destructor without making the dtor
     // virtual which is not needed here as objects are never deleted via
     // pointers to this class (and protected dtor enforces this).
-    //
-    // Unfortunately g++ 3.4.5 still complains about the dtor being non virtual
-    // even if it is protected, but actually does not give any warnings if the
-    // dtor is not defined at all, so work around this 3.4.5 bug inside our
-    // general g++ workaround.
-#if wxCHECK_GCC_VERSION(4, 0)
     ~wxMSWOwnerDrawnButtonBase() { }
-#endif // g++ 4.0+
 
     // Make the control owner drawn if necessary to implement support for the
     // given foreground colour.
@@ -135,5 +137,9 @@ public:
 protected:
     bool IsOwnerDrawn() const { return MSWIsOwnerDrawn(); }
 };
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 
 #endif // _WX_MSW_OWNERDRAWNBUTTON_H_

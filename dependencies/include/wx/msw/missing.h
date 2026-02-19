@@ -23,7 +23,11 @@
 #endif
 
 #ifndef WM_PRINTCLIENT
-    #define WM_PRINTCLIENT 0x318
+    #define WM_PRINTCLIENT      0x0318
+#endif
+
+#ifndef WM_DPICHANGED
+    #define WM_DPICHANGED       0x02E0
 #endif
 
 #ifndef DT_HIDEPREFIX
@@ -141,6 +145,11 @@
 #define QS_ALLPOSTMESSAGE 0
 #endif
 
+// Missing from MinGW 4.8 SDK headers.
+#ifndef BS_TYPEMASK
+#define BS_TYPEMASK 0xf
+#endif
+
 // ----------------------------------------------------------------------------
 // menu stuff
 // ----------------------------------------------------------------------------
@@ -198,6 +207,9 @@
 #ifndef HDS_FLAT
     #define HDS_FLAT 0x0200
 #endif
+#ifndef HDS_NOSIZING
+    #define HDS_NOSIZING 0x0800
+#endif
 
 #ifndef HDF_SORTUP
     #define HDF_SORTUP   0x0400
@@ -220,10 +232,6 @@
     #define TB_SETDISABLEDIMAGELIST (WM_USER + 54)
 #endif // !defined(TB_SETDISABLEDIMAGELIST)
 
-#ifndef CFM_BACKCOLOR
-    #define CFM_BACKCOLOR 0x04000000
-#endif
-
 #ifndef HANGUL_CHARSET
     #define HANGUL_CHARSET 129
 #endif
@@ -240,6 +248,10 @@
     #define TV_FIRST                0x1100
 #endif
 
+#ifndef TVS_EX_DOUBLEBUFFER
+    #define TVS_EX_DOUBLEBUFFER     0x0004
+#endif
+
 #ifndef TVS_FULLROWSELECT
     #define TVS_FULLROWSELECT       0x1000
 #endif
@@ -249,28 +261,12 @@
     #define TVM_SETTEXTCOLOR        (TV_FIRST + 30)
 #endif
 
- /*
-  * The following are specifically required for MinGW.
-  */
-
-#if defined (__MINGW32__)
-
-#if !wxCHECK_W32API_VERSION(3,1)
-
-#include <windows.h>
-#include "wx/msw/winundef.h"
-
-typedef struct
-{
-    RECT       rgrc[3];
-    WINDOWPOS *lppos;
-} NCCALCSIZE_PARAMS, *LPNCCALCSIZE_PARAMS;
-
+#ifndef TVM_SETEXTENDEDSTYLE
+    #define TVM_SETEXTENDEDSTYLE    (TV_FIRST + 44)
+    #define TVM_GETEXTENDEDSTYLE    (TV_FIRST + 45)
 #endif
 
-#endif
-
-// Various defines used by the webview library that are needed by mingw 
+// Various defines used by the webview library that are needed by mingw
 
 #ifndef DISPID_COMMANDSTATECHANGE
 #define DISPID_COMMANDSTATECHANGE 105
@@ -289,119 +285,131 @@ typedef struct
 #endif
 
 #ifndef INET_E_ERROR_FIRST
-#define INET_E_ERROR_FIRST 0x800C0002L
+#define INET_E_ERROR_FIRST ((long)0x800C0002L)
 #endif
 
 #ifndef INET_E_INVALID_URL
-#define INET_E_INVALID_URL 0x800C0002L
+#define INET_E_INVALID_URL ((long)0x800C0002L)
 #endif
 
 #ifndef INET_E_NO_SESSION
-#define INET_E_NO_SESSION 0x800C0003L
+#define INET_E_NO_SESSION ((long)0x800C0003L)
 #endif
 
 #ifndef INET_E_CANNOT_CONNECT
-#define INET_E_CANNOT_CONNECT 0x800C0004L
+#define INET_E_CANNOT_CONNECT ((long)0x800C0004L)
 #endif
 
 #ifndef INET_E_RESOURCE_NOT_FOUND
-#define INET_E_RESOURCE_NOT_FOUND 0x800C0005L
+#define INET_E_RESOURCE_NOT_FOUND ((long)0x800C0005L)
 #endif
 
 #ifndef INET_E_OBJECT_NOT_FOUND
-#define INET_E_OBJECT_NOT_FOUND 0x800C0006L
+#define INET_E_OBJECT_NOT_FOUND ((long)0x800C0006L)
 #endif
 
 #ifndef INET_E_DATA_NOT_AVAILABLE
-#define INET_E_DATA_NOT_AVAILABLE 0x800C0007L
+#define INET_E_DATA_NOT_AVAILABLE ((long)0x800C0007L)
 #endif
 
 #ifndef INET_E_DOWNLOAD_FAILURE
-#define INET_E_DOWNLOAD_FAILURE 0x800C0008L
+#define INET_E_DOWNLOAD_FAILURE ((long)0x800C0008L)
 #endif
 
 #ifndef INET_E_AUTHENTICATION_REQUIRED
-#define INET_E_AUTHENTICATION_REQUIRED 0x800C0009L
+#define INET_E_AUTHENTICATION_REQUIRED ((long)0x800C0009L)
 #endif
 
 #ifndef INET_E_NO_VALID_MEDIA
-#define INET_E_NO_VALID_MEDIA 0x800C000AL
+#define INET_E_NO_VALID_MEDIA ((long)0x800C000AL)
 #endif
 
 #ifndef INET_E_CONNECTION_TIMEOUT
-#define INET_E_CONNECTION_TIMEOUT 0x800C000BL
+#define INET_E_CONNECTION_TIMEOUT ((long)0x800C000BL)
 #endif
 
 #ifndef INET_E_INVALID_REQUEST
-#define INET_E_INVALID_REQUEST 0x800C000CL
+#define INET_E_INVALID_REQUEST ((long)0x800C000CL)
 #endif
 
 #ifndef INET_E_UNKNOWN_PROTOCOL
-#define INET_E_UNKNOWN_PROTOCOL 0x800C000DL
+#define INET_E_UNKNOWN_PROTOCOL ((long)0x800C000DL)
 #endif
 
 #ifndef INET_E_SECURITY_PROBLEM
-#define INET_E_SECURITY_PROBLEM 0x800C000EL
+#define INET_E_SECURITY_PROBLEM ((long)0x800C000EL)
 #endif
 
 #ifndef INET_E_CANNOT_LOAD_DATA
-#define INET_E_CANNOT_LOAD_DATA 0x800C000FL
+#define INET_E_CANNOT_LOAD_DATA ((long)0x800C000FL)
 #endif
 
 #ifndef INET_E_CANNOT_INSTANTIATE_OBJECT
-#define INET_E_CANNOT_INSTANTIATE_OBJECT 0x800C0010L
+#define INET_E_CANNOT_INSTANTIATE_OBJECT ((long)0x800C0010L)
 #endif
 
 #ifndef INET_E_QUERYOPTION_UNKNOWN
-#define INET_E_QUERYOPTION_UNKNOWN 0x800C0013L
+#define INET_E_QUERYOPTION_UNKNOWN ((long)0x800C0013L)
 #endif
 
 #ifndef INET_E_REDIRECT_FAILED
-#define INET_E_REDIRECT_FAILED 0x800C0014L
+#define INET_E_REDIRECT_FAILED ((long)0x800C0014L)
 #endif
 
 #ifndef INET_E_REDIRECT_TO_DIR
-#define INET_E_REDIRECT_TO_DIR 0x800C0015L
+#define INET_E_REDIRECT_TO_DIR ((long)0x800C0015L)
 #endif
 
 #ifndef INET_E_CANNOT_LOCK_REQUEST
-#define INET_E_CANNOT_LOCK_REQUEST 0x800C0016L
+#define INET_E_CANNOT_LOCK_REQUEST ((long)0x800C0016L)
 #endif
 
 #ifndef INET_E_USE_EXTEND_BINDING
-#define INET_E_USE_EXTEND_BINDING 0x800C0017L
+#define INET_E_USE_EXTEND_BINDING ((long)0x800C0017L)
 #endif
 
 #ifndef INET_E_TERMINATED_BIND
-#define INET_E_TERMINATED_BIND 0x800C0018L
+#define INET_E_TERMINATED_BIND ((long)0x800C0018L)
 #endif
 
 #ifndef INET_E_INVALID_CERTIFICATE
-#define INET_E_INVALID_CERTIFICATE 0x800C0019L
+#define INET_E_INVALID_CERTIFICATE ((long)0x800C0019L)
 #endif
 
 #ifndef INET_E_CODE_DOWNLOAD_DECLINED
-#define INET_E_CODE_DOWNLOAD_DECLINED 0x800C0100L
+#define INET_E_CODE_DOWNLOAD_DECLINED ((long)0x800C0100L)
 #endif
 
 #ifndef INET_E_RESULT_DISPATCHED
-#define INET_E_RESULT_DISPATCHED 0x800C0200L
+#define INET_E_RESULT_DISPATCHED ((long)0x800C0200L)
 #endif
 
 #ifndef INET_E_CANNOT_REPLACE_SFP_FILE
-#define INET_E_CANNOT_REPLACE_SFP_FILE 0x800C0300L
+#define INET_E_CANNOT_REPLACE_SFP_FILE ((long)0x800C0300L)
 #endif
 
 #ifndef INET_E_CODE_INSTALL_BLOCKED_BY_HASH_POLICY
-#define INET_E_CODE_INSTALL_BLOCKED_BY_HASH_POLICY 0x800C0500L
+#define INET_E_CODE_INSTALL_BLOCKED_BY_HASH_POLICY ((long)0x800C0500L)
 #endif
 
 #ifndef INET_E_CODE_INSTALL_SUPPRESSED
-#define INET_E_CODE_INSTALL_SUPPRESSED 0x800C0400L
+#define INET_E_CODE_INSTALL_SUPPRESSED ((long)0x800C0400L)
 #endif
 
 #ifndef MUI_LANGUAGE_NAME
 #define MUI_LANGUAGE_NAME 0x8
+#endif
+
+#ifndef WDA_NONE
+#define WDA_NONE 0x0
+#endif
+
+#ifndef WDA_MONITOR
+#define WDA_MONITOR 0x1
+#endif
+
+#ifndef WDA_EXCLUDEFROMCAPTURE
+#define WDA_EXCLUDEFROMCAPTURE 0x11
 #endif
 
  /*
@@ -419,6 +427,10 @@ typedef struct
 
 #ifndef INVALID_FILE_ATTRIBUTES
     #define INVALID_FILE_ATTRIBUTES ((DWORD)-1)
+#endif
+
+#ifndef OFN_FORCESHOWHIDDEN
+    #define OFN_FORCESHOWHIDDEN          0x10000000
 #endif
 
 #endif

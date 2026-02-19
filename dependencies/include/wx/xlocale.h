@@ -40,8 +40,12 @@
         typedef _locale_t wxXLocale_t;
         #define wxXLOCALE_IDENT(name) _ ## name
     #elif defined(HAVE_LOCALE_T)
+        // Some systems (notably macOS) require including a separate header for
+        // locale_t and related functions.
+        #ifdef HAVE_XLOCALE_H
+            #include <xlocale.h>
+        #endif
         #include <locale.h>
-        #include <xlocale.h>
         #include <ctype.h>
         #include <stdlib.h>
 
@@ -135,7 +139,7 @@ public:
     wxXLocale() { m_isC = false; }
 
     // Construct from a symbolic language constant: unless the language is
-    // wxLANGUAGE_ENGLISH_US (which we suppose to be the same as "C" locale)
+    // wxLANGUAGE_ENGLISH_US (which we assume to be the same as "C" locale)
     // the object will be invalid
     wxXLocale(wxLanguage lang)
     {

@@ -24,6 +24,8 @@
 
 #if wxUSE_GUI
 
+#include "wx/bmpbndl.h"
+
 typedef CGRect WXRect;
 
 OSStatus WXDLLIMPEXP_CORE wxMacDrawCGImage(
@@ -32,12 +34,12 @@ OSStatus WXDLLIMPEXP_CORE wxMacDrawCGImage(
                                CGImageRef      inImage) ;
 
 WX_UIImage WXDLLIMPEXP_CORE wxOSXGetUIImageFromCGImage( CGImageRef image );
-wxBitmap WXDLLIMPEXP_CORE wxOSXCreateSystemBitmap(const wxString& id, const wxString &client, const wxSize& size);
+wxBitmapBundle WXDLLIMPEXP_CORE wxOSXCreateSystemBitmapBundle(const wxString& id, const wxString &client, const wxSize& size);
 
 class WXDLLIMPEXP_CORE wxWidgetIPhoneImpl : public wxWidgetImpl
 {
 public :
-    wxWidgetIPhoneImpl( wxWindowMac* peer , WXWidget w, bool isRootControl = false, bool isUserPane = false ) ;
+    wxWidgetIPhoneImpl( wxWindowMac* peer , WXWidget w, int flags = 0 ) ;
     wxWidgetIPhoneImpl() ;
     ~wxWidgetIPhoneImpl();
 
@@ -56,6 +58,7 @@ public :
 
     virtual void        SetBackgroundColour( const wxColour& col ) ;
     virtual bool        SetBackgroundStyle(wxBackgroundStyle style) ;
+    virtual void        SetForegroundColour( const wxColour& col ) ;
 
     virtual void        GetContentArea( int &left , int &top , int &width , int &height ) const;
     virtual void        Move(int x, int y, int width, int height);
@@ -63,7 +66,7 @@ public :
     virtual void        GetSize( int &width, int &height ) const;
     virtual void        SetControlSize( wxWindowVariant variant );
     virtual double      GetContentScaleFactor() const ;
-    
+
     virtual void        SetNeedsDisplay( const wxRect* where = NULL );
     virtual bool        GetNeedsDisplay() const;
 
@@ -87,7 +90,7 @@ public :
     void                SetValue( wxInt32 v );
 
     virtual wxBitmap    GetBitmap() const;
-    virtual void        SetBitmap( const wxBitmap& bitmap );
+    virtual void        SetBitmap( const wxBitmapBundle& bitmap );
     virtual void        SetBitmapPosition( wxDirection dir );
 
     void                SetupTabs( const wxNotebook &notebook );
@@ -97,14 +100,17 @@ public :
     bool                ButtonClickDidStateChange() { return true ;}
     void                SetMinimum( wxInt32 v );
     void                SetMaximum( wxInt32 v );
+    void                SetIncrement(int WXUNUSED(value)) { }
     wxInt32             GetMinimum() const;
     wxInt32             GetMaximum() const;
+    int                 GetIncrement() const { return 1; }
     void                PulseGauge();
     void                SetScrollThumb( wxInt32 value, wxInt32 thumbSize );
 
-    void                SetFont( const wxFont & font , const wxColour& foreground , long windowStyle, bool ignoreBlack = true );
+    void                SetFont(const wxFont & font);
 
     void                InstallEventHandler( WXWidget control = NULL );
+    bool                EnableTouchEvents(int WXUNUSED(eventsMask)) { return false; }
 
     virtual void        DoNotifyFocusEvent(bool receivedFocus, wxWidgetImpl* otherWindow);
 
@@ -174,9 +180,14 @@ public :
 
     virtual bool IsFullScreen() const;
 
-    virtual bool EnableFullScreenView(bool enable);
-    
+    virtual bool EnableFullScreenView(bool enable, long style);
+
     virtual bool ShowFullScreen(bool show, long style);
+
+    virtual wxContentProtection GetContentProtection() const wxOVERRIDE
+        {  return wxCONTENT_PROTECTION_NONE; }
+    virtual bool SetContentProtection(wxContentProtection contentProtection) wxOVERRIDE
+        { return false; }
 
     virtual void RequestUserAttention(int flags);
 

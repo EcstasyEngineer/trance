@@ -345,6 +345,8 @@ enum wxTextBoxAttrPosition
     wxTEXT_BOX_ATTR_POSITION_MASK           = 0x00F0
 };
 
+wxALLOW_COMBINING_ENUMS(wxTextAttrUnits, wxTextAttrValueFlags)
+
 /**
     @class wxTextAttrDimension
 
@@ -366,7 +368,8 @@ public:
     /**
         Constructor taking value and units flag.
     */
-    wxTextAttrDimension(int value, wxTextAttrUnits units = wxTEXT_ATTR_UNITS_TENTHS_MM) { m_value = value; m_flags = units|wxTEXT_ATTR_VALUE_VALID; }
+    wxTextAttrDimension(int value, wxTextAttrUnits units = wxTEXT_ATTR_UNITS_TENTHS_MM) { m_value = value;
+        m_flags = static_cast<wxTextAttrDimensionFlags>(units | wxTEXT_ATTR_VALUE_VALID); }
 
     /**
         Resets the dimension value and flags.
@@ -424,7 +427,8 @@ public:
     /**
         Sets the integer value and units.
     */
-    void SetValue(int value, wxTextAttrUnits units) { m_value = value; m_flags = units | wxTEXT_ATTR_VALUE_VALID; }
+    void SetValue(int value, wxTextAttrUnits units) { m_value = value;
+        m_flags = static_cast<wxTextAttrDimensionFlags>(units | wxTEXT_ATTR_VALUE_VALID); }
 
     /**
         Sets the dimension.
@@ -505,7 +509,7 @@ public:
 
     /**
         Partial equality test. If @a weakTest is @true, attributes of this object do not
-        have to be present if those attributes of @a dim sare present. If @a weakTest is
+        have to be present if those attributes of @a dims are present. If @a weakTest is
         @false, the function will fail if an attribute is present in @a dims but not
         in this object.
 
@@ -1311,11 +1315,6 @@ public:
         Default constructor.
     */
     wxTextBoxAttr() { Init(); }
-
-    /**
-        Copy constructor.
-    */
-    wxTextBoxAttr(const wxTextBoxAttr& attr) { Init(); (*this) = attr; }
 
     /**
         Initialises this object.
@@ -3905,7 +3904,7 @@ protected:
     covers common needs especially for simple, static fields using text or a bitmap.
 
     Register field types on application initialisation with the static function
-    wxRichTextBuffer::AddFieldType. They will be deleted automatically on 
+    wxRichTextBuffer::AddFieldType. They will be deleted automatically on
     application exit.
 
     An application can write a field to a control with wxRichTextCtrl::WriteField,
@@ -4478,7 +4477,7 @@ protected:
 #endif
 };
 
-WX_DECLARE_LIST_WITH_DECL( wxRichTextLine, wxRichTextLineList , class WXDLLIMPEXP_RICHTEXT );
+typedef wxVector<wxRichTextLine*> wxRichTextLineVector;
 
 /**
     @class wxRichTextParagraph
@@ -4531,7 +4530,7 @@ public:
     /**
         Returns the cached lines.
     */
-    wxRichTextLineList& GetLines() { return m_cachedLines; }
+    const wxRichTextLineVector& GetLines() const { return m_cachedLines; }
 
 // Operations
 
@@ -4656,7 +4655,7 @@ public:
 protected:
 
     // The lines that make up the wrapped paragraph
-    wxRichTextLineList  m_cachedLines;
+    wxRichTextLineVector m_cachedLines;
 
     // Whether the paragraph is impacted by floating objects from above
     int                 m_impactedByFloatingObjects;
@@ -6122,7 +6121,7 @@ public:
 
     /**
         Returns the coordinates of the cell with keyboard focus, or (-1,-1) if none.
-    */    
+    */
     virtual wxPosition GetFocusedCell() const;
 
 // Operations
@@ -6206,7 +6205,7 @@ public:
     wxRichTextTableBlock(const wxRichTextTableBlock& block) { Copy(block); }
 
     void Init() { m_colStart = 0; m_colEnd = 0; m_rowStart = 0; m_rowEnd = 0; }
-    
+
     void Copy(const wxRichTextTableBlock& block)
     {
         m_colStart = block.m_colStart; m_colEnd = block.m_colEnd; m_rowStart = block.m_rowStart; m_rowEnd = block.m_rowEnd;

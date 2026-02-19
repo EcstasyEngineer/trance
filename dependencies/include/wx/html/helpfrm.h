@@ -71,7 +71,7 @@ class WXDLLIMPEXP_HTML wxHtmlHelpFrame : public wxFrame
 
 public:
     wxHtmlHelpFrame(wxHtmlHelpData* data = NULL) { Init(data); }
-    wxHtmlHelpFrame(wxWindow* parent, wxWindowID wxWindowID,
+    wxHtmlHelpFrame(wxWindow* parent, wxWindowID id,
                     const wxString& title = wxEmptyString,
                     int style = wxHF_DEFAULT_STYLE, wxHtmlHelpData* data = NULL
 #if wxUSE_CONFIG
@@ -125,11 +125,6 @@ protected:
 
     void OnCloseWindow(wxCloseEvent& event);
     void OnActivate(wxActivateEvent& event);
-
-#ifdef __WXMAC__
-    void OnClose(wxCommandEvent& event);
-    void OnAbout(wxCommandEvent& event);
-#endif
 
     // Images:
     enum {

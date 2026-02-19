@@ -53,6 +53,11 @@ public:
     // fill data with data on the clipboard (if available)
     virtual bool GetData( wxDataObject& data ) wxOVERRIDE;
 
+    // flushes the clipboard; that means that the data which is currently on
+    // clipboard will stay available even after the application exits (possibly
+    // eating memory), otherwise the clipboard will be emptied on exit
+    virtual bool Flush() wxOVERRIDE;
+
     // clears wxTheClipboard and the system's clipboard if possible
     virtual void Clear() wxOVERRIDE;
 
@@ -96,7 +101,10 @@ private:
     // add atom to the list of supported targets
     void AddSupportedTarget(GdkAtom atom);
 
-    // check if the given format is supported
+    // get the atom corresponding to the given format if it's supported
+    GdkAtom DoGetTarget(const wxDataFormat& format);
+
+    // just check if the given format is supported
     bool DoIsSupported(const wxDataFormat& format);
 
 
@@ -111,7 +119,7 @@ private:
     wxDataObject *m_receivedData;
 
     // used to pass information about the format we need from DoIsSupported()
-    // to GTKOnTargetReceived()
+    // to GTKOnTargetReceived() and return the supported format from the latter
     GdkAtom m_targetRequested;
 
     GtkWidget *m_clipboardWidget;  // for getting and offering data

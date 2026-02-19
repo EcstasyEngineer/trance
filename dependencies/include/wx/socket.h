@@ -225,6 +225,16 @@ public:
     bool IsNoWait() const { return ((m_flags & wxSOCKET_NOWAIT) != 0); }
     wxSocketType GetType() const { return m_type; }
 
+    // Helper returning wxSOCKET_NONE if non-blocking sockets can be used, i.e.
+    // the socket is being created in the main thread and the event loop is
+    // running, or wxSOCKET_BLOCK otherwise.
+    //
+    // This is an internal function used only by wxWidgets itself, user code
+    // should decide if it wants blocking sockets or not and use the
+    // appropriate style instead of using it (but wxWidgets has to do it like
+    // this for compatibility with the original network classes behaviour).
+    static int GetBlockingFlagIfNeeded();
+
 private:
     friend class wxSocketClient;
     friend class wxSocketServer;
@@ -417,7 +427,7 @@ public:
     wxSocketNotify  m_event;
     void           *m_clientData;
 
-    wxDECLARE_DYNAMIC_CLASS_NO_ASSIGN(wxSocketEvent);
+    wxDECLARE_DYNAMIC_CLASS_NO_ASSIGN_DEF_COPY(wxSocketEvent);
 };
 
 

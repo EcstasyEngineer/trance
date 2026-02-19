@@ -45,19 +45,32 @@
 // ---------------------------------------------------------------------------
 // Windows DLL import/export.
 
-// We always want to import the symbols of the gflags library
+// Whether gflags library is a DLL.
+//
+// Set to 1 by default when the shared gflags library was built on Windows.
+// Must be overwritten when this header file is used with the optionally also
+// built static library instead; set by CMake's INTERFACE_COMPILE_DEFINITIONS.
+#ifndef GFLAGS_IS_A_DLL
+#  define GFLAGS_IS_A_DLL 0
+#endif
+
+// We always want to import the symbols of the gflags library.
 #ifndef GFLAGS_DLL_DECL
-#  if 0 && defined(_MSC_VER)
+#  if GFLAGS_IS_A_DLL && defined(_MSC_VER)
 #    define GFLAGS_DLL_DECL __declspec(dllimport)
+#  elif defined(__GNUC__) && __GNUC__ >= 4
+#    define GFLAGS_DLL_DECL __attribute__((visibility("default")))
 #  else
 #    define GFLAGS_DLL_DECL
 #  endif
 #endif
 
-// We always want to import variables declared in user code
+// We always want to import variables declared in user code.
 #ifndef GFLAGS_DLL_DECLARE_FLAG
-#  ifdef _MSC_VER
+#  if GFLAGS_IS_A_DLL && defined(_MSC_VER)
 #    define GFLAGS_DLL_DECLARE_FLAG __declspec(dllimport)
+#  elif defined(__GNUC__) && __GNUC__ >= 4
+#    define GFLAGS_DLL_DECLARE_FLAG __attribute__((visibility("default")))
 #  else
 #    define GFLAGS_DLL_DECLARE_FLAG
 #  endif
@@ -70,7 +83,7 @@
 #  include <stdint.h>                   // the normal place uint32_t is defined
 #elif 1
 #  include <sys/types.h>                // the normal place u_int32_t is defined
-#elif 0
+#elif 1
 #  include <inttypes.h>                 // a third place for uint32_t or u_int32_t
 #endif
 
@@ -120,6 +133,9 @@ typedef std::string clstring;
 #define DECLARE_int32(name) \
   DECLARE_VARIABLE(::GFLAGS_NAMESPACE::int32, I, name)
 
+#define DECLARE_uint32(name) \
+  DECLARE_VARIABLE(::GFLAGS_NAMESPACE::uint32, U, name)
+
 #define DECLARE_int64(name) \
   DECLARE_VARIABLE(::GFLAGS_NAMESPACE::int64, I64, name)
 
@@ -132,7 +148,6 @@ typedef std::string clstring;
 #define DECLARE_string(name) \
   /* We always want to import declared variables, dll or no */ \
   namespace fLS { \
-  using ::fLS::clstring; \
   extern GFLAGS_DLL_DECLARE_FLAG ::fLS::clstring& FLAGS_##name; \
   } \
   using fLS::FLAGS_##name

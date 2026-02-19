@@ -46,7 +46,7 @@ class WXDLLIMPEXP_HTML wxHtmlHelpController : public wxHelpControllerBase // wxE
 public:
     wxHtmlHelpController(int style = wxHF_DEFAULT_STYLE, wxWindow* parentWindow = NULL);
     wxHtmlHelpController(wxWindow* parentWindow, int style = wxHF_DEFAULT_STYLE);
-    
+
     virtual ~wxHtmlHelpController();
 
     void SetShouldPreventAppExit(bool enable);
@@ -87,7 +87,7 @@ public:
     virtual bool LoadFile(const wxString& file = wxT("")) wxOVERRIDE;
     virtual bool DisplaySection(int sectionNo) wxOVERRIDE;
     virtual bool DisplaySection(const wxString& section) wxOVERRIDE { return Display(section); }
-    virtual bool DisplayBlock(long blockNo) wxOVERRIDE { return DisplaySection(blockNo); }
+    virtual bool DisplayBlock(long blockNo) wxOVERRIDE { return DisplaySection(static_cast<int>(blockNo)); }
     virtual bool DisplayTextPopup(const wxString& text, const wxPoint& pos) wxOVERRIDE;
 
     virtual void SetFrameParameters(const wxString& titleFormat,
@@ -117,7 +117,7 @@ public:
 
 protected:
     void Init(int style);
-    
+
     virtual wxWindow* CreateHelpWindow();
     virtual wxHtmlHelpFrame* CreateHelpFrame(wxHtmlHelpData *data);
     virtual wxHtmlHelpDialog* CreateHelpDialog(wxHtmlHelpData *data);
