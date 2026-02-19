@@ -103,8 +103,9 @@ ScreenRenderer::ScreenRenderer(const trance_pb::System& system)
   glClear(GL_COLOR_BUFFER_BIT);
 
   auto video_mode = sf::VideoMode::getDesktopMode();
-  auto style = system.windowed() ? sf::Style::Default : sf::Style::Fullscreen;
+  auto style = system.windowed() ? sf::Style::Default : sf::Style::None;
   _window->create(video_mode, "trance", style);
+  _window->setMouseCursorGrabbed(false);
   _window->setVerticalSyncEnabled(system.enable_vsync());
   _window->setFramerateLimit(0);
   _window->setVisible(false);

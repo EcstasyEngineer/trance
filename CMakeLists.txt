@@ -136,11 +136,11 @@ target_link_options(trance PRIVATE /NODEFAULTLIB:libcmt)
 
 # ---------------------------------------------------------------------------
 # DLL copy for trance (post-build)
-# libx264.dll differs by config folder; the rest only ship from Release/
+# x264.dll differs by config folder; the rest only ship from Release/
 # ---------------------------------------------------------------------------
 add_custom_command(TARGET trance POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    "$<IF:$<CONFIG:Debug>,${D}/libx264.dll,${R}/libx264.dll>"
+    "$<IF:$<CONFIG:Debug>,${D}/x264.dll,${R}/x264.dll>"
     "$<TARGET_FILE_DIR:trance>"
   VERBATIM
 )
