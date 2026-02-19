@@ -162,7 +162,7 @@ ExportFrame::ExportFrame(CreatorFrame* parent, trance_pb::System& system,
   top_inner->Add(_length, 0, wxALL | wxEXPAND, DEFAULT_BORDER);
 
   auto qlabel = new wxStaticText{panel, wxID_ANY, "Quality:"};
-  qlabel->SetToolTip(THREADS_TOOLTIP);
+  qlabel->SetToolTip(QUALITY_TOOLTIP);
   top_inner->Add(qlabel, 0, wxALL, DEFAULT_BORDER);
   auto q0_label = new wxStaticText{panel, wxID_ANY, "Best"};
   quality->Add(q0_label, 0, wxALL, DEFAULT_BORDER);
@@ -172,7 +172,7 @@ ExportFrame::ExportFrame(CreatorFrame* parent, trance_pb::System& system,
   top_inner->Add(quality, 0, wxALL | wxEXPAND, DEFAULT_BORDER);
 
   auto tlabel = new wxStaticText{panel, wxID_ANY, "Threads:"};
-  tlabel->SetToolTip(QUALITY_TOOLTIP);
+  tlabel->SetToolTip(THREADS_TOOLTIP);
   top_inner->Add(tlabel, 0, wxALL, DEFAULT_BORDER);
   top_inner->Add(_threads, 0, wxALL | wxEXPAND, DEFAULT_BORDER);
 

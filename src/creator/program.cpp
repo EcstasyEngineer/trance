@@ -139,7 +139,7 @@ ProgramPage::ProgramPage(wxNotebook* parent, CreatorFrame& creator_frame,
     leftright->Add(row_sizer, 0, wxEXPAND);
     _visual_lookup[type] = weight;
 
-    weight->Bind(wxEVT_SPINCTRL, [&this, weight, type](wxCommandEvent & e) {
+    weight->Bind(wxEVT_SPINCTRL, [this, weight, type](wxCommandEvent & e) {
       auto it = _session.mutable_program_map()->find(_item_selected);
       if (it == _session.mutable_program_map()->end()) {
         return;
