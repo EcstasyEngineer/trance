@@ -73,7 +73,6 @@ bool Image::ensure_texture_uploaded() const
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 
   // Return true for purging on the async thread.
-  std::cout << ":";
   return true;
 }
 
@@ -121,7 +120,6 @@ Image load_image(const std::string& path)
 
     Image image{uint32_t(width), uint32_t(height), data};
     free(data);
-    std::cout << ".";
     return image;
   }
 

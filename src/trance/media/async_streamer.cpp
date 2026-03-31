@@ -80,12 +80,7 @@ void AsyncStreamer::advance_frame(uint32_t global_fps, bool maybe_switch, bool f
     _update_counter -= 1.f;
     if (_backwards) {
       if (_index != _current->begin) {
-        auto new_index = prev_index(_index, _buffer_size);
-        if (new_index == _current->begin) {
-          _index = prev_index(_index, _buffer_size);
-        } else {
-          _index = prev_index(_index, _buffer_size);
-        }
+        _index = prev_index(_index, _buffer_size);
       } else {
         _backwards = false;
         if (_index != prev_index(_current->begin + _current->size, _buffer_size)) {
@@ -98,12 +93,7 @@ void AsyncStreamer::advance_frame(uint32_t global_fps, bool maybe_switch, bool f
       } else {
         _backwards = true;
         if (_index != _current->begin) {
-          auto new_index = prev_index(_index, _buffer_size);
-          if (new_index == _current->begin) {
-            _index = prev_index(_index, _buffer_size);
-          } else {
-            _index = prev_index(_index, _buffer_size);
-          }
+          _index = prev_index(_index, _buffer_size);
         }
       }
     }

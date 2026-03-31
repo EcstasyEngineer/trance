@@ -294,7 +294,7 @@ void search_resources(trance_pb::Session& session, const std::string& root)
        it != std::filesystem::recursive_directory_iterator(); ++it) {
     if (std::filesystem::is_regular_file(it->status())) {
       auto relative_path = std::filesystem::relative(it->path(), root_path);
-      auto jt = ++relative_path.begin();
+      auto jt = relative_path.begin();
       if (jt == relative_path.end()) {
         continue;
       }
@@ -363,7 +363,7 @@ void search_resources(trance_pb::Theme& theme, const std::string& root)
        it != std::filesystem::recursive_directory_iterator(); ++it) {
     if (std::filesystem::is_regular_file(it->status())) {
       auto relative_path = std::filesystem::relative(it->path(), root_path);
-      auto jt = ++relative_path.begin();
+      auto jt = relative_path.begin();
       if (jt == relative_path.end()) {
         continue;
       }
@@ -386,7 +386,7 @@ void search_audio_files(std::vector<std::string>& files, const std::string& root
        it != std::filesystem::recursive_directory_iterator(); ++it) {
     if (std::filesystem::is_regular_file(it->status())) {
       auto relative_path = std::filesystem::relative(it->path(), root_path);
-      auto jt = ++relative_path.begin();
+      auto jt = relative_path.begin();
       if (jt == relative_path.end()) {
         continue;
       }
