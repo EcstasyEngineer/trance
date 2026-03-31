@@ -98,7 +98,6 @@ Image GifStreamer::next_frame()
   }
 
   _index = (_index + 1);
-  std::cout << ";";
   return {static_cast<std::uint32_t>(_gif->SWidth), static_cast<std::uint32_t>(_gif->SHeight),
           (unsigned char*) _pixels.get()};
 }
@@ -271,7 +270,6 @@ Image WebmStreamer::next_frame()
   }
 
   _image = vpx_codec_get_frame(&_codec, &_it);
-  std::cout << ";";
   return {w, h, (uint8_t*) pixels.get()};
 }
 
