@@ -103,8 +103,17 @@ Image::texture_deleter::~texture_deleter()
   textures_to_delete_mutex.unlock();
 }
 
+// Reject images whose dimensions are zero or larger than any GPU will accept.
+// A corrupt header can report absurd sizes, and width*height*4 then overflows
+// or exhausts memory inside sf::Image::create / glTexImage2D and takes the
+// process down with no diagnostic.
+static const int max_image_dimension = 16384;
+
 Image load_image(const std::string& path)
 {
+  // Leave a breadcrumb so a hard crash inside a native decoder names the file.
+  note_media_load(path);
+
   // Load JPEGs with the jpgd library since SFML does not support progressive
   // JPEGs.
   if (ext_is(path, "jpg") || ext_is(path, "jpeg")) {
@@ -115,6 +124,13 @@ Image load_image(const std::string& path)
         jpgd::decompress_jpeg_image_from_file(path.c_str(), &width, &height, &reqs, 4);
     if (!data) {
       std::cerr << "\ncouldn't load " << path << std::endl;
+      return {};
+    }
+    if (width <= 0 || height <= 0 || width > max_image_dimension ||
+        height > max_image_dimension) {
+      std::cerr << "\nrefusing " << path << ": bad dimensions " << width << "x" << height
+                << std::endl;
+      free(data);
       return {};
     }
 
@@ -128,8 +144,13 @@ Image load_image(const std::string& path)
     std::cerr << "\ncouldn't load " << path << std::endl;
     return {};
   }
+  if (sf_image.getSize().x > uint32_t(max_image_dimension) ||
+      sf_image.getSize().y > uint32_t(max_image_dimension)) {
+    std::cerr << "\nrefusing " << path << ": bad dimensions " << sf_image.getSize().x << "x"
+              << sf_image.getSize().y << std::endl;
+    return {};
+  }
 
   Image image{sf_image};
-  std::cout << ".";
   return image;
 }

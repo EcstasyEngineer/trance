@@ -1,11 +1,28 @@
 #ifndef TRANCE_SRC_COMMON_UTIL_H
 #define TRANCE_SRC_COMMON_UTIL_H
 #include <cstdint>
+#include <fstream>
 #include <map>
+#include <mutex>
 #include <random>
 #include <string>
 #include <type_traits>
 #include <vector>
+
+// Records the media file about to be decoded to "trance_last_load.txt" in the
+// working directory. Native decoders (jpgd, libvpx, giflib) can hard-crash the
+// process on a malformed file with no console output -- especially in the
+// wxWidgets creator app, which has no console at all. Call this immediately
+// before decoding; after a silent crash-to-desktop the file names the culprit.
+// The file is truncated each call (last-write-wins): in the common "one bad
+// file kills it" case the surviving line is exactly that file.
+inline void note_media_load(const std::string& path)
+{
+  static std::mutex mutex;
+  std::lock_guard<std::mutex> lock{mutex};
+  std::ofstream out{"trance_last_load.txt", std::ios::trunc};
+  out << path << std::endl;
+}
 
 inline bool ext_is(const std::string& path, const std::string& ext)
 {

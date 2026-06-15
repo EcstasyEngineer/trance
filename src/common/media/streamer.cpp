@@ -8,6 +8,10 @@
 #include <giflib/gif_lib.h>
 #pragma warning(pop)
 
+// Largest GIF canvas we will allocate a pixel buffer for; a corrupt header can
+// report absurd dimensions that overflow or exhaust memory.
+static const int gif_max_dimension = 16384;
+
 GifStreamer::GifStreamer(const std::string& path) : _path{path}
 {
   int error_code = 0;
@@ -18,6 +22,12 @@ GifStreamer::GifStreamer(const std::string& path) : _path{path}
   }
   if (DGifSlurp(_gif) != GIF_OK) {
     std::cerr << "couldn't slurp " << path << ": " << GifErrorString(_gif->Error) << std::endl;
+    return;
+  }
+  if (_gif->SWidth <= 0 || _gif->SHeight <= 0 || _gif->SWidth > gif_max_dimension ||
+      _gif->SHeight > gif_max_dimension) {
+    std::cerr << "couldn't load " << path << ": bad dimensions " << _gif->SWidth << "x"
+              << _gif->SHeight << std::endl;
     return;
   }
   _pixels.reset(new uint32_t[_gif->SWidth * _gif->SHeight]);
@@ -55,15 +65,18 @@ Image GifStreamer::next_frame()
     }
   }
 
+  if (!_gif->SavedImages) {
+    return {};
+  }
   const auto& frame = _gif->SavedImages[_index];
   bool transparency = false;
   uint8_t transparency_byte = 0;
   // Delay time in hundredths of a second. Ignore it; it messes with the
   // rhythm.
   int delay_time = 1;
-  for (int j = 0; j < frame.ExtensionBlockCount; ++j) {
+  for (int j = 0; frame.ExtensionBlocks && j < frame.ExtensionBlockCount; ++j) {
     const auto& block = frame.ExtensionBlocks[j];
-    if (block.Function != GRAPHICS_EXT_FUNC_CODE) {
+    if (block.Function != GRAPHICS_EXT_FUNC_CODE || !block.Bytes || block.ByteCount < 4) {
       continue;
     }
 
@@ -85,10 +98,28 @@ Image GifStreamer::next_frame()
   auto fl = frame.ImageDesc.Left;
   auto ft = frame.ImageDesc.Top;
 
-  for (int y = 0; y < std::min(_gif->SHeight, fh); ++y) {
-    for (int x = 0; x < std::min(_gif->SWidth, fw); ++x) {
+  // A malformed GIF can omit the colour map or raster data, report a bogus
+  // frame size, or place a frame partly outside the logical screen; any of
+  // these would otherwise deref null, overflow the index, or write past
+  // _pixels. Bail (and clamp below) instead of crashing.
+  if (!map || !map->Colors || map->ColorCount <= 0 || !frame.RasterBits || fw <= 0 || fh <= 0 ||
+      fw > gif_max_dimension || fh > gif_max_dimension) {
+    return {};
+  }
+
+  for (int y = 0; y < fh && ft + y < _gif->SHeight; ++y) {
+    if (ft + y < 0) {
+      continue;
+    }
+    for (int x = 0; x < fw && fl + x < _gif->SWidth; ++x) {
+      if (fl + x < 0) {
+        continue;
+      }
       uint8_t byte = frame.RasterBits[x + y * fw];
       if (transparency && byte == transparency_byte) {
+        continue;
+      }
+      if (byte >= map->ColorCount) {
         continue;
       }
       const auto& c = map->Colors[byte];
@@ -305,6 +336,8 @@ bool is_gif_animated(const std::string& path)
 
 std::unique_ptr<Streamer> load_animation(const std::string& path)
 {
+  // Leave a breadcrumb so a hard crash inside giflib/libvpx names the file.
+  note_media_load(path);
   if (ext_is(path, "gif")) {
     return std::unique_ptr<Streamer>{new GifStreamer(path)};
   }
