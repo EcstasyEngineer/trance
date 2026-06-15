@@ -88,6 +88,18 @@ public:
   void render_small_subtext(float alpha, float zoom_origin) const override;
   void render_spiral() const override;
 
+  // Debug overlay accessors. Reset the per-frame layer capture at the start of
+  // a rendered frame; render_image() then records the alpha of each image layer
+  // it draws, which reveals how many images the current visual overlays (e.g.
+  // the 3-image SUPER_PARALLEL fade).
+  void debug_begin_frame() const;
+  const std::vector<float>& debug_layers() const;
+  float debug_spiral() const;
+  uint32_t debug_spiral_type() const;
+  uint32_t debug_spiral_width() const;
+  const std::string& debug_font() const;
+  const std::string& debug_subfont() const;
+
 private:
   float zoom_intensity(float zoom_origin, float zoom) const;
 
@@ -107,6 +119,9 @@ private:
   float _small_subtext_y;
 
   std::vector<std::string> _current_text;
+
+  // Alpha of each image layer drawn during the current frame (debug overlay).
+  mutable std::vector<float> _debug_layers;
 };
 
 #endif

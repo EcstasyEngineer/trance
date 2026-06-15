@@ -52,6 +52,7 @@ ThemeBank::ThemeBank(const std::string& root_path, const trance_pb::Session& ses
                                        {},
                                        {static_cast<std::size_t>(theme.text_line().size())}});
     ThemeInfo& theme_info = *_themes.back();
+    theme_info.name = pair.first;
     // Disable images not in this theme in both shufflers so that they can
     // never be chosen.
     for (std::size_t i = 0; i < _all_images.size(); ++i) {
@@ -95,6 +96,37 @@ ThemeBank::ThemeBank(const std::string& root_path, const trance_pb::Session& ses
 const std::string& ThemeBank::get_root_path() const
 {
   return _root_path;
+}
+
+ThemeBank::DebugSnapshot ThemeBank::debug_snapshot() const
+{
+  // Thread-safety: the per-slot reads below are safe against the async loader
+  // thread (active-theme pointers and loaded_size are atomic; name/size are
+  // immutable after construction). The enabled-weights/pinned fields are NOT
+  // atomic and are only safe because they are mutated solely on the main/render
+  // thread (set_program/change_themes) -- the same thread that calls this. Do
+  // not call debug_snapshot() from another thread without guarding those.
+  DebugSnapshot snapshot;
+  for (std::size_t i = 0; i < _active_themes.size(); ++i) {
+    const auto* theme = _active_themes[i].load();
+    auto& slot = snapshot.slots[i];
+    slot.valid = theme != nullptr;
+    if (theme) {
+      slot.name = theme->name;
+      slot.loaded = uint32_t(theme->loaded_size.load());
+      slot.total = uint32_t(theme->size);
+    } else {
+      slot.loaded = 0;
+      slot.total = 0;
+    }
+  }
+  for (const auto& pair : _enabled_theme_weights) {
+    snapshot.enabled_weights.emplace_back(pair.first, pair.second);
+  }
+  snapshot.pinned = _pinned_theme;
+  snapshot.image_cache_size = _image_cache_size;
+  snapshot.swaps_to_match = _swaps_to_match_theme;
+  return snapshot;
 }
 
 void ThemeBank::set_program(const trance_pb::Program& program)

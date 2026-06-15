@@ -20,6 +20,11 @@ Cycler* Visual::cycler()
   return _cycler.get();
 }
 
+const Cycler* Visual::cycler() const
+{
+  return _cycler.get();
+}
+
 void Visual::render(VisualRender& api) const
 {
   _render(api);

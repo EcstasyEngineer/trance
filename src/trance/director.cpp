@@ -7,7 +7,9 @@
 #include <trance/visual/cyclers.h>
 #include <trance/visual/visual.h>
 #include <algorithm>
+#include <cstdio>
 #include <iostream>
+#include <sstream>
 
 #pragma warning(push, 0)
 extern "C" {
@@ -34,6 +36,9 @@ Director::Director(const trance_pb::Session& session, const trance_pb::System& s
 , _quad_buffer{0}
 , _renderer{renderer}
 , _last_visual_selection{0}
+, _debug_overlay{false}
+, _debug_font_loaded{false}
+, _debug_font_ok{false}
 {
   std::cout << "\npreloading GPU" << std::endl;
   static const std::size_t gl_preload = 1000;
@@ -80,10 +85,20 @@ bool Director::update()
 void Director::render() const
 {
   Image::delete_textures();
+  _visual_api->debug_begin_frame();
   _renderer.render([&](Renderer::State state) {
     _render_state = state;
     _visual->render(*_visual_api);
+    // Only draw the HUD on the flat screen pass (not per-eye VR targets).
+    if (_debug_overlay && state == Renderer::State::NONE) {
+      draw_debug_overlay();
+    }
   });
+}
+
+void Director::toggle_debug_overlay()
+{
+  _debug_overlay = !_debug_overlay;
 }
 
 const trance_pb::Program& Director::program() const
@@ -385,4 +400,183 @@ float Director::eye_offset() const
   return _render_state == Renderer::State::VR_LEFT
       ? -offset
       : _render_state == Renderer::State::VR_RIGHT ? offset : 0;
+}
+
+namespace
+{
+  // The proto VisualType enum value (see trance.proto) mapped to a human label.
+  // Note the enum name and the concrete Visual class don't always line up:
+  // PARALLEL is a single image, SUPER_PARALLEL is the 3-image overlay.
+  std::string visual_type_name(uint32_t t)
+  {
+    switch (t) {
+    case 1:
+      return "ACCELERATE [accelerating image + spiral]";
+    case 2:
+      return "SLOW_FLASH [slow then fast flash phases]";
+    case 3:
+      return "SUB_TEXT [image + scrolling subtext]";
+    case 4:
+      return "FLASH_TEXT [2-image crossfade + text]";
+    case 5:
+      return "PARALLEL [single image]";
+    case 6:
+      return "SUPER_PARALLEL [3-image overlay / triple fade]";
+    case 7:
+      return "ANIMATION [animation + crossfade image]";
+    case 8:
+      return "SUPER_FAST [rapid current/next cuts]";
+    default:
+      return "(none)";
+    }
+  }
+
+  std::string bar(float frac, int width)
+  {
+    frac = frac < 0.f ? 0.f : frac > 1.f ? 1.f : frac;
+    int fill = int(frac * width + 0.5f);
+    std::string s = "[";
+    for (int i = 0; i < width; ++i) {
+      s += (i < fill ? '#' : '-');
+    }
+    s += "]";
+    return s;
+  }
+
+  // Recursively render the cycler tree. Depth and breadth are capped so a busy
+  // visual (e.g. ACCELERATE, which has dozens of subcycles) stays legible.
+  void append_cycler(std::ostringstream& out, const Cycler* c, int depth, int max_depth)
+  {
+    if (!c) {
+      return;
+    }
+    for (int i = 0; i < depth; ++i) {
+      out << "  ";
+    }
+    out << (depth ? "+-" : "") << c->type_name() << " " << c->position() << "/" << c->length()
+        << " " << bar(c->progress(), 8);
+    if (c->active()) {
+      out << " *";
+    }
+    out << "\n";
+
+    auto kids = c->children();
+    if (depth >= max_depth) {
+      if (!kids.empty()) {
+        for (int i = 0; i <= depth; ++i) {
+          out << "  ";
+        }
+        out << "+-(" << kids.size() << " subcycle(s)...)\n";
+      }
+      return;
+    }
+    static const std::size_t max_children = 6;
+    std::size_t shown = std::min(kids.size(), max_children);
+    for (std::size_t i = 0; i < shown; ++i) {
+      append_cycler(out, kids[i], depth + 1, max_depth);
+    }
+    if (kids.size() > shown) {
+      for (int i = 0; i <= depth; ++i) {
+        out << "  ";
+      }
+      out << "+-(" << (kids.size() - shown) << " more...)\n";
+    }
+  }
+}
+
+void Director::draw_debug_overlay() const
+{
+  // Lazily load a monospace system font so the theme glyph rows line up. These
+  // paths are Windows-specific, which matches the rest of the build.
+  if (!_debug_font_loaded) {
+    _debug_font_loaded = true;
+    _debug_font_ok = _debug_font.loadFromFile("C:/Windows/Fonts/consola.ttf") ||
+        _debug_font.loadFromFile("C:/Windows/Fonts/cour.ttf") ||
+        _debug_font.loadFromFile("C:/Windows/Fonts/arial.ttf");
+  }
+  if (!_debug_font_ok) {
+    return;
+  }
+
+  std::ostringstream out;
+  char buf[32];
+
+  out << "== TRANCE DEBUG (F1 to hide) ==\n";
+  out << "visual : " << visual_type_name(_last_visual_selection) << "\n";
+
+  out << "cycler : (pattern of the current visual)\n";
+  const Visual* visual = _visual.get();
+  append_cycler(out, visual ? visual->cycler() : nullptr, 0, 3);
+
+  // Image layers composited this frame -- this is the on-screen overlay depth.
+  const auto& layers = _visual_api->debug_layers();
+  out << "layers : " << layers.size() << " image(s) drawn  alpha=";
+  for (float a : layers) {
+    std::snprintf(buf, sizeof(buf), "%.2f ", a);
+    out << buf;
+  }
+  out << "\n";
+
+  std::snprintf(buf, sizeof(buf), "%.3f", _visual_api->debug_spiral());
+  out << "spiral : type " << _visual_api->debug_spiral_type() << "  width "
+      << _visual_api->debug_spiral_width() << "  phase " << buf << "\n";
+  out << "font   : " << (_visual_api->debug_font().empty() ? "(none)" : _visual_api->debug_font())
+      << "   sub: "
+      << (_visual_api->debug_subfont().empty() ? "(none)" : _visual_api->debug_subfont()) << "\n";
+
+  // Theme bank: the two active slots [1]/[2] are what visuals interleave.
+  auto snap = _themes.debug_snapshot();
+  out << "-- THEMES (slot[1] x slot[2] = merged on screen) --\n";
+  static const char* labels[4] = {" unld[0]", "*pri [1]", " alt [2]", " load[3]"};
+  for (int i = 0; i < 4; ++i) {
+    const auto& s = snap.slots[i];
+    out << labels[i] << " ";
+    if (!s.valid) {
+      out << "(empty)\n";
+      continue;
+    }
+    std::string name = s.name.substr(0, 12);
+    out << name;
+    for (std::size_t k = name.size(); k < 13u; ++k) {
+      out << ' ';
+    }
+    static const int row = 24;
+    int fill = s.total ? int(float(s.loaded) / float(s.total) * row + 0.5f) : 0;
+    out << ' ';
+    for (int k = 0; k < row; ++k) {
+      out << (k < fill ? '#' : '.');
+    }
+    out << "  " << s.loaded << "/" << s.total << "\n";
+  }
+  out << "enabled:";
+  for (const auto& w : snap.enabled_weights) {
+    out << " " << w.first << "=" << w.second;
+  }
+  out << (snap.enabled_weights.empty() ? " (none)\n" : "\n");
+  out << "pinned : " << (snap.pinned.empty() ? "(none)" : snap.pinned) << "\n";
+  out << "cache  : " << snap.image_cache_size << " imgs   swaps_to_match: " << snap.swaps_to_match
+      << "   global_fps: " << program().global_fps() << "\n";
+  out << "legend : #=loaded(RAM)  .=not loaded";
+
+  // Draw the HUD as flat 2D over the rendered frame. pushGLStates/popGLStates
+  // isolate SFML's 2D drawing from the visual's raw OpenGL state.
+  auto& window = _renderer.window();
+  window.pushGLStates();
+
+  sf::Text text;
+  text.setFont(_debug_font);
+  text.setCharacterSize(14);
+  text.setFillColor(sf::Color(sf::Uint8(120), sf::Uint8(255), sf::Uint8(160)));
+  text.setString(out.str());
+  text.setPosition(14.f, 12.f);
+
+  auto bounds = text.getLocalBounds();
+  sf::RectangleShape backing(
+      sf::Vector2f(bounds.left + bounds.width + 28.f, bounds.top + bounds.height + 24.f));
+  backing.setPosition(6.f, 6.f);
+  backing.setFillColor(sf::Color(sf::Uint8(0), sf::Uint8(0), sf::Uint8(0), sf::Uint8(175)));
+  window.draw(backing);
+  window.draw(text);
+
+  window.popGLStates();
 }
