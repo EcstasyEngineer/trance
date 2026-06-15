@@ -65,6 +65,24 @@ public:
   // Called from separate update thread to perform async loading/unloading.
   void async_update();
 
+  // Read-only snapshot of the bank's internal state for the debug overlay.
+  // Slots map to the active-theme queue: [0] unloading, [1] primary (used by
+  // get_image(false)), [2] alternate (get_image(true)), [3] loading next.
+  struct DebugSnapshot {
+    struct Slot {
+      bool valid;
+      std::string name;
+      uint32_t loaded;
+      uint32_t total;
+    };
+    std::array<Slot, 4> slots;
+    std::vector<std::pair<std::string, uint32_t>> enabled_weights;
+    std::string pinned;
+    uint32_t image_cache_size;
+    uint32_t swaps_to_match;
+  };
+  DebugSnapshot debug_snapshot() const;
+
 private:
   uint32_t cache_per_theme() const;
   static const std::size_t switch_cooldown = 500;
@@ -96,6 +114,9 @@ private:
     std::unordered_map<std::string, std::vector<std::size_t>> text_lookup;
     // Shuffler for choosing text lines. Maps on to text_lines above.
     Shuffler text_shuffler;
+    // Theme name (for the debug overlay). Value-initialized by the aggregate
+    // construction in the constructor and assigned immediately afterwards.
+    std::string name;
   };
 
   // Data for each possible image.

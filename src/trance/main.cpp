@@ -66,13 +66,16 @@ std::thread run_async_thread(std::atomic<bool>& running, ThemeBank& bank)
   }};
 }
 
-void handle_events(std::atomic<bool>& running, sf::RenderWindow& window)
+void handle_events(std::atomic<bool>& running, sf::RenderWindow& window, Director& director)
 {
   sf::Event event;
   while (window.pollEvent(event)) {
     if (event.type == event.Closed ||
         (event.type == event.KeyPressed && event.key.code == sf::Keyboard::Escape)) {
       running = false;
+    }
+    if (event.type == event.KeyPressed && event.key.code == sf::Keyboard::F1) {
+      director.toggle_debug_overlay();
     }
     if (event.type == sf::Event::Resized) {
       glViewport(0, 0, event.size.width, event.size.height);
@@ -180,7 +183,7 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
     auto last_playlist_switch = clock_time();
 
     while (running) {
-      handle_events(running, renderer->window());
+      handle_events(running, renderer->window(), director);
 
       // TODO: should sleep rather than spinning.
       uint32_t frames_this_loop = 0;

@@ -35,6 +35,19 @@ public:
   // Current frame, as a float, scaled between 0 and 1.
   float progress() const;
 
+  // Debug introspection: a short human name for the cycler type, and the
+  // immediate subcycles (empty for leaf cyclers). Used by the debug overlay to
+  // render the cycler tree, which is what actually distinguishes one visual
+  // pattern from another.
+  virtual const char* type_name() const
+  {
+    return "Cycler";
+  }
+  virtual std::vector<const Cycler*> children() const
+  {
+    return {};
+  }
+
 private:
   bool _active;
 };
@@ -56,6 +69,10 @@ public:
   uint32_t position() const override;
   void reset() override;
   void advance(bool trigger_actions = true) override;
+  const char* type_name() const override
+  {
+    return "Action";
+  }
 
 private:
   uint32_t _position;
@@ -76,6 +93,18 @@ public:
   void reset() override;
   void advance(bool trigger_actions = true) override;
   void activate(bool active) override;
+  const char* type_name() const override
+  {
+    return "OneShot";
+  }
+  std::vector<const Cycler*> children() const override
+  {
+    std::vector<const Cycler*> r;
+    for (const auto& c : _subcycles) {
+      r.push_back(c.get());
+    }
+    return r;
+  }
 
 private:
   void calculate_active();
@@ -95,6 +124,18 @@ public:
   void reset() override;
   void advance(bool trigger_actions = true) override;
   void activate(bool active) override;
+  const char* type_name() const override
+  {
+    return "Parallel";
+  }
+  std::vector<const Cycler*> children() const override
+  {
+    std::vector<const Cycler*> r;
+    for (const auto& c : _subcycles) {
+      r.push_back(c.get());
+    }
+    return r;
+  }
 
 private:
   std::vector<std::unique_ptr<Cycler>> _subcycles;
@@ -115,6 +156,18 @@ public:
   void reset() override;
   void advance(bool trigger_actions = true) override;
   void activate(bool active) override;
+  const char* type_name() const override
+  {
+    return "Sequence";
+  }
+  std::vector<const Cycler*> children() const override
+  {
+    std::vector<const Cycler*> r;
+    for (const auto& c : _subcycles) {
+      r.push_back(c.get());
+    }
+    return r;
+  }
 
 private:
   void calculate_active();
@@ -134,6 +187,14 @@ public:
   void reset() override;
   void advance(bool trigger_actions = true) override;
   void activate(bool active) override;
+  const char* type_name() const override
+  {
+    return "Repeat";
+  }
+  std::vector<const Cycler*> children() const override
+  {
+    return {_subcycle.get()};
+  }
 
 private:
   std::unique_ptr<Cycler> _subcycle;
@@ -152,6 +213,14 @@ public:
   void reset() override;
   void advance(bool trigger_actions = true) override;
   void activate(bool active) override;
+  const char* type_name() const override
+  {
+    return "Offset";
+  }
+  std::vector<const Cycler*> children() const override
+  {
+    return {_subcycle.get()};
+  }
 
 private:
   void advance_to_offset();

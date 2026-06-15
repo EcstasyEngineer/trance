@@ -199,6 +199,7 @@ void VisualApiImpl::render_animation_or_image(Anim type, const Image& image, flo
 void VisualApiImpl::render_image(const Image& image, float alpha, float zoom_origin,
                                  float zoom) const
 {
+  _debug_layers.push_back(alpha);
   _director.render_image(image, alpha, zoom_origin, zoom_intensity(zoom_origin, zoom));
 }
 
@@ -307,4 +308,39 @@ void VisualApiImpl::render_spiral() const
 float VisualApiImpl::zoom_intensity(float zoom_origin, float zoom) const
 {
   return zoom_origin + (zoom - zoom_origin) * _director.program().zoom_intensity();
+}
+
+void VisualApiImpl::debug_begin_frame() const
+{
+  _debug_layers.clear();
+}
+
+const std::vector<float>& VisualApiImpl::debug_layers() const
+{
+  return _debug_layers;
+}
+
+float VisualApiImpl::debug_spiral() const
+{
+  return _spiral;
+}
+
+uint32_t VisualApiImpl::debug_spiral_type() const
+{
+  return _spiral_type;
+}
+
+uint32_t VisualApiImpl::debug_spiral_width() const
+{
+  return _spiral_width;
+}
+
+const std::string& VisualApiImpl::debug_font() const
+{
+  return _current_font;
+}
+
+const std::string& VisualApiImpl::debug_subfont() const
+{
+  return _current_subfont;
 }

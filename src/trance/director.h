@@ -35,6 +35,9 @@ public:
   bool update();
   void render() const;
 
+  // Toggle the on-screen debug overlay (bound to F1 in main.cpp).
+  void toggle_debug_overlay();
+
   const trance_pb::Program& program() const;
   bool vr_enabled() const;
 
@@ -49,6 +52,7 @@ private:
   void change_visual(uint32_t length);
   float far_plane_distance() const;
   float eye_offset() const;
+  void draw_debug_overlay() const;
 
   const trance_pb::Session& _session;
   const trance_pb::System& _system;
@@ -65,6 +69,13 @@ private:
 
   std::uint32_t _last_visual_selection;
   std::unique_ptr<Visual> _visual;
+
+  // Debug overlay state. The font is loaded lazily on first draw from a known
+  // monospace system font; _debug_font_ok records whether that succeeded.
+  bool _debug_overlay;
+  mutable bool _debug_font_loaded;
+  mutable bool _debug_font_ok;
+  mutable sf::Font _debug_font;
 };
 
 #endif

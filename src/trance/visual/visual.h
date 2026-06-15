@@ -19,6 +19,7 @@ public:
   virtual ~Visual() = default;
   virtual void reset() {}
   Cycler* cycler();
+  const Cycler* cycler() const;
   void render(VisualRender& api) const;
 
 protected:
