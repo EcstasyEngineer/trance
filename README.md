@@ -61,10 +61,10 @@ git clone https://github.com/EcstasyEngineer/trance && cd trance
 
 ### Windows (primary platform)
 
-**Requirements:** Windows 10/11 x64, Visual Studio 2026 (with the C++ and CMake
-components) and a recent CMake, vcpkg. The `windows-msvc` preset pins the
-`Visual Studio 18 2026` generator — on an older toolchain (e.g. VS 2022) change
-that line in `CMakePresets.json` to `Visual Studio 17 2022`.
+**Requirements:** Windows 10/11 x64, Visual Studio 2022 or later (with the C++ and
+CMake components), vcpkg. The `windows-msvc` preset pins the `Visual Studio 17 2022`
+generator — on VS 2026 change that line in `CMakePresets.json` to
+`Visual Studio 18 2026`.
 
 ```sh
 cmake --preset windows-msvc
