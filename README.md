@@ -46,18 +46,54 @@ All parts of a session are edited with `creator.exe`.
 
 ## Building from source
 
-**Requirements:** Windows 10/11 x64, Visual Studio 2022 or later
+Dependencies are resolved by [vcpkg](https://github.com/microsoft/vcpkg) in manifest
+mode (`vcpkg.json`) — `cmake` restores them automatically on first configure. There is
+no vendored dependency blob to check out.
 
-```
-git clone https://github.com/EcstasyEngineer/trance
-cd trance
-# Open build/trance.sln in Visual Studio, select Release|x64, build
-# Or from the command line:
-cmake --build build --config Release --parallel
+**Common setup (both platforms):**
+
+```sh
+git clone https://github.com/microsoft/vcpkg "$HOME/vcpkg"
+"$HOME/vcpkg/bootstrap-vcpkg.sh"      # bootstrap-vcpkg.bat on Windows
+export VCPKG_ROOT="$HOME/vcpkg"       # setx VCPKG_ROOT on Windows
+git clone https://github.com/EcstasyEngineer/trance && cd trance
 ```
 
-Outputs land in `build/Release/`. All dependencies are vendored under `dependencies/` —
-no separate install step needed.
+### Windows (primary platform)
+
+**Requirements:** Windows 10/11 x64, Visual Studio 2026 (with the C++ and CMake
+components) and a recent CMake, vcpkg. The `windows-msvc` preset pins the
+`Visual Studio 18 2026` generator — on an older toolchain (e.g. VS 2022) change
+that line in `CMakePresets.json` to `Visual Studio 17 2022`.
+
+```sh
+cmake --preset windows-msvc
+cmake --build --preset windows-release
+```
+
+Outputs land in `build/windows-msvc/Release/`. The Windows build links dependencies statically
+against the dynamic CRT (`x64-windows-static-md`), so the executables are largely
+self-contained; vcpkg auto-deploys the few remaining runtime DLLs next to them.
+
+### Linux / WSL (experimental)
+
+Linux support is best-effort — the realtime renderer and the `creator` editor both
+build, but there is no packaged release. Useful for development on WSL.
+
+**Requirements:** a C++17 compiler (gcc 11+), CMake 3.25+, Ninja, vcpkg, and the
+system packages vcpkg builds its ports against:
+
+```sh
+sudo apt install nasm yasm autoconf automake autoconf-archive libtool libtool-bin \
+  pkg-config libx11-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev \
+  libgl1-mesa-dev libglu1-mesa-dev libudev-dev libgtk-3-dev
+
+cmake --preset linux-gcc
+cmake --build --preset linux-release
+```
+
+Outputs land in `build/linux-gcc/`. Under WSL, the realtime window runs through WSLg's
+translated OpenGL — fine for development, slower than a native GPU path.
 
 ## Contributing
 

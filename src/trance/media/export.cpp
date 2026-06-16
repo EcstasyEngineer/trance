@@ -3,9 +3,9 @@
 
 #pragma warning(push, 0)
 #define VPX_CODEC_DISABLE_COMPAT 1
-#include <libvpx/vp8cx.h>
-#include <libvpx/vpx_encoder.h>
-#include <libvpx/vpx_image.h>
+#include <vpx/vp8cx.h>
+#include <vpx/vpx_encoder.h>
+#include <vpx/vpx_image.h>
 #include <SFML/Graphics.hpp>
 #pragma warning(pop)
 

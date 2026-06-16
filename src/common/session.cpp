@@ -6,7 +6,7 @@
 
 #pragma warning(push, 0)
 #include <google/protobuf/text_format.h>
-#include <common/trance.pb.cc>
+#include <common/trance.pb.h>
 #pragma warning(pop)
 
 namespace

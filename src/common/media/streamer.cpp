@@ -5,7 +5,7 @@
 #include <iostream>
 
 #pragma warning(push, 0)
-#include <giflib/gif_lib.h>
+#include <gif_lib.h>
 #pragma warning(pop)
 
 // Largest GIF canvas we will allocate a pixel buffer for; a corrupt header can

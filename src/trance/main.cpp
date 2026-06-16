@@ -5,7 +5,6 @@
 #include <trance/media/audio.h>
 #include <trance/media/export.h>
 #include <common/media/image.h>
-#include <trance/render/oculus.h>
 #include <trance/render/openvr.h>
 #include <trance/render/render.h>
 #include <trance/render/video_export.h>
@@ -135,13 +134,9 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
     if (!openvr->success()) {
       renderer.reset();
     }
-  } else if (system.renderer() == trance_pb::System::OCULUS) {
-    auto oculus = new OculusRenderer(system);
-    renderer.reset(oculus);
-    if (!oculus->success()) {
-      renderer.reset();
-    }
   }
+  // System::OCULUS (LibOVR) support was removed; old sessions requesting it fall
+  // through to the screen renderer below.
   if (!renderer) {
     renderer.reset(new ScreenRenderer(system));
   }
@@ -176,7 +171,11 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
       if (realtime) {
         return true_clock_time();
       }
-      return long long(1000. * elapsed_export_frames / double(settings.fps));
+      // Match true_clock_time()'s return type exactly so the lambda's two
+      // branches deduce a consistent type (chrono::milliseconds::rep differs
+      // between MSVC's `long long` and gcc/Linux's `long`).
+      return static_cast<decltype(true_clock_time())>(1000. * elapsed_export_frames /
+                                                      double(settings.fps));
     };
     const auto true_clock_start = true_clock_time();
     auto last_clock_time = clock_time();

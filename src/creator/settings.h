@@ -31,7 +31,6 @@ private:
 
   CreatorFrame* _parent;
   wxRadioButton* _monitor;
-  wxRadioButton* _oculus;
   wxRadioButton* _openvr;
   wxCheckBox* _enable_vsync;
   wxSpinCtrl* _image_cache_size;

@@ -1,5 +1,7 @@
 #include <trance/media/async_streamer.h>
 #include <common/util.h>
+#include <chrono>
+#include <thread>
 
 namespace
 {
