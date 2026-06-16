@@ -5,7 +5,7 @@
 
 #pragma warning(push, 0)
 #include <GL/glew.h>
-#include <openvr/openvr.h>
+#include <openvr.h>
 #pragma warning(pop)
 
 class OpenVrRenderer : public Renderer

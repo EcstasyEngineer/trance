@@ -482,12 +482,20 @@ ThemePage::ThemePage(wxNotebook* parent, CreatorFrame& creator_frame, trance_pb:
   });
 
   _button_open->Bind(wxEVT_COMMAND_BUTTON_CLICKED, [&](wxCommandEvent&) {
-    auto root = std::filesystem::path{_session_path}.parent_path().string();
+    auto root = std::filesystem::path{_session_path}.parent_path();
     for (const auto& pair : _tree_lookup) {
       if (pair.second == _tree->GetSelection()) {
-        auto path = root + "\\" + pair.first;
-        _creator_frame.SetStatusText("Opening " + path);
-        wxExecute("explorer /select,\"" + path + "\"", wxEXEC_ASYNC);
+        auto path = (root / pair.first).make_preferred();
+        _creator_frame.SetStatusText("Opening " + path.string());
+#if defined(_WIN32)
+        wxExecute("explorer /select,\"" + path.string() + "\"", wxEXEC_ASYNC);
+#elif defined(__APPLE__)
+        wxExecute("open -R \"" + path.string() + "\"", wxEXEC_ASYNC);
+#else
+        // No portable "reveal and select" on Linux file managers; open the
+        // containing folder instead.
+        wxExecute("xdg-open \"" + path.parent_path().string() + "\"", wxEXEC_ASYNC);
+#endif
       }
     }
   });

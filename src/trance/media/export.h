@@ -5,10 +5,10 @@
 #include <string>
 
 #pragma warning(push, 0)
-#include <libvpx/vpx_codec.h>
-#include <libwebm/mkvwriter.hpp>
+#include <vpx/vpx_codec.h>
+#include <webm/mkvmuxer/mkvwriter.h>
 extern "C" {
-#include <x264/x264.h>
+#include <x264.h>
 }
 #pragma warning(pop)
 

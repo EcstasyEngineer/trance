@@ -1,17 +1,27 @@
 {
   "name": "trance",
   "version": "0.1.0",
-  "description": "Dependency manifest — all deps currently vendored under dependencies/",
+  "description": "Dependency manifest for the trance renderer and creator (vcpkg manifest mode).",
   "dependencies": [
     "protobuf",
-    "sfml",
     "glew",
-    "freetype",
     "libvpx",
     "libwebm",
     "x264",
     "giflib",
     "gflags",
-    "wxwidgets"
-  ]
+    "openvr",
+    "sfml",
+    {
+      "name": "wxwidgets",
+      "platform": "windows"
+    }
+  ],
+  "overrides": [
+    {
+      "name": "sfml",
+      "version": "2.6.1"
+    }
+  ],
+  "builtin-baseline": "a7acc4f979f2afde60757e0f9b572b5710ac08b1"
 }

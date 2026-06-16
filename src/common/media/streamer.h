@@ -7,10 +7,10 @@
 
 #define VPX_CODEC_DISABLE_COMPAT 1
 #pragma warning(push, 0)
-#include <libvpx/vp8dx.h>
-#include <libvpx/vpx_decoder.h>
-#include <libwebm/mkvparser.hpp>
-#include <libwebm/mkvreader.hpp>
+#include <vpx/vp8dx.h>
+#include <vpx/vpx_decoder.h>
+#include <webm/mkvparser/mkvparser.h>
+#include <webm/mkvparser/mkvreader.h>
 #pragma warning(pop)
 
 class Image;

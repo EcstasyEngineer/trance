@@ -31,7 +31,7 @@ message ExportSettings {
 message System {
   enum Renderer {
     MONITOR = 0;
-    OCULUS = 1;
+    OCULUS = 1;  // LibOVR support removed; value reserved, do not reuse.
     OPENVR = 2;
   }
 

@@ -46,8 +46,6 @@ namespace
 
   const std::string MONITOR_TOOLTIP = "Render fullscreen 2D to primary monitor.";
 
-  const std::string OCULUS_TOOLTIP = "Render to the Oculus rift using LibOVR.";
-
   const std::string OPENVR_TOOLTIP = "Render to any SteamVR-compatible device using OpenVR.";
 
   const std::string DRAW_DEPTH_TOOLTIP =
@@ -80,7 +78,6 @@ SettingsFrame::SettingsFrame(CreatorFrame* parent, trance_pb::System& system)
 
   _monitor =
       new wxRadioButton{panel, wxID_ANY, "Monitor", wxDefaultPosition, wxDefaultSize, wxRB_GROUP};
-  _oculus = new wxRadioButton{panel, wxID_ANY, "Oculus Rift"};
   _openvr = new wxRadioButton{panel, wxID_ANY, "SteamVR"};
 
   _enable_vsync = new wxCheckBox{panel, wxID_ANY, "Enable VSync"};
@@ -101,12 +98,9 @@ SettingsFrame::SettingsFrame(CreatorFrame* parent, trance_pb::System& system)
   _button_apply = new wxButton{panel, wxID_ANY, "Apply"};
 
   _monitor->SetToolTip(MONITOR_TOOLTIP);
-  _oculus->SetToolTip(OCULUS_TOOLTIP);
   _openvr->SetToolTip(OPENVR_TOOLTIP);
   if (system.renderer() == trance_pb::System::OPENVR) {
     _openvr->SetValue(true);
-  } else if (system.renderer() == trance_pb::System::OCULUS) {
-    _oculus->SetValue(true);
   } else {
     _monitor->SetValue(true);
     _eye_spacing->Disable();
@@ -149,7 +143,6 @@ SettingsFrame::SettingsFrame(CreatorFrame* parent, trance_pb::System& system)
   label = new wxStaticText{panel, wxID_ANY, "Rendering mode:"};
   right->Add(right_mode, 0, wxALL | wxEXPAND, DEFAULT_BORDER);
   right_mode->Add(_monitor, 1, wxALL, DEFAULT_BORDER);
-  right_mode->Add(_oculus, 1, wxALL, DEFAULT_BORDER);
   right_mode->Add(_openvr, 1, wxALL, DEFAULT_BORDER);
   right->Add(_enable_vsync, 0, wxALL, DEFAULT_BORDER);
   label = new wxStaticText{panel, wxID_ANY, "Draw depth:"};
@@ -204,8 +197,7 @@ void SettingsFrame::Changed()
 void SettingsFrame::Apply()
 {
   _system.set_renderer(_openvr->GetValue() ? trance_pb::System::OPENVR
-                                           : _oculus->GetValue() ? trance_pb::System::OCULUS
-                                                                 : trance_pb::System::MONITOR);
+                                            : trance_pb::System::MONITOR);
   _system.set_enable_vsync(_enable_vsync->GetValue());
   _system.set_image_cache_size(_image_cache_size->GetValue());
   _system.set_animation_buffer_size(_animation_buffer_size->GetValue());
@@ -220,8 +212,6 @@ void SettingsFrame::Apply()
   _button_apply->Enable(false);
   if (_system.renderer() == trance_pb::System::OPENVR) {
     _openvr->SetValue(true);
-  } else if (_system.renderer() == trance_pb::System::OCULUS) {
-    _oculus->SetValue(true);
   } else {
     _monitor->SetValue(true);
   }
