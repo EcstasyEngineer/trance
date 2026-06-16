@@ -6,12 +6,33 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
 
+# Multi-config MSVC (VS generator) otherwise falls back to a dependency's Debug
+# import when building Release, producing LNK2038 _ITERATOR_DEBUG_LEVEL /
+# RuntimeLibrary mismatches (notably from openal-soft via sfml-audio). Force
+# non-Debug configs to map to the Release-imported libraries.
+if(MSVC)
+  set(CMAKE_MAP_IMPORTED_CONFIG_RELEASE Release "")
+  set(CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO RelWithDebInfo Release "")
+  set(CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL MinSizeRel Release "")
+endif()
+
 # ---------------------------------------------------------------------------
 # Dependencies (resolved by vcpkg manifest mode via the toolchain file; see
 # CMakePresets.json). Nothing is vendored — `vcpkg install` restores everything.
 # ---------------------------------------------------------------------------
 find_package(Protobuf CONFIG REQUIRED)
 find_package(SFML 2 COMPONENTS system window graphics audio CONFIG REQUIRED)
+# On Windows, SFML's audio module pulls a bare `OpenAL` target whose config
+# selection is ambiguous under the multi-config generator; pin it to the
+# namespaced `OpenAL::OpenAL` (which carries proper per-config locations) so the
+# Release build links the Release openal-soft. Windows-only — Linux is unaffected.
+if(WIN32)
+  find_package(OpenAL CONFIG REQUIRED)
+  if(TARGET OpenAL AND TARGET OpenAL::OpenAL)
+    set_property(TARGET OpenAL PROPERTY
+      INTERFACE_LINK_LIBRARIES "$<LINK_ONLY:OpenAL::OpenAL>")
+  endif()
+endif()
 find_package(GLEW REQUIRED)
 find_package(OpenGL REQUIRED)
 find_package(gflags CONFIG REQUIRED)
@@ -158,7 +179,8 @@ target_link_libraries(trance PRIVATE
   ${X264_TARGET})
 
 if(WIN32)
-  target_link_libraries(trance PRIVATE ws2_32 winmm shlwapi)
+  # avrt: required by openal-soft's WASAPI backend (AvSetMmThreadCharacteristics).
+  target_link_libraries(trance PRIVATE ws2_32 winmm shlwapi avrt)
 endif()
 
 # ---------------------------------------------------------------------------
