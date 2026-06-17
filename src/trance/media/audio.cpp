@@ -1,4 +1,5 @@
 #include <trance/media/audio.h>
+#include <trance/media/entrainment.h>
 #include <iostream>
 
 #pragma warning(push, 0)
@@ -6,12 +7,18 @@
 #include <SFML/Audio/Music.hpp>
 #pragma warning(pop)
 
-Audio::Audio(const std::string& root_path) : _root_path{root_path}
+Audio::Audio(const std::string& root_path)
+: _root_path{root_path}, _entrainment{new EntrainmentStream}
 {
 }
 
 Audio::~Audio()
 {
+}
+
+void Audio::SetEntrainment(const trance_pb::Entrainment& config)
+{
+  _entrainment->Configure(config);
 }
 
 void Audio::TriggerEvents(const trance_pb::PlaylistItem& item)

@@ -83,6 +83,34 @@ message System {
 // Configuration for a single program, i.e. a combination of a selection of
 // themes with settings related to visual styles, visual effects and so on.
 // Different programs can be swapped in during a single session.
+// One layer of the entrainment bed: a carrier with an optional binaural split
+// and an optional isochronic gate. See Entrainment.
+message EntrainmentLayer {
+  // Carrier centre frequency in Hz.
+  float center_hz = 1;
+  // Binaural beat in Hz: left ear = center - beat/2, right = center + beat/2.
+  // 0 = no split (mono carrier).
+  float binaural_hz = 2;
+  // Isochronic pulse (amplitude-gate) rate in Hz; 0 = continuous. The gate runs
+  // 180 degrees out of phase between the ears (hemispheric effect).
+  float pulse_hz = 3;
+  // Relative layer level in dB (0 = unity). Layers are summed, then the whole
+  // bed is normalised to Entrainment.master_db.
+  float amplitude_db = 4;
+}
+
+// A continuously-synthesised binaural/isochronic entrainment bed, mixed under
+// the visuals. Either name a built-in preset OR provide explicit layers.
+message Entrainment {
+  // Built-in layer set by name (e.g. "bambi", "reactor"). If non-empty, it
+  // takes precedence over `layer`.
+  string preset = 1;
+  // Explicit layers (used when `preset` is empty).
+  repeated EntrainmentLayer layer = 2;
+  // Master output level in dB RMS. 0 (unset) uses the default (~ -28 dB).
+  float master_db = 3;
+}
+
 message Program {
   // The different implemented visual types.
   enum VisualType {
@@ -142,6 +170,9 @@ message Program {
   // TODO: better text options and handling, sizing, etc.
   Colour main_text_colour = 8;
   Colour shadow_text_colour = 9;
+
+  // Optional entrainment audio bed played while this program is active.
+  Entrainment entrainment = 10;
 }
 
 message AudioEvent {

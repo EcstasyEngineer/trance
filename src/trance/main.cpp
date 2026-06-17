@@ -152,6 +152,7 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
     async_thread = run_async_thread(running, *theme_bank);
     audio.reset(new Audio{root_path});
     audio->TriggerEvents(*stack.back().item);
+    audio->SetEntrainment(program().entrainment());
   }
   std::cout << std::endl << "-> " << session.first_playlist_item() << std::endl;
 
@@ -238,6 +239,9 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
             std::cout << "\n-> " << name << std::endl;
             theme_bank->set_program(program());
             director.set_program(program());
+            if (realtime) {
+              audio->SetEntrainment(program().entrainment());
+            }
             ++stack[stack.size() - 2].subroutine_step;
             continue;
           }
@@ -260,6 +264,9 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
         std::cout << "\n-> " << next << std::endl;
         theme_bank->set_program(program());
         director.set_program(program());
+        if (realtime) {
+          audio->SetEntrainment(program().entrainment());
+        }
       }
       if (theme_bank->swaps_to_match_theme()) {
         theme_bank->change_themes();

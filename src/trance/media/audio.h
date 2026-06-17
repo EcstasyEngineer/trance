@@ -8,12 +8,14 @@
 namespace trance_pb
 {
   class AudioEvent;
+  class Entrainment;
   class PlaylistItem;
 }
 namespace sf
 {
   class Music;
 }
+class EntrainmentStream;
 
 class Audio
 {
@@ -22,6 +24,8 @@ public:
   ~Audio();
   void TriggerEvents(const trance_pb::PlaylistItem& item);
   void TriggerEvent(const trance_pb::AudioEvent& event);
+  // Set the entrainment bed for the active program (preset or explicit layers).
+  void SetEntrainment(const trance_pb::Entrainment& config);
   void Update();
 
 private:
@@ -38,6 +42,7 @@ private:
     std::chrono::steady_clock::time_point fade_start;
   };
   std::vector<channel> _channels;
+  std::unique_ptr<EntrainmentStream> _entrainment;
 };
 
 #endif
