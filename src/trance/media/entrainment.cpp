@@ -14,32 +14,6 @@ namespace
   constexpr double default_master_db = -28.0;
   // 0.1 s of stereo audio per streamed chunk.
   constexpr std::size_t chunk_frames = sample_rate / 10;
-
-  struct LayerSpec {
-    double center_hz;
-    double binaural_hz;
-    double pulse_hz;
-    double amplitude_db;
-  };
-
-  // Built-in presets. These specific configurations are the validated targets;
-  // a session may instead supply explicit layers.
-  std::vector<LayerSpec> preset_layers(const std::string& name)
-  {
-    if (name == "bambi") {
-      return {{312.0, 3.0, 5.0, 0.0}, {60.0, 3.0, 3.25, -6.0}};
-    }
-    if (name == "reactor") {
-      return {{202.5, 4.0, 7.0, 0.0},
-              {135.0, 3.5, 4.6, -4.0},
-              {90.0, 3.0, 3.3, -6.0},
-              {60.0, 2.5, 2.55, -8.0}};
-    }
-    if (name == "descent") {
-      return {{200.0, 4.0, 5.0, 0.0}, {120.0, 3.0, 3.25, -3.0}, {55.0, 2.0, 2.55, -6.0}};
-    }
-    return {};
-  }
 }
 
 EntrainmentStream::EntrainmentStream() : _master_gain{0.0}
@@ -128,20 +102,13 @@ void EntrainmentStream::Configure(const trance_pb::Entrainment& config)
   // Stop the audio thread before mutating the shared layer/gain state.
   stop();
 
-  auto specs = config.preset().empty() ? std::vector<LayerSpec>{} : preset_layers(config.preset());
-  if (config.preset().empty()) {
-    for (const auto& l : config.layer()) {
-      specs.push_back({l.center_hz(), l.binaural_hz(), l.pulse_hz(), l.amplitude_db()});
-    }
-  }
-
   _layers.clear();
-  for (const auto& s : specs) {
+  for (const auto& l : config.layer()) {
     Layer layer{};
-    layer.carrier_left_hz = s.center_hz - s.binaural_hz / 2.0;
-    layer.carrier_right_hz = s.center_hz + s.binaural_hz / 2.0;
-    layer.pulse_hz = s.pulse_hz;
-    layer.gain = std::pow(10.0, s.amplitude_db / 20.0);
+    layer.carrier_left_hz = l.center_hz() - l.binaural_hz() / 2.0;
+    layer.carrier_right_hz = l.center_hz() + l.binaural_hz() / 2.0;
+    layer.pulse_hz = l.pulse_hz();
+    layer.gain = std::pow(10.0, l.amplitude_db() / 20.0);
     _layers.push_back(layer);
   }
 

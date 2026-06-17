@@ -100,15 +100,12 @@ message EntrainmentLayer {
 }
 
 // A continuously-synthesised binaural/isochronic entrainment bed, mixed under
-// the visuals. Either name a built-in preset OR provide explicit layers.
+// the visuals. Self-contained: the layers are stored in full. Delete them (an
+// empty layer list) to disable the bed.
 message Entrainment {
-  // Built-in layer set by name (e.g. "bambi", "reactor"). If non-empty, it
-  // takes precedence over `layer`.
-  string preset = 1;
-  // Explicit layers (used when `preset` is empty).
-  repeated EntrainmentLayer layer = 2;
+  repeated EntrainmentLayer layer = 1;
   // Master output level in dB RMS. 0 (unset) uses the default (~ -28 dB).
-  float master_db = 3;
+  float master_db = 2;
 }
 
 message Program {

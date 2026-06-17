@@ -77,6 +77,19 @@ namespace
 
     *program.mutable_main_text_colour() = make_colour(255, 150, 200, 224);
     *program.mutable_shadow_text_colour() = make_colour(0, 0, 0, 192);
+
+    // Default entrainment bed: a binaural + isochronic drone (carrier / beat /
+    // pulse / level). Stored in full so the session is self-contained; delete
+    // these layers from the .session to disable the bed.
+    auto add_layer = [&](float center, float binaural, float pulse, float amplitude_db) {
+      auto* layer = program.mutable_entrainment()->add_layer();
+      layer->set_center_hz(center);
+      layer->set_binaural_hz(binaural);
+      layer->set_pulse_hz(pulse);
+      layer->set_amplitude_db(amplitude_db);
+    };
+    add_layer(312.f, 3.f, 5.f, 0.f);
+    add_layer(60.f, 3.f, 3.25f, -6.f);
   }
 
   void set_default_playlist(trance_pb::Session& session, const std::string& program)
