@@ -470,7 +470,7 @@ namespace
       }
       return;
     }
-    static const std::size_t max_children = 6;
+    static const std::size_t max_children = 8;
     std::size_t shown = std::min(kids.size(), max_children);
     for (std::size_t i = 0; i < shown; ++i) {
       append_cycler(out, kids[i], depth + 1, max_depth);
@@ -503,10 +503,6 @@ void Director::draw_debug_overlay() const
 
   out << "== TRANCE DEBUG (F1 to hide) ==\n";
   out << "visual : " << visual_type_name(_last_visual_selection) << "\n";
-
-  out << "cycler : (pattern of the current visual)\n";
-  const Visual* visual = _visual.get();
-  append_cycler(out, visual ? visual->cycler() : nullptr, 0, 3);
 
   // Image layers composited this frame -- this is the on-screen overlay depth.
   const auto& layers = _visual_api->debug_layers();
@@ -556,7 +552,15 @@ void Director::draw_debug_overlay() const
   out << "pinned : " << (snap.pinned.empty() ? "(none)" : snap.pinned) << "\n";
   out << "cache  : " << snap.image_cache_size << " imgs   swaps_to_match: " << snap.swaps_to_match
       << "   global_fps: " << program().global_fps() << "\n";
-  out << "legend : #=loaded(RAM)  .=not loaded";
+  out << "legend : #=loaded(RAM)  .=not loaded\n";
+
+  // Cycler tree last: its depth varies frame-to-frame, so keeping it at the
+  // bottom stops it from shoving the fixed rows above it around.
+  out << "-- CYCLER (pattern of the current visual; pos/len are frames) --\n";
+  const Visual* visual = _visual.get();
+  append_cycler(out, visual ? visual->cycler() : nullptr, 0, 5);
+  out << "types  : Action=beat  OneShot=once(len=longest)  Parallel=together(len=LCM)\n";
+  out << "         Sequence=in order(len=sum)  Repeat=loop  Offset=delay   *=active now";
 
   // Draw the HUD as flat 2D over the rendered frame. pushGLStates/popGLStates
   // isolate SFML's 2D drawing from the visual's raw OpenGL state.
