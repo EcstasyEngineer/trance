@@ -6,6 +6,11 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
 
+# Relocatable binaries: embed the library search path relative to the executable
+# ($ORIGIN) rather than the absolute build tree, so the output doesn't depend on
+# where it was built and can be run/moved from anywhere.
+set(CMAKE_BUILD_RPATH_USE_ORIGIN ON)
+
 # Multi-config MSVC (VS generator) otherwise falls back to a dependency's Debug
 # import when building Release, producing LNK2038 _ITERATOR_DEBUG_LEVEL /
 # RuntimeLibrary mismatches (notably from openal-soft via sfml-audio). Force
@@ -89,7 +94,10 @@ else()
   # do NOT enable -Werror here. -Wno-unknown-pragmas swallows the MSVC
   # `#pragma warning(push, 0)` lines that pepper the source.
   target_compile_options(trance_options INTERFACE
-    -Wall -Wextra -Wno-unknown-pragmas)
+    -Wall -Wextra -Wno-unknown-pragmas
+    # Reproducible builds: make __FILE__ and debug paths relative (./src/...) so
+    # the output doesn't depend on the build directory.
+    -ffile-prefix-map=${CMAKE_SOURCE_DIR}=.)
 endif()
 
 # SFML/GLEW are linked statically on Windows (x64-windows-static-md) and
