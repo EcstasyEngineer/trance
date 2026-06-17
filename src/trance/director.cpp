@@ -470,7 +470,7 @@ namespace
       }
       return;
     }
-    static const std::size_t max_children = 8;
+    static const std::size_t max_children = 20;
     std::size_t shown = std::min(kids.size(), max_children);
     for (std::size_t i = 0; i < shown; ++i) {
       append_cycler(out, kids[i], depth + 1, max_depth);
@@ -558,7 +558,7 @@ void Director::draw_debug_overlay() const
   // bottom stops it from shoving the fixed rows above it around.
   out << "-- CYCLER (pattern of the current visual; pos/len are frames) --\n";
   const Visual* visual = _visual.get();
-  append_cycler(out, visual ? visual->cycler() : nullptr, 0, 5);
+  append_cycler(out, visual ? visual->cycler() : nullptr, 0, 20);
   out << "types  : Action=beat  OneShot=once(len=longest)  Parallel=together(len=LCM)\n";
   out << "         Sequence=in order(len=sum)  Repeat=loop  Offset=delay   *=active now";
 
