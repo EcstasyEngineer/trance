@@ -155,6 +155,7 @@ add_executable(trance
   src/trance/main.cpp
   src/trance/media/async_streamer.cpp
   src/trance/media/audio.cpp
+  src/trance/media/entrainment.cpp
   src/trance/media/export.cpp
   src/trance/media/font.cpp
   src/trance/render/openvr.cpp
