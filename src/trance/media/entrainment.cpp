@@ -12,8 +12,11 @@ namespace
   constexpr double pi = 3.14159265358979323846;
   constexpr unsigned int sample_rate = 44100;
   constexpr double default_master_db = -28.0;
-  // 0.1 s of stereo audio per streamed chunk.
-  constexpr std::size_t chunk_frames = sample_rate / 10;
+  // 0.5 s of stereo audio per streamed chunk. Latency is irrelevant for an
+  // ambient bed, so we favour a deep buffer: with SFML's internal queue this
+  // gives ~1.5 s of slack, which keeps the stream from underrunning (clicks)
+  // when the CPU is busy.
+  constexpr std::size_t chunk_frames = sample_rate / 2;
 }
 
 EntrainmentStream::EntrainmentStream() : _master_gain{0.0}
@@ -66,20 +69,27 @@ namespace
     out_right = right;
   }
 
-  // RMS of the summed bed at unit master gain, measured over a window long
+  struct Calibration {
+    double rms;
+    double peak;
+  };
+
+  // RMS and peak of the summed bed at unit master gain, over a window long
   // enough to cover the slow isochronic/binaural cycles. Operates on a copy so
   // the real phase state is untouched.
-  double measure_rms(std::vector<EntrainmentStream::Layer> layers)
+  Calibration measure(std::vector<EntrainmentStream::Layer> layers)
   {
     const std::size_t frames = sample_rate * 2;  // 2 seconds
     double sum_sq = 0.0;
+    double peak = 0.0;
     for (std::size_t i = 0; i < frames; ++i) {
       double l = 0.0;
       double r = 0.0;
       synth_frame(layers, l, r);
       sum_sq += l * l + r * r;
+      peak = std::max(peak, std::max(std::abs(l), std::abs(r)));
     }
-    return std::sqrt(sum_sq / (2.0 * frames));
+    return {std::sqrt(sum_sq / (2.0 * frames)), peak};
   }
 
   sf::Int16 to_sample(double v)
@@ -119,8 +129,14 @@ void EntrainmentStream::Configure(const trance_pb::Entrainment& config)
 
   const double target_db = config.master_db() != 0.f ? double(config.master_db()) : default_master_db;
   const double target = std::pow(10.0, target_db / 20.0);
-  const double rms = measure_rms(_layers);
-  _master_gain = rms > 1e-9 ? target / rms : 0.0;
+  const Calibration cal = measure(_layers);
+  const double gain_rms = cal.rms > 1e-9 ? target / cal.rms : 0.0;
+  // Cap the gain so peaks stay below 0.8 (~2 dB headroom): prevents hard-clip
+  // clicks on hot or phase-aligned configs. Inactive for the default bed, whose
+  // peaks sit well under full scale at the default level.
+  static const double peak_ceiling = 0.8;
+  const double gain_peak = cal.peak > 1e-9 ? peak_ceiling / cal.peak : gain_rms;
+  _master_gain = std::min(gain_rms, gain_peak);
   if (_master_gain <= 0.0) {
     return;  // degenerate (all-silent) bed: stay stopped rather than play silence
   }
