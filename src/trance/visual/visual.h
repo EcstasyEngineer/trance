@@ -31,76 +31,17 @@ private:
   std::function<void(VisualRender& api)> _render;
 };
 
-class AccelerateVisual : public Visual
-{
-public:
-  AccelerateVisual(VisualControl& api);
-
-private:
-  int32_t _animation_counter;
-  int32_t _animation_mod;
-  bool _animation_on;
-  bool _animation_alternate;
-  bool _text_on;
-  Image _current;
-};
-
-class SubTextVisual : public Visual
-{
-public:
-  SubTextVisual(VisualControl& api);
-
-private:
-  int32_t _animation_counter;
-  int32_t _animation_mod;
-  bool _animation_on;
-  Image _current;
-  bool _alternate;
-  uint32_t _sub_speed_multiplier;
-};
-
-class SlowFlashVisual : public Visual
-{
-public:
-  SlowFlashVisual(VisualControl& api);
-
-private:
-  Image _current;
-};
-
-class FlashTextVisual : public Visual
-{
-public:
-  FlashTextVisual(VisualControl& api);
-  void reset() override;
-
-private:
-  bool _animated;
-  bool _alternate;
-  Image _start;
-  Image _end;
-};
-
-class SimpleVisual : public Visual
-{
-public:
-  SimpleVisual(VisualControl& api);
-
-private:
-  uint32_t _anim_cycle;
-  Image _image;
-};
-
-class ParallelVisual : public Visual
-{
-public:
-  ParallelVisual(VisualControl& api);
-
-private:
-  bool _alternate_animation;
-  std::vector<Image> _images;
-};
-
+// The hardcoded visuals are retired -- each is now a compiled built-in pattern
+// (builtin_patterns.cpp) with a named render preset (render_preset.cpp), proven
+// render-equivalent before deletion: AccelerateVisual -> "accelerate", SlowFlashVisual
+// -> "slow_flash", SubTextVisual -> "sub_text", FlashTextVisual -> "flash_text",
+// SimpleVisual -> "simple" (enum PARALLEL), ParallelVisual -> "super_parallel",
+// SuperFastVisual -> "super_fast". The Program::VisualType enum is unchanged, so
+// existing .session files keep working.
+//
+// AnimationVisual remains the lone hardcoded class: it is the live reference the
+// render-equivalence harness (pattern_render_test) advances alongside the compiled
+// "animation" built-in. The engine itself plays the compiled version.
 class AnimationVisual : public Visual
 {
 public:
@@ -109,27 +50,6 @@ public:
 private:
   Image _animation_backup;
   Image _current;
-};
-
-class SuperFastVisual : public Visual
-{
-public:
-  SuperFastVisual(VisualControl& api);
-
-private:
-  enum class State {
-    RAPID = 0,
-    START_ANIMATION = 1,
-    ANIMATION = 2,
-    END_ANIMATION = 3,
-  };
-  State _state;
-  bool _alternate;
-  uint32_t _text_mod;
-  uint32_t _cooldown_timer;
-  uint32_t _animation_timer;
-  Image _current;
-  Image _next;
 };
 
 #endif

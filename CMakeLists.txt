@@ -37,6 +37,30 @@ if(WIN32)
     set_property(TARGET OpenAL PROPERTY
       INTERFACE_LINK_LIBRARIES "$<LINK_ONLY:OpenAL::OpenAL>")
   endif()
+  if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
+    set(_trance_vcpkg_lib_dir "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib")
+    set(_trance_vcpkg_debug_lib_dir "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug/lib")
+
+    # SFML's audio config exposes bare VORBIS/FLAC targets whose library paths
+    # can resolve to debug libs under the Visual Studio multi-config generator.
+    # Pin them per config so Release does not pull MSVCRTD through audio deps.
+    if(TARGET VORBIS)
+      set_property(TARGET VORBIS PROPERTY INTERFACE_LINK_LIBRARIES
+        "$<$<CONFIG:Debug>:${_trance_vcpkg_debug_lib_dir}/vorbisfile.lib>"
+        "$<$<CONFIG:Debug>:${_trance_vcpkg_debug_lib_dir}/vorbisenc.lib>"
+        "$<$<CONFIG:Debug>:${_trance_vcpkg_debug_lib_dir}/vorbis.lib>"
+        "$<$<CONFIG:Debug>:${_trance_vcpkg_debug_lib_dir}/ogg.lib>"
+        "$<$<NOT:$<CONFIG:Debug>>:${_trance_vcpkg_lib_dir}/vorbisfile.lib>"
+        "$<$<NOT:$<CONFIG:Debug>>:${_trance_vcpkg_lib_dir}/vorbisenc.lib>"
+        "$<$<NOT:$<CONFIG:Debug>>:${_trance_vcpkg_lib_dir}/vorbis.lib>"
+        "$<$<NOT:$<CONFIG:Debug>>:${_trance_vcpkg_lib_dir}/ogg.lib>")
+    endif()
+    if(TARGET FLAC)
+      set_property(TARGET FLAC PROPERTY INTERFACE_LINK_LIBRARIES
+        "$<$<CONFIG:Debug>:${_trance_vcpkg_debug_lib_dir}/FLAC.lib>"
+        "$<$<NOT:$<CONFIG:Debug>>:${_trance_vcpkg_lib_dir}/FLAC.lib>")
+    endif()
+  endif()
 endif()
 find_package(GLEW REQUIRED)
 find_package(OpenGL REQUIRED)
@@ -171,7 +195,12 @@ add_executable(trance
   src/trance/render/video_export.cpp
   src/trance/theme_bank.cpp
   src/trance/visual/api.cpp
+  src/trance/visual/builtin_patterns.cpp
+  src/trance/visual/compiled_visual.cpp
   src/trance/visual/cyclers.cpp
+  src/trance/visual/pattern_compiler.cpp
+  src/trance/visual/pattern_parser.cpp
+  src/trance/visual/render_preset.cpp
   src/trance/visual/visual.cpp)
 
 target_link_libraries(trance PRIVATE
@@ -241,4 +270,73 @@ if(TRANCE_BUILD_CREATOR)
   if(WIN32)
     target_link_libraries(creator PRIVATE ws2_32 winmm shlwapi)
   endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# Headless tests (no SFML/protobuf). Default OFF; enable with -DTRANCE_BUILD_TESTS=ON
+# and run via `ctest`. pattern_compiler_test proves the Framing-B compiler lowers a
+# data-described pattern to a Cycler tree identical to the hardcoded schedule.
+# ---------------------------------------------------------------------------
+option(TRANCE_BUILD_TESTS "Build headless unit tests" OFF)
+if(TRANCE_BUILD_TESTS)
+  enable_testing()
+  add_executable(pattern_compiler_test
+    src/trance/visual/cyclers.cpp
+    src/trance/visual/pattern_compiler.cpp
+    src/trance/visual/pattern_compiler_test.cpp)
+  target_include_directories(pattern_compiler_test PRIVATE src/)
+  target_link_libraries(pattern_compiler_test PRIVATE trance_options)
+  add_test(NAME pattern_compiler_test COMMAND pattern_compiler_test)
+
+  add_executable(pattern_effects_test
+    src/trance/visual/cyclers.cpp
+    src/trance/visual/pattern_compiler.cpp
+    src/trance/visual/pattern_effects_test.cpp)
+  target_include_directories(pattern_effects_test PRIVATE src/)
+  target_link_libraries(pattern_effects_test PRIVATE trance_options)
+  add_test(NAME pattern_effects_test COMMAND pattern_effects_test)
+
+  add_executable(pattern_parser_test
+    src/trance/visual/cyclers.cpp
+    src/trance/visual/pattern_compiler.cpp
+    src/trance/visual/pattern_parser.cpp
+    src/trance/visual/pattern_parser_test.cpp)
+  target_include_directories(pattern_parser_test PRIVATE src/)
+  target_link_libraries(pattern_parser_test PRIVATE trance_options)
+  add_test(NAME pattern_parser_test COMMAND pattern_parser_test)
+
+  add_executable(pattern_primitives_test
+    src/trance/visual/cyclers.cpp
+    src/trance/visual/pattern_compiler.cpp
+    src/trance/visual/pattern_parser.cpp
+    src/trance/visual/pattern_primitives_test.cpp)
+  target_include_directories(pattern_primitives_test PRIVATE src/)
+  target_link_libraries(pattern_primitives_test PRIVATE trance_options)
+  add_test(NAME pattern_primitives_test COMMAND pattern_primitives_test)
+
+  add_executable(builtin_patterns_test
+    src/trance/visual/builtin_patterns.cpp
+    src/trance/visual/cyclers.cpp
+    src/trance/visual/pattern_compiler.cpp
+    src/trance/visual/pattern_parser.cpp
+    src/trance/visual/builtin_patterns_test.cpp)
+  target_include_directories(builtin_patterns_test PRIVATE src/)
+  target_link_libraries(builtin_patterns_test PRIVATE trance_options)
+  add_test(NAME builtin_patterns_test COMMAND builtin_patterns_test)
+
+  # Heavier: links the real visual.cpp + common_lib (Image needs SFML) to prove the
+  # compiled SLOW_FLASH renders identically to the hardcoded one. Still headless.
+  add_executable(pattern_render_test
+    src/trance/visual/builtin_patterns.cpp
+    src/trance/visual/cyclers.cpp
+    src/trance/visual/pattern_compiler.cpp
+    src/trance/visual/pattern_parser.cpp
+    src/trance/visual/render_preset.cpp
+    src/trance/visual/compiled_visual.cpp
+    src/trance/visual/visual.cpp
+    src/trance/visual/pattern_render_test.cpp)
+  target_include_directories(pattern_render_test PRIVATE src/)
+  target_link_libraries(pattern_render_test PRIVATE common_lib trance_options
+    sfml-system sfml-window sfml-graphics GLEW::GLEW OpenGL::GL)
+  add_test(NAME pattern_render_test COMMAND pattern_render_test)
 endif()

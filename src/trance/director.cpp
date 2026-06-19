@@ -1,15 +1,19 @@
 ﻿#include <trance/director.h>
 #include <common/session.h>
 #include <common/util.h>
+#include <trance/media/audio.h>
 #include <trance/media/font.h>
 #include <trance/theme_bank.h>
 #include <trance/visual/api.h>
+#include <trance/visual/builtin_patterns.h>
+#include <trance/visual/compiled_visual.h>
 #include <trance/visual/cyclers.h>
 #include <trance/visual/visual.h>
 #include <algorithm>
 #include <cstdio>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
 
 #pragma warning(push, 0)
 extern "C" {
@@ -36,9 +40,11 @@ Director::Director(const trance_pb::Session& session, const trance_pb::System& s
 , _quad_buffer{0}
 , _renderer{renderer}
 , _last_visual_selection{0}
+, _last_custom_index{-1}
 , _debug_overlay{false}
 , _debug_font_loaded{false}
 , _debug_font_ok{false}
+, _audio{nullptr}
 {
   std::cout << "\npreloading GPU" << std::endl;
   static const std::size_t gl_preload = 1000;
@@ -58,6 +64,8 @@ Director::Director(const trance_pb::Session& session, const trance_pb::System& s
   glBindBuffer(GL_ARRAY_BUFFER, 0);
 
   _visual_api.reset(new VisualApiImpl{*this, _themes, session, system, _renderer.height()});
+  build_builtin_patterns();
+  rebuild_custom_patterns();
   change_visual(0);
   _renderer.init();
 }
@@ -70,6 +78,47 @@ Director::~Director()
 void Director::set_program(const trance_pb::Program& program)
 {
   _program = &program;
+  rebuild_custom_patterns();
+}
+
+void Director::build_builtin_patterns()
+{
+  _builtin_compiled.clear();
+  for (uint32_t t = 1; t <= 8; ++t) {
+    std::string source = builtin::pattern_source(t);
+    if (source.empty()) {
+      continue;
+    }
+    auto result = pattern::parse(source);
+    if (!result.ok) {
+      // Built-in sources are compile-time constants with no hardcoded fallback left,
+      // so a parse failure is a build bug -- fail fast and loud rather than risk a
+      // null visual at selection time. (builtin_patterns_test guards against this.)
+      throw std::runtime_error("built-in pattern " + std::to_string(t) + " failed to parse: "
+                               + result.error);
+    }
+    _builtin_compiled.emplace(t, std::move(result.pattern));
+  }
+}
+
+void Director::rebuild_custom_patterns()
+{
+  _custom_patterns.clear();
+  _last_custom_index = -1;
+  for (const auto& src : _program->custom_visual_pattern()) {
+    if (!src.enabled()) {
+      continue;
+    }
+    auto result = pattern::parse(src.source_text());
+    if (!result.ok) {
+      std::cerr << "skipping custom pattern '" << src.name() << "': " << result.error << std::endl;
+      continue;
+    }
+    // Carry the proto's name/weight (authoritative) over the in-source ones.
+    result.pattern.name = src.name();
+    result.pattern.weight = src.random_weight();
+    _custom_patterns.push_back(std::move(result.pattern));
+  }
 }
 
 bool Director::update()
@@ -99,6 +148,11 @@ void Director::render() const
 void Director::toggle_debug_overlay()
 {
   _debug_overlay = !_debug_overlay;
+}
+
+void Director::set_audio(const Audio* audio)
+{
+  _audio = audio;
 }
 
 const trance_pb::Program& Director::program() const
@@ -329,62 +383,89 @@ void Director::render_text(const Font& font, const std::string& text, bool large
 
 void Director::change_visual(uint32_t length)
 {
-  // Always change if current visual isn't in the program.
-  bool included = false;
+  // 64-bit totals so a program with many large weights can't overflow the sum.
+  uint64_t builtin_total = 0;
   for (const auto& type : _program->visual_type()) {
-    if (_visual && type.random_weight() && type.type() == _last_visual_selection) {
-      included = true;
+    builtin_total += type.random_weight();
+  }
+  uint64_t custom_total = 0;
+  for (const auto& p : _custom_patterns) {
+    custom_total += p.weight;
+  }
+  uint64_t total = builtin_total + custom_total;
+  if (!total) {
+    return;  // nothing selectable
+  }
+
+  // Always change if current visual isn't in the program (built-in or custom).
+  bool included = false;
+  if (_last_custom_index >= 0) {
+    included = _visual && _last_custom_index < int(_custom_patterns.size());
+  } else {
+    for (const auto& type : _program->visual_type()) {
+      if (_visual && type.random_weight() && type.type() == _last_visual_selection) {
+        included = true;
+      }
     }
   }
   // Like !random_chance(chance), but scaled to current speed and cycle length.
   // Roughly 1/2 chance for a cycle of length 2048.
   auto fps = program().global_fps();
-  if (included && length && random((2 * fps * length) / 2048) >= 120) {
+  uint32_t stick = (2 * fps * length) / 2048;  // guard random(0) for short cycles
+  if (included && length && stick && random(stick) >= 120) {
     return;
   }
 
-  uint32_t total = 0;
+  // Weighted pick over the built-in visual types first, then the custom patterns.
+  uint64_t r = random(total);
+  uint64_t acc = 0;
+  trance_pb::Program_VisualType t = trance_pb::Program_VisualType_NONE;
+  int custom_index = -1;
+  bool picked_builtin = false;
   for (const auto& type : _program->visual_type()) {
-    total += type.random_weight();
-  }
-  auto r = random(total);
-  total = 0;
-  trance_pb::Program_VisualType t;
-  for (const auto& type : _program->visual_type()) {
-    total += type.random_weight();
-    if (r < total) {
+    acc += type.random_weight();
+    if (r < acc) {
       t = type.type();
+      picked_builtin = true;
       break;
     }
   }
+  if (!picked_builtin) {
+    for (std::size_t i = 0; i < _custom_patterns.size(); ++i) {
+      acc += _custom_patterns[i].weight;
+      if (r < acc) {
+        custom_index = int(i);
+        break;
+      }
+    }
+  }
 
-  if (_visual && t == _last_visual_selection) {
+  // A custom pattern was selected: compile it (or just reset if unchanged).
+  if (custom_index >= 0) {
+    if (_visual && custom_index == _last_custom_index) {
+      _visual->reset();
+      return;
+    }
+    const auto& p = _custom_patterns[custom_index];
+    _visual.reset(new CompiledVisual{*_visual_api, p.root, p.render});
+    _last_custom_index = custom_index;
+    _custom_visual_name = p.name;
+    _last_visual_selection = trance_pb::Program_VisualType_NONE;
+    return;
+  }
+
+  if (_visual && _last_custom_index < 0 && t == _last_visual_selection) {
     _visual->reset();
     return;
   }
-  if (t == trance_pb::Program_VisualType_ACCELERATE) {
-    _visual.reset(new AccelerateVisual{*_visual_api});
-  }
-  if (t == trance_pb::Program_VisualType_SLOW_FLASH) {
-    _visual.reset(new SlowFlashVisual{*_visual_api});
-  }
-  if (t == trance_pb::Program_VisualType_SUB_TEXT) {
-    _visual.reset(new SubTextVisual{*_visual_api});
-  }
-  if (t == trance_pb::Program_VisualType_FLASH_TEXT) {
-    _visual.reset(new FlashTextVisual{*_visual_api});
-  }
-  if (t == trance_pb::Program_VisualType_PARALLEL) {
-    _visual.reset(new SimpleVisual{*_visual_api});
-  }
-  if (t == trance_pb::Program_VisualType_SUPER_PARALLEL) {
-    _visual.reset(new ParallelVisual{*_visual_api});
-  }
-  if (t == trance_pb::Program_VisualType_ANIMATION) {
-    _visual.reset(new AnimationVisual{*_visual_api});
-  }
-  if (t == trance_pb::Program_VisualType_SUPER_FAST) {
-    _visual.reset(new SuperFastVisual{*_visual_api});
+  _last_custom_index = -1;
+  _custom_visual_name.clear();
+  // Every built-in VisualType is now a compiled pattern (builtin_patterns.cpp); the enum
+  // value still identifies it for the overlay. A type with no compiled source (e.g. NONE)
+  // leaves the current visual in place.
+  auto compiled = _builtin_compiled.find(t);
+  if (compiled != _builtin_compiled.end()) {
+    _visual.reset(new CompiledVisual{*_visual_api, compiled->second.root, compiled->second.render});
   }
   _last_visual_selection = t;
 }
@@ -443,22 +524,171 @@ namespace
     return s;
   }
 
-  // Recursively render the cycler tree. Depth and breadth are capped so a busy
-  // visual (e.g. ACCELERATE, which has dozens of subcycles) stays legible.
+  // The innermost active cycler carrying a phase label on the active path, i.e.
+  // the "section" the viewer would name (e.g. SLOW / FAST / INTERLEAVE). We tag at
+  // most one label per active path, so this is unambiguous; if two labelled
+  // branches were ever active at once it would report the last one visited.
+  // Returns null when no active node is labelled (e.g. SUPER_FAST, whose phases
+  // live in its own logic, not the tree).
+  const Cycler* active_phase(const Cycler* c)
+  {
+    if (!c || !c->active()) {
+      return nullptr;
+    }
+    const Cycler* best = c->phase().empty() ? nullptr : c;
+    for (const Cycler* kid : c->children()) {
+      if (const Cycler* deeper = active_phase(kid)) {
+        best = deeper;
+      }
+    }
+    return best;
+  }
+
+  // Accumulate the theme slots sourced by the currently active image lanes. A
+  // literal hint sets its slot; a Runtime hint means an image is live but its slot
+  // is decided by hidden state -- the caller resolves that from the last-pulled
+  // slot. This is "which grammar lane sources images from which theme", not an exact
+  // count of rendered layers (an image can outlive the leaf that loaded it).
+  void collect_onscreen_slots(const Cycler* c, bool& primary, bool& alternate, bool& runtime)
+  {
+    if (!c || !c->active()) {
+      return;
+    }
+    switch (c->image_slot()) {
+    case ImageSlotHint::Primary:
+      primary = true;
+      break;
+    case ImageSlotHint::Alternate:
+      alternate = true;
+      break;
+    case ImageSlotHint::Runtime:
+      runtime = true;
+      break;
+    default:
+      break;
+    }
+    for (const Cycler* kid : c->children()) {
+      collect_onscreen_slots(kid, primary, alternate, runtime);
+    }
+  }
+
+  // Short tag for an image-bearing node's theme slot.
+  const char* slot_str(ImageSlotHint hint)
+  {
+    switch (hint) {
+    case ImageSlotHint::Primary:
+      return "slot[1]";
+    case ImageSlotHint::Alternate:
+      return "slot[2]";
+    case ImageSlotHint::Runtime:
+      return "slot[~]";
+    default:
+      return "";
+    }
+  }
+
+  // Image slots present anywhere in a subtree (regardless of active state).
+  void collect_subtree_slots(const Cycler* c, bool& primary, bool& alternate, bool& runtime)
+  {
+    if (!c) {
+      return;
+    }
+    switch (c->image_slot()) {
+    case ImageSlotHint::Primary:
+      primary = true;
+      break;
+    case ImageSlotHint::Alternate:
+      alternate = true;
+      break;
+    case ImageSlotHint::Runtime:
+      runtime = true;
+      break;
+    default:
+      break;
+    }
+    for (const Cycler* kid : c->children()) {
+      collect_subtree_slots(kid, primary, alternate, runtime);
+    }
+  }
+
+  // For a collapsed labelled subtree (e.g. an inactive <FAST>) whose own node is not
+  // an image lane, summarise which image slots live below it, so the collapsed line
+  // still says "this section shows the alternate theme". Empty if no image lanes.
+  std::string descendant_slot_summary(const Cycler* c)
+  {
+    bool primary = false;
+    bool alternate = false;
+    bool runtime = false;
+    collect_subtree_slots(c, primary, alternate, runtime);
+    if (!primary && !alternate && !runtime) {
+      return "";
+    }
+    std::string s = " [img";
+    if (primary) {
+      s += " slot[1]";
+    }
+    if (alternate) {
+      s += " slot[2]";
+    }
+    if (runtime) {
+      s += " slot[~]";
+    }
+    s += "]";
+    return s;
+  }
+
+  // "pos/len" with pos right-padded to len's digit width, so a node's column stays
+  // put as its position grows (e.g. 999 -> 1000 won't shove the rest of the line).
+  std::string frames(uint32_t pos, uint32_t len)
+  {
+    std::string ls = std::to_string(len);
+    std::string ps = std::to_string(pos);
+    std::string pad(ls.size() > ps.size() ? ls.size() - ps.size() : 0, ' ');
+    return pad + ps + "/" + ls;
+  }
+
+  // Print one cycler's own line (type, frames, progress, section + image tags). When
+  // `collapsed`, its subtree is omitted and it is marked as such; otherwise an active
+  // node gets a trailing '*'.
+  void append_node_line(std::ostringstream& out, const Cycler* c, int depth, bool collapsed,
+                        const std::string& extra = "")
+  {
+    for (int i = 0; i < depth; ++i) {
+      out << "  ";
+    }
+    // Bar from position/length, not progress(): progress() maps position 0 to the
+    // last frame (frame() wraps), so a not-yet-started node would read nearly full.
+    float frac = c->length() ? float(c->position()) / float(c->length()) : 0.f;
+    out << (depth ? "+-" : "") << c->type_name() << " " << frames(c->position(), c->length())
+        << " " << bar(frac, 8);
+    if (!c->phase().empty()) {
+      out << " <" << c->phase() << ">";
+    }
+    if (c->image_slot() != ImageSlotHint::None) {
+      out << " [" << c->image_label() << " " << slot_str(c->image_slot()) << "]";
+    }
+    if (!extra.empty()) {
+      out << extra;
+    }
+    if (collapsed) {
+      out << " (collapsed)";
+    } else if (c->active()) {
+      out << " *";
+    }
+    out << "\n";
+  }
+
+  // Render the cycler tree, minimised: recurse only ACTIVE children (the live path),
+  // and collapse inactive ones. Labelled / image-bearing inactive children get a
+  // one-line summary so the skeleton stays visible; the rest are tallied. This keeps
+  // a busy visual (e.g. ACCELERATE's 45 segments) down to the active segment plus a
+  // count, instead of a wall of dead nodes.
   void append_cycler(std::ostringstream& out, const Cycler* c, int depth, int max_depth)
   {
     if (!c) {
       return;
     }
-    for (int i = 0; i < depth; ++i) {
-      out << "  ";
-    }
-    out << (depth ? "+-" : "") << c->type_name() << " " << c->position() << "/" << c->length()
-        << " " << bar(c->progress(), 8);
-    if (c->active()) {
-      out << " *";
-    }
-    out << "\n";
+    append_node_line(out, c, depth, false);
 
     auto kids = c->children();
     if (depth >= max_depth) {
@@ -470,16 +700,42 @@ namespace
       }
       return;
     }
-    static const std::size_t max_children = 20;
-    std::size_t shown = std::min(kids.size(), max_children);
-    for (std::size_t i = 0; i < shown; ++i) {
-      append_cycler(out, kids[i], depth + 1, max_depth);
+
+    std::size_t inactive_unlabelled = 0;
+    std::size_t active_leaf_actions = 0;
+    for (const Cycler* kid : kids) {
+      bool annotated = !kid->phase().empty() || kid->image_slot() != ImageSlotHint::None;
+      if (kid->active()) {
+        // Collapse active, unannotated leaf actions (spiral/text/font/upload/timers)
+        // into a count: they are the "what is this?" noise, and the image/section
+        // nodes carry the meaning. Recurse into everything else.
+        if (kid->children().empty() && !annotated) {
+          ++active_leaf_actions;
+        } else {
+          append_cycler(out, kid, depth + 1, max_depth);
+        }
+      } else if (annotated) {
+        // Inactive but meaningful: one collapsed line. If it is a labelled section
+        // (not itself an image lane), summarise the image slots it contains.
+        std::string extra = kid->image_slot() == ImageSlotHint::None
+            ? descendant_slot_summary(kid)
+            : std::string{};
+        append_node_line(out, kid, depth + 1, true, extra);
+      } else {
+        ++inactive_unlabelled;
+      }
     }
-    if (kids.size() > shown) {
+    if (active_leaf_actions) {
       for (int i = 0; i <= depth; ++i) {
         out << "  ";
       }
-      out << "+-(" << (kids.size() - shown) << " more...)\n";
+      out << "+-(" << active_leaf_actions << " effect action(s))\n";
+    }
+    if (inactive_unlabelled) {
+      for (int i = 0; i <= depth; ++i) {
+        out << "  ";
+      }
+      out << "+-(" << inactive_unlabelled << " inactive)\n";
     }
   }
 }
@@ -501,8 +757,51 @@ void Director::draw_debug_overlay() const
   std::ostringstream out;
   char buf[32];
 
-  out << "== TRANCE DEBUG (F1 to hide) ==\n";
-  out << "visual : " << visual_type_name(_last_visual_selection) << "\n";
+  out << "== TRANCE DEBUG (F1 hide  M mute) ==\n";
+  out << "visual : "
+      << (_last_custom_index >= 0 ? _custom_visual_name + " [custom]"
+                                  : visual_type_name(_last_visual_selection))
+      << "\n";
+
+  // NOW: the current section (deepest active labelled cycler) and its progress.
+  // Visuals with no labelled section (e.g. SUPER_FAST) show "--".
+  const Visual* visual = _visual.get();
+  const Cycler* section = visual ? active_phase(visual->cycler()) : nullptr;
+  out << "now    : section ";
+  if (section) {
+    float frac = section->length() ? float(section->position()) / float(section->length()) : 0.f;
+    out << section->phase() << "  " << frames(section->position(), section->length()) << " "
+        << bar(frac, 8);
+  } else {
+    out << "--";
+  }
+  out << "\n";
+
+  // Which theme slots the active image lanes source -- shown as '*' in the THEMES
+  // block below (no separate line). Literal lanes mark their slot directly; a
+  // runtime lane resolves to the last-pulled slot.
+  auto snap = _themes.debug_snapshot();
+  bool on_primary = false;
+  bool on_alternate = false;
+  bool on_runtime = false;
+  collect_onscreen_slots(visual ? visual->cycler() : nullptr, on_primary, on_alternate, on_runtime);
+  // A runtime image lane resolves to the last-pulled slot. Apply this whenever a
+  // runtime lane is active (not only when no literal lane is), so a future mixed
+  // literal+runtime visual still reports the runtime slot.
+  if (on_runtime && _visual_api->debug_has_image()) {
+    if (_visual_api->debug_image_alternate()) {
+      on_alternate = true;
+    } else {
+      on_primary = true;
+    }
+  }
+
+  // The two active themes; '*' = currently sourced on screen by an active image lane.
+  const auto& pri = snap.slots[1];
+  const auto& alt = snap.slots[2];
+  out << "themes : " << (on_primary ? "*" : " ") << "pri '" << (pri.valid ? pri.name : "(empty)")
+      << "'   " << (on_alternate ? "*" : " ") << "alt '" << (alt.valid ? alt.name : "(empty)")
+      << "'\n";
 
   // Image layers composited this frame -- this is the on-screen overlay depth.
   const auto& layers = _visual_api->debug_layers();
@@ -516,51 +815,45 @@ void Director::draw_debug_overlay() const
   std::snprintf(buf, sizeof(buf), "%.3f", _visual_api->debug_spiral());
   out << "spiral : type " << _visual_api->debug_spiral_type() << "  width "
       << _visual_api->debug_spiral_width() << "  phase " << buf << "\n";
-  out << "font   : " << (_visual_api->debug_font().empty() ? "(none)" : _visual_api->debug_font())
-      << "   sub: "
-      << (_visual_api->debug_subfont().empty() ? "(none)" : _visual_api->debug_subfont()) << "\n";
 
-  // Theme bank: the two active slots [1]/[2] are what visuals interleave.
-  auto snap = _themes.debug_snapshot();
-  out << "-- THEMES (slot[1] x slot[2] = merged on screen) --\n";
-  static const char* labels[4] = {" unld[0]", "*pri [1]", " alt [2]", " load[3]"};
-  for (int i = 0; i < 4; ++i) {
-    const auto& s = snap.slots[i];
-    out << labels[i] << " ";
-    if (!s.valid) {
-      out << "(empty)\n";
-      continue;
+  // Entrainment bed: the binaural/isochronic layers synthesised under the
+  // visuals. Sourced from the active program; mute state from the live Audio.
+  const auto& entrainment = _program->entrainment();
+  out << "-- ENTRAINMENT (binaural/isochronic bed) --\n";
+  if (entrainment.layer().empty()) {
+    out << "bed    : (none)\n";
+  } else {
+    float master_db = entrainment.master_db() != 0.f ? entrainment.master_db() : -28.f;
+    std::snprintf(buf, sizeof(buf), "%.1f", master_db);
+    out << "bed    : " << entrainment.layer().size() << " layer(s)   master " << buf << " dB"
+        << (_audio && _audio->Muted() ? "   [MUTED]" : "") << "\n";
+    int idx = 0;
+    for (const auto& l : entrainment.layer()) {
+      out << "  L" << idx++ << " : carrier ";
+      std::snprintf(buf, sizeof(buf), "%.1f", l.center_hz());
+      out << buf << " Hz";
+      if (l.binaural_hz() != 0.f) {
+        std::snprintf(buf, sizeof(buf), "%.2f", l.binaural_hz());
+        out << "  binaural " << buf << " Hz";
+      }
+      if (l.pulse_hz() != 0.f) {
+        std::snprintf(buf, sizeof(buf), "%.2f", l.pulse_hz());
+        out << "  pulse " << buf << " Hz";
+      } else {
+        out << "  pulse cont.";
+      }
+      std::snprintf(buf, sizeof(buf), "%.1f", l.amplitude_db());
+      out << "  " << buf << " dB\n";
     }
-    std::string name = s.name.substr(0, 12);
-    out << name;
-    for (std::size_t k = name.size(); k < 13u; ++k) {
-      out << ' ';
-    }
-    static const int row = 24;
-    int fill = s.total ? int(float(s.loaded) / float(s.total) * row + 0.5f) : 0;
-    out << ' ';
-    for (int k = 0; k < row; ++k) {
-      out << (k < fill ? '#' : '.');
-    }
-    out << "  " << s.loaded << "/" << s.total << "\n";
   }
-  out << "enabled:";
-  for (const auto& w : snap.enabled_weights) {
-    out << " " << w.first << "=" << w.second;
-  }
-  out << (snap.enabled_weights.empty() ? " (none)\n" : "\n");
-  out << "pinned : " << (snap.pinned.empty() ? "(none)" : snap.pinned) << "\n";
-  out << "cache  : " << snap.image_cache_size << " imgs   swaps_to_match: " << snap.swaps_to_match
-      << "   global_fps: " << program().global_fps() << "\n";
-  out << "legend : #=loaded(RAM)  .=not loaded\n";
 
-  // Cycler tree last: its depth varies frame-to-frame, so keeping it at the
-  // bottom stops it from shoving the fixed rows above it around.
-  out << "-- CYCLER (pattern of the current visual; pos/len are frames) --\n";
-  const Visual* visual = _visual.get();
+  // Cycler tree LAST and its legend ABOVE it: the tree's height varies frame to
+  // frame, so anything printed after it would jiggle vertically. Keeping the static
+  // legend above and the tree at the very bottom holds every fixed row still.
+  out << "-- CYCLER (pos/len=frames; Action=beat OneShot=once Parallel=LCM Sequence=sum\n";
+  out << "   Repeat=loop Offset=delay; <..>=section [img slot N]=image lane 1/2/~=pri/alt/runtime;\n";
+  out << "   *=active; effect/inactive nodes collapsed) --\n";
   append_cycler(out, visual ? visual->cycler() : nullptr, 0, 20);
-  out << "types  : Action=beat  OneShot=once(len=longest)  Parallel=together(len=LCM)\n";
-  out << "         Sequence=in order(len=sum)  Repeat=loop  Offset=delay   *=active now";
 
   // Draw the HUD as flat 2D over the rendered frame. pushGLStates/popGLStates
   // isolate SFML's 2D drawing from the visual's raw OpenGL state.

@@ -1,8 +1,10 @@
 #ifndef TRANCE_SRC_TRANCE_DIRECTOR_H
 #define TRANCE_SRC_TRANCE_DIRECTOR_H
 #include <trance/render/render.h>
+#include <trance/visual/pattern_parser.h>
 #include <cstddef>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -18,6 +20,7 @@ namespace trance_pb
   class System;
 }
 
+class Audio;
 class Font;
 class Image;
 class ThemeBank;
@@ -37,6 +40,9 @@ public:
 
   // Toggle the on-screen debug overlay (bound to F1 in main.cpp).
   void toggle_debug_overlay();
+  // Optional audio handle, used only by the debug overlay to report the live
+  // entrainment bed and mute state. Null in export mode (no realtime audio).
+  void set_audio(const Audio* audio);
 
   const trance_pb::Program& program() const;
   bool vr_enabled() const;
@@ -50,6 +56,12 @@ public:
 
 private:
   void change_visual(uint32_t length);
+  // (Re)parse the program's custom_visual_pattern sources into _custom_patterns,
+  // skipping (with a warning) any that fail to parse. Called when the program changes.
+  void rebuild_custom_patterns();
+  // Parse the built-in pattern DSL (builtin_patterns.h) for any VisualType that has
+  // been ported to a compiled pattern. Built once; independent of the program.
+  void build_builtin_patterns();
   float far_plane_distance() const;
   float eye_offset() const;
   void draw_debug_overlay() const;
@@ -70,12 +82,26 @@ private:
   std::uint32_t _last_visual_selection;
   std::unique_ptr<Visual> _visual;
 
+  // Authorable custom patterns (Framing B), parsed from the program. Selected in the
+  // same weighted shuffle as the built-in visual types. _last_custom_index is the
+  // index of the currently-playing custom pattern, or -1 when a built-in is active;
+  // _custom_visual_name feeds the overlay's "visual:" line for customs.
+  std::vector<pattern::Parsed> _custom_patterns;
+  int _last_custom_index;
+  std::string _custom_visual_name;
+
+  // Compiled built-in patterns by Program::VisualType value, for those that have been
+  // ported off their hardcoded class. change_visual() prefers these over the C++
+  // class when present.
+  std::unordered_map<uint32_t, pattern::Parsed> _builtin_compiled;
+
   // Debug overlay state. The font is loaded lazily on first draw from a known
   // monospace system font; _debug_font_ok records whether that succeeded.
   bool _debug_overlay;
   mutable bool _debug_font_loaded;
   mutable bool _debug_font_ok;
   mutable sf::Font _debug_font;
+  const Audio* _audio;
 };
 
 #endif

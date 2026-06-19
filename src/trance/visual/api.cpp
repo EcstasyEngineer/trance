@@ -65,6 +65,11 @@ void VisualApiImpl::update()
 
 Image VisualApiImpl::get_image(bool alternate) const
 {
+  // Record which theme slot fed the most recent image so the debug overlay can
+  // report what's on screen now. This persists across frames (an image stays up
+  // until the next pull), so it reflects the displayed slot, not a per-frame event.
+  _debug_last_image_alternate = alternate;
+  _debug_has_image = true;
   return _themes.get_image(alternate);
 }
 
@@ -343,4 +348,14 @@ const std::string& VisualApiImpl::debug_font() const
 const std::string& VisualApiImpl::debug_subfont() const
 {
   return _current_subfont;
+}
+
+bool VisualApiImpl::debug_has_image() const
+{
+  return _debug_has_image;
+}
+
+bool VisualApiImpl::debug_image_alternate() const
+{
+  return _debug_last_image_alternate;
 }
