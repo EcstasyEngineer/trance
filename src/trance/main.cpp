@@ -65,7 +65,8 @@ std::thread run_async_thread(std::atomic<bool>& running, ThemeBank& bank)
   }};
 }
 
-void handle_events(std::atomic<bool>& running, sf::RenderWindow& window, Director& director)
+void handle_events(std::atomic<bool>& running, sf::RenderWindow& window, Director& director,
+                   Audio* audio)
 {
   sf::Event event;
   while (window.pollEvent(event)) {
@@ -75,6 +76,9 @@ void handle_events(std::atomic<bool>& running, sf::RenderWindow& window, Directo
     }
     if (event.type == event.KeyPressed && event.key.code == sf::Keyboard::F1) {
       director.toggle_debug_overlay();
+    }
+    if (event.type == event.KeyPressed && event.key.code == sf::Keyboard::M && audio) {
+      audio->ToggleMute();
     }
     if (event.type == sf::Event::Resized) {
       glViewport(0, 0, event.size.width, event.size.height);
@@ -153,6 +157,7 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
     audio.reset(new Audio{root_path});
     audio->TriggerEvents(*stack.back().item);
     audio->SetEntrainment(program().entrainment());
+    director.set_audio(audio.get());
   }
   std::cout << std::endl << "-> " << session.first_playlist_item() << std::endl;
 
@@ -183,7 +188,7 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
     auto last_playlist_switch = clock_time();
 
     while (running) {
-      handle_events(running, renderer->window(), director);
+      handle_events(running, renderer->window(), director, audio.get());
 
       // TODO: should sleep rather than spinning.
       uint32_t frames_this_loop = 0;
@@ -386,7 +391,7 @@ int validate_session(const std::string& root_path, const trance_pb::Session& ses
     std::cout << "checking " << path << std::endl;
     auto streamer = load_animation(path);
     while (true) {
-      if (!streamer->success()) {
+      if (!streamer || !streamer->success()) {
         broken_paths.insert(path);
         std::cerr << path << " failed to load" << std::endl;
         break;

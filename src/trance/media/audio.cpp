@@ -4,16 +4,19 @@
 
 #pragma warning(push, 0)
 #include <common/trance.pb.h>
+#include <SFML/Audio/Listener.hpp>
 #include <SFML/Audio/Music.hpp>
 #pragma warning(pop)
 
 Audio::Audio(const std::string& root_path)
 : _root_path{root_path}, _entrainment{new EntrainmentStream}
 {
+  sf::Listener::setGlobalVolume(100.f);
 }
 
 Audio::~Audio()
 {
+  sf::Listener::setGlobalVolume(100.f);
 }
 
 void Audio::SetEntrainment(const trance_pb::Entrainment& config)
@@ -65,6 +68,17 @@ void Audio::TriggerEvent(const trance_pb::AudioEvent& event)
     channel.fade_time_seconds = event.time_seconds();
     channel.fade_start = _clock.now();
   }
+}
+
+void Audio::ToggleMute()
+{
+  _muted = !_muted;
+  sf::Listener::setGlobalVolume(_muted ? 0.f : 100.f);
+}
+
+bool Audio::Muted() const
+{
+  return _muted;
 }
 
 void Audio::Update()

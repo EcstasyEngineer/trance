@@ -108,6 +108,21 @@ message Entrainment {
   float master_db = 2;
 }
 
+// An authorable visual pattern (Framing B), stored as DSL source text. Parsed and
+// compiled at playback into a Cycler tree; if parsing fails the pattern is skipped
+// (never the whole session). Additive: older builds ignore this and fall back to
+// the built-in VisualType list.
+message VisualPatternSource {
+  // Unique name within the program.
+  string name = 1;
+  // Selection weight in the same shuffle as the built-in visual_type entries.
+  uint32 random_weight = 2;
+  // The pasteable DSL source -- the source of truth (see docs/visual-grammar.md).
+  string source_text = 3;
+  // Disabled patterns are stored but not selected.
+  bool enabled = 4;
+}
+
 message Program {
   // The different implemented visual types.
   enum VisualType {
@@ -170,6 +185,9 @@ message Program {
 
   // Optional entrainment audio bed played while this program is active.
   Entrainment entrainment = 10;
+
+  // Authorable custom visual patterns (Framing B), selected alongside visual_type.
+  repeated VisualPatternSource custom_visual_pattern = 11;
 }
 
 message AudioEvent {

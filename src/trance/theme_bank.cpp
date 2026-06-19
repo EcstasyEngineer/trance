@@ -482,7 +482,7 @@ std::unique_ptr<Streamer> ThemeBank::do_load_animation(bool alternate)
 
   auto streamer = load_animation(_root_path + "/" + _all_animations[index]);
   int32_t amount = -1;
-  if (!streamer->success()) {
+  if (!streamer || !streamer->success()) {
     // Don't try to load again if it failed.
     for (auto& other_theme : _themes) {
       other_theme->animation_shuffler.modify(index, -5);

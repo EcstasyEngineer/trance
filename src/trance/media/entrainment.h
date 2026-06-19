@@ -15,10 +15,10 @@ namespace trance_pb
 // Continuously synthesises a binaural/isochronic entrainment bed on SFML's
 // audio thread. Each layer is a carrier with an optional binaural split
 // (left = center - beat/2, right = center + beat/2) and an optional isochronic
-// amplitude gate. The gate runs a MANDATORY 180-degree L/R anti-phase: when one
-// ear pulses to its peak the other is at its trough. That hemispheric effect is
-// the point -- it entrains with or without headphones (the binaural component
-// degrades gracefully on speakers while the anti-phase pulsing still drives).
+// amplitude gate. The gate runs the L/R pulse 180 degrees out of phase: when one
+// ear pulses to its peak the other is at its trough (see entrainment.cpp:50). The
+// intent is to entrain with or without headphones -- the binaural carrier split
+// needs headphones, but the anti-phase isochronic pulsing still drives on speakers.
 class EntrainmentStream : public sf::SoundStream
 {
 public:

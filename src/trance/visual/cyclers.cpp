@@ -1,5 +1,7 @@
 #include <trance/visual/cyclers.h>
+#include <common/util.h>
 #include <algorithm>
+#include <utility>
 
 Cycler::Cycler() : _active{true}
 {
@@ -13,6 +15,32 @@ void Cycler::activate(bool active)
 bool Cycler::active() const
 {
   return _active;
+}
+
+void Cycler::set_phase(const char* phase)
+{
+  _phase = phase;
+}
+
+const std::string& Cycler::phase() const
+{
+  return _phase;
+}
+
+void Cycler::set_image_slot(ImageSlotHint hint, const char* label)
+{
+  _image_slot = hint;
+  _image_label = label;
+}
+
+ImageSlotHint Cycler::image_slot() const
+{
+  return _image_slot;
+}
+
+const std::string& Cycler::image_label() const
+{
+  return _image_label;
 }
 
 bool Cycler::complete() const
@@ -396,5 +424,78 @@ void OffsetCycler::advance_to_offset()
   auto frames = length() - _offset % length();
   for (uint32_t i = 0; i < frames; ++i) {
     _subcycle->advance(false);
+  }
+}
+
+BurstCycler::BurstCycler(const Params& params, std::function<void()> base,
+                         std::function<void()> burst)
+: _params{params}
+, _base{std::move(base)}
+, _burst{std::move(burst)}
+, _position{0}
+, _in_burst{false}
+, _burst_remaining{0}
+, _cooldown{0}
+{
+}
+
+uint32_t BurstCycler::length() const
+{
+  return _params.length;
+}
+
+uint32_t BurstCycler::position() const
+{
+  return _position;
+}
+
+void BurstCycler::reset()
+{
+  _position = 0;
+  _in_burst = false;
+  _burst_remaining = 0;
+  _cooldown = 0;
+}
+
+uint32_t BurstCycler::index() const
+{
+  return _in_burst ? 1 : 0;
+}
+
+void BurstCycler::advance(bool trigger_actions)
+{
+  if (complete()) {
+    reset();
+  }
+  // Act on each period boundary. With trigger_actions off (a schedule-only walk) the
+  // FSM never runs, so the node is just a fixed-length timer.
+  if (trigger_actions && _params.period && _position % _params.period == 0) {
+    if (_cooldown) {
+      --_cooldown;
+    }
+    if (_in_burst) {
+      if (_burst) {
+        _burst();
+      }
+      if (_burst_remaining && --_burst_remaining == 0) {
+        _in_burst = false;
+        _cooldown = _params.cooldown;
+      }
+    } else if (_params.chance_den && !_cooldown && random_chance(_params.chance_den)) {
+      _in_burst = true;
+      _burst_remaining = _params.dur_min
+          + (_params.dur_max > _params.dur_min ? random(_params.dur_max - _params.dur_min + 1) : 0);
+      if (!_burst_remaining) {
+        _burst_remaining = 1;
+      }
+      if (_burst) {
+        _burst();
+      }
+    } else if (_base) {
+      _base();
+    }
+  }
+  if (_params.length) {
+    ++_position;
   }
 }

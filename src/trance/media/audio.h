@@ -28,8 +28,15 @@ public:
   void SetEntrainment(const trance_pb::Entrainment& config);
   void Update();
 
+  // Toggle a global mute over every channel and the entrainment bed (bound to
+  // 'M' in main.cpp). Implemented via SFML's listener global volume so it sits
+  // above the per-channel fade logic and is exactly reversible.
+  void ToggleMute();
+  bool Muted() const;
+
 private:
   std::string _root_path;
+  bool _muted = false;
   std::chrono::steady_clock _clock;
   struct channel {
     std::unique_ptr<sf::Music> music;

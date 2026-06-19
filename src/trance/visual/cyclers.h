@@ -3,7 +3,13 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
+
+// Which theme slot an image-bearing cycler sources from, for the debug overlay.
+// Primary = slot[1], Alternate = slot[2], Runtime = decided by hidden state at
+// fire time (not statically known). None = not an image-bearing node.
+enum class ImageSlotHint : uint8_t { None, Primary, Alternate, Runtime };
 
 // Interface for constructing visualiser patterns.
 class Cycler
@@ -47,9 +53,34 @@ public:
   {
     return {};
   }
+  // Repetition / sequence index for Rep / Seq nodes; 0 for leaf / parallel nodes.
+  // Lets a render preset read loop/segment position through a base Cycler* held in a
+  // node-id map (see pattern_compiler / render_preset).
+  virtual uint32_t index() const
+  {
+    return 0;
+  }
+
+  // Optional human-readable "section" label for the debug overlay (e.g. "SLOW",
+  // "FAST", "INTERLEAVE"). Empty by default; set at construction on the handful of
+  // subtrees that correspond to a section a viewer would recognise. The overlay
+  // reports the deepest active labelled node as the current section. Pure
+  // annotation -- it never affects scheduling.
+  void set_phase(const char* phase);
+  const std::string& phase() const;
+
+  // Mark this node as the lane/leaf that sources a displayed image, and from which
+  // theme slot. Set only on image-bearing nodes (not spiral/text/font/upload). The
+  // overlay reports the slot of the active image lanes as the theme(s) "on screen".
+  void set_image_slot(ImageSlotHint hint, const char* label = "img");
+  ImageSlotHint image_slot() const;
+  const std::string& image_label() const;
 
 private:
   bool _active;
+  std::string _phase;
+  ImageSlotHint _image_slot = ImageSlotHint::None;
+  std::string _image_label;
 };
 
 // Performs an action periodically.
@@ -149,7 +180,7 @@ class SequenceCycler : public Cycler
 {
 public:
   SequenceCycler(std::vector<Cycler*> subcycles);
-  uint32_t index() const;
+  uint32_t index() const override;
 
   uint32_t length() const override;
   uint32_t position() const override;
@@ -180,7 +211,7 @@ class RepeatCycler : public Cycler
 {
 public:
   RepeatCycler(uint32_t repetitions, Cycler* subcycle);
-  uint32_t index() const;
+  uint32_t index() const override;
 
   uint32_t length() const override;
   uint32_t position() const override;
@@ -227,6 +258,44 @@ private:
   std::unique_ptr<Cycler> _subcycle;
   uint32_t _offset;
   uint32_t _position;
+};
+
+// A base loop randomly interrupted by a bounded burst, then a cooldown -- the narrow,
+// purpose-named replacement for a general state machine (see SUPER_FAST). It acts
+// every `period` frames over a fixed total `length`; `index()` is 1 during a burst so
+// a render preset can react. The two behaviours are supplied as callables (the base
+// loop and the burst), mirroring the rest of the action-via-callback design.
+class BurstCycler : public Cycler
+{
+public:
+  struct Params {
+    uint32_t length;       // total frames
+    uint32_t period;       // act every N frames
+    uint32_t chance_den;   // per-tick burst chance = 1/chance_den (0 = never)
+    uint32_t cooldown;     // ticks of no-burst after one ends
+    uint32_t dur_min;      // burst duration in ticks, inclusive range
+    uint32_t dur_max;
+  };
+  BurstCycler(const Params& params, std::function<void()> base, std::function<void()> burst);
+
+  uint32_t length() const override;
+  uint32_t position() const override;
+  void reset() override;
+  void advance(bool trigger_actions = true) override;
+  uint32_t index() const override;  // 1 during a burst, else 0
+  const char* type_name() const override
+  {
+    return "Burst";
+  }
+
+private:
+  Params _params;
+  std::function<void()> _base;
+  std::function<void()> _burst;
+  uint32_t _position;
+  bool _in_burst;
+  uint32_t _burst_remaining;
+  uint32_t _cooldown;
 };
 
 #endif
