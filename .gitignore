@@ -6,3 +6,11 @@ build/
 *.opensdf
 *.opendb
 *.db
+
+# In-source CMake artifacts (real builds live in build/). These names are always
+# generated and never collide with the tracked cmake/Find*.cmake modules.
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+compile_commands.json
