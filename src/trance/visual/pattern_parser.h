@@ -46,7 +46,8 @@ namespace pattern
   {
     std::string name;
     uint32_t weight = 1;
-    std::string render;  // named render preset; empty = default
+    std::string render;  // named render preset; empty = default (legacy, being retired)
+    std::vector<RenderStmt> render_block;  // data-driven render; non-empty overrides `render`
     Node root;
   };
 
