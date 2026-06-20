@@ -93,7 +93,7 @@ void Director::build_builtin_patterns()
     if (!result.ok) {
       // Built-in sources are compile-time constants with no hardcoded fallback left,
       // so a parse failure is a build bug -- fail fast and loud rather than risk a
-      // null visual at selection time. (builtin_patterns_test guards against this.)
+      // null visual at selection time.
       throw std::runtime_error("built-in pattern " + std::to_string(t) + " failed to parse: "
                                + result.error);
     }
