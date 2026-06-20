@@ -1,9 +1,9 @@
 #ifndef TRANCE_SRC_TRANCE_VISUAL_COMPILED_VISUAL_H
 #define TRANCE_SRC_TRANCE_VISUAL_COMPILED_VISUAL_H
 #include <trance/visual/pattern_ast.h>
-#include <trance/visual/render_preset.h>
+#include <trance/visual/pattern_compiler.h>
+#include <trance/visual/pattern_runtime.h>
 #include <trance/visual/visual.h>
-#include <string>
 #include <vector>
 
 class VisualControl;
@@ -16,9 +16,9 @@ class VisualControl;
 class CompiledVisual : public Visual
 {
 public:
-  // `render_block`, when non-empty, is the data-driven render (run by render_eval.cpp)
-  // and takes precedence over the named `render_preset`.
-  CompiledVisual(VisualControl& api, const pattern::Node& root, const std::string& render_preset,
+  // `render_block` is the data-driven render (run by render_eval.cpp). An empty block
+  // falls back to pattern::default_render_block().
+  CompiledVisual(VisualControl& api, const pattern::Node& root,
                  const std::vector<pattern::RenderStmt>& render_block);
 
 private:

@@ -54,8 +54,8 @@ public:
     return {};
   }
   // Repetition / sequence index for Rep / Seq nodes; 0 for leaf / parallel nodes.
-  // Lets a render preset read loop/segment position through a base Cycler* held in a
-  // node-id map (see pattern_compiler / render_preset).
+  // Lets the render evaluator read loop/segment position through a base Cycler* held in
+  // a node-id map (see pattern_compiler / render_eval).
   virtual uint32_t index() const
   {
     return 0;

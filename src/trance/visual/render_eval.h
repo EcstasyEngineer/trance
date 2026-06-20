@@ -16,6 +16,10 @@ namespace pattern
   // replacement for the named C++ render presets -- the render is data, not code.
   void eval_render(const std::vector<RenderStmt>& stmts, VisualRender& api,
                    const Registers& regs, const NodeMap& nodes, const Cycler* root);
+
+  // The render block used when a pattern declares none (draws the "current" image +
+  // spiral + text), so playback never shows a blank frame.
+  std::vector<RenderStmt> default_render_block();
 }
 
 #endif

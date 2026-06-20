@@ -501,7 +501,6 @@ namespace
     pattern::RenderStmt parse_render_stmt()
     {
       using Op = pattern::RenderStmt::Op;
-      using AM = pattern::RenderStmt::AnimMode;
       pattern::RenderStmt st;
       std::string w = next_ident("a render op (image/text/subtext/small_text/spiral)");
       if (w == "spiral") {
@@ -509,22 +508,16 @@ namespace
       } else if (w == "image") {
         st.op = Op::Image;
         st.image_reg = next_ident("an image register");
-        if (peek().kind == Token::Ident) {
-          const std::string& a = peek().text;
-          if (a == "anim") {
+        if (peek().kind == Token::Ident && peek().text == "anim") {
+          ++_i;
+          st.has_anim = true;
+          if (peek().kind == Token::Ident && peek().text == "if") {
             ++_i;
-            st.anim = AM::Anim;
-          } else if (a == "anim_alt") {
+            st.anim_gate = next_expr_text("an anim gate [condition]");
+          }
+          if (peek().kind == Token::Ident && peek().text == "alt") {
             ++_i;
-            st.anim = AM::AnimAlt;
-          } else if (a == "anim_if") {
-            ++_i;
-            st.anim = AM::AnimIf;
-            st.anim_flag = next_ident("a flag register after anim_if");
-          } else if (a == "anim_if_alt") {
-            ++_i;
-            st.anim = AM::AnimIfAlt;
-            st.anim_flag = next_ident("a flag register after anim_if_alt");
+            st.anim_alt = next_expr_text("an anim alternate [condition]");
           }
         }
       } else if (w == "text") {

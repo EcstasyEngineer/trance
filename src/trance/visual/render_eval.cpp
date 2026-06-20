@@ -1,6 +1,7 @@
 #include <trance/visual/render_eval.h>
 #include <trance/visual/api.h>
 #include <trance/visual/cyclers.h>
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <string>
@@ -32,7 +33,7 @@ namespace
     }
     std::string name = id.substr(0, dot);
     std::string attr = id.substr(dot + 1);
-    const Cycler* c = name == "root" ? root : nullptr;
+    const Cycler* c = root;
     if (name != "root") {
       auto it = nodes.find(name);
       c = it == nodes.end() ? nullptr : it->second;
@@ -50,9 +51,10 @@ namespace
   }
 
   // Recursive-descent evaluator for a render [expr]. A superset of the parser's
-  // generate-time evaluator (pattern_parser.cpp ExprEval): arithmetic (+ - * / ^,
-  // unary -), comparisons (== != < > <= >=) and and/or (booleans are 1.0/0.0), with
-  // identifiers resolved live. Precedence: or < and < comparison < add < mul < power.
+  // generate-time evaluator (pattern_parser.cpp ExprEval): ternary ?:, and/or,
+  // comparisons (== != < > <= >=), arithmetic (+ - * / % ^, unary - and !), min/max/abs,
+  // with identifiers resolved live. Booleans are 1.0/0.0. Precedence (low->high):
+  // ?: < or < and < compare < add < mul < power < unary < primary.
   struct Eval {
     const std::string& s;
     std::size_t i;
@@ -93,7 +95,21 @@ namespace
       i = j;
       return true;
     }
-    double run() { return b_or(); }
+    double run() { return ternary(); }
+    double ternary()
+    {
+      double c = b_or();
+      ws();
+      if (i < s.size() && s[i] == '?') {
+        ++i;
+        double a = ternary();
+        ws();
+        if (i < s.size() && s[i] == ':') ++i;
+        double b = ternary();
+        return c != 0.0 ? a : b;
+      }
+      return c;
+    }
     double b_or()
     {
       double v = b_and();
@@ -136,16 +152,22 @@ namespace
     double mul()
     {
       double v = pw();
-      for (ws(); i < s.size() && (s[i] == '*' || s[i] == '/'); ws()) {
+      for (ws(); i < s.size() && (s[i] == '*' || s[i] == '/' || s[i] == '%'); ws()) {
         char op = s[i++];
         double r = pw();
-        v = op == '*' ? v * r : (r != 0.0 ? v / r : 0.0);
+        if (op == '*') {
+          v = v * r;
+        } else if (op == '/') {
+          v = r != 0.0 ? v / r : 0.0;
+        } else {
+          v = r != 0.0 ? std::fmod(v, r) : 0.0;
+        }
       }
       return v;
     }
     double pw()
     {
-      double b = primary();
+      double b = unary();
       ws();
       if (i < s.size() && s[i] == '^') {
         ++i;
@@ -153,20 +175,29 @@ namespace
       }
       return b;
     }
+    double unary()
+    {
+      ws();
+      if (i < s.size() && s[i] == '!') {
+        ++i;
+        return unary() == 0.0 ? 1.0 : 0.0;
+      }
+      if (i < s.size() && s[i] == '-') {
+        ++i;
+        return -unary();
+      }
+      return primary();
+    }
     double primary()
     {
       ws();
       if (i >= s.size()) return 0.0;
       if (s[i] == '(') {
         ++i;
-        double v = b_or();
+        double v = ternary();
         ws();
         if (i < s.size() && s[i] == ')') ++i;
         return v;
-      }
-      if (s[i] == '-') {
-        ++i;
-        return -primary();
       }
       if (std::isdigit(static_cast<unsigned char>(s[i])) || s[i] == '.') {
         std::size_t st = i;
@@ -178,7 +209,27 @@ namespace
         while (i < s.size()
                && (std::isalnum(static_cast<unsigned char>(s[i])) || s[i] == '_' || s[i] == '.'))
           ++i;
-        return resolve_ident(s.substr(st, i - st), regs, nodes, root);
+        std::string name = s.substr(st, i - st);
+        ws();
+        if (i < s.size() && s[i] == '(') {  // function call: min/max/abs
+          ++i;
+          double a = ternary();
+          double b = 0.0;
+          bool two = false;
+          ws();
+          if (i < s.size() && s[i] == ',') {
+            ++i;
+            b = ternary();
+            two = true;
+          }
+          ws();
+          if (i < s.size() && s[i] == ')') ++i;
+          if (name == "min") return two ? std::min(a, b) : a;
+          if (name == "max") return two ? std::max(a, b) : a;
+          if (name == "abs") return std::fabs(a);
+          return a;  // unknown function: pass through
+        }
+        return resolve_ident(name, regs, nodes, root);
       }
       ++i;  // skip an unexpected char rather than spin
       return 0.0;
@@ -204,6 +255,30 @@ namespace
 
 namespace pattern
 {
+  std::vector<RenderStmt> default_render_block()
+  {
+    // Used when a pattern carries no render block: draw the "current" image with a
+    // progress-driven zoom, the spiral, and the current text -- so a pattern always
+    // renders something rather than a blank frame.
+    std::vector<RenderStmt> stmts;
+    RenderStmt image;
+    image.op = RenderStmt::Op::Image;
+    image.image_reg = "current";
+    image.zoom = "0.5 * root.progress";
+    stmts.push_back(image);
+    RenderStmt spiral;
+    spiral.op = RenderStmt::Op::Spiral;
+    stmts.push_back(spiral);
+    RenderStmt text;
+    text.op = RenderStmt::Op::Text;
+    text.origin = "0.75";
+    text.zoom = "0.75";
+    text.shadow_origin = "0.5 * root.progress";
+    text.shadow_zoom = "0.5 * root.progress";
+    stmts.push_back(text);
+    return stmts;
+  }
+
   void eval_render(const std::vector<RenderStmt>& stmts, VisualRender& api, const Registers& regs,
                    const NodeMap& nodes, const Cycler* root)
   {
@@ -220,28 +295,17 @@ namespace pattern
         float alpha = eval_num(st.alpha, 1.0, regs, nodes, root);
         float origin = eval_num(st.origin, 0.0, regs, nodes, root);
         float zoom = eval_num(st.zoom, 0.0, regs, nodes, root);
-        if (st.anim == RenderStmt::AnimMode::None) {
+        if (!st.has_anim) {
           api.render_image(image, alpha, origin, zoom);
           break;
         }
-        VisualRender::Anim type = VisualRender::Anim::NONE;
-        switch (st.anim) {
-        case RenderStmt::AnimMode::Anim:
-          type = VisualRender::Anim::ANIM;
-          break;
-        case RenderStmt::AnimMode::AnimAlt:
+        VisualRender::Anim type;
+        if (!st.anim_gate.empty() && !eval_cond(st.anim_gate, regs, nodes, root)) {
+          type = VisualRender::Anim::NONE;
+        } else if (!st.anim_alt.empty() && eval_cond(st.anim_alt, regs, nodes, root)) {
           type = VisualRender::Anim::ANIM_ALTERNATE;
-          break;
-        case RenderStmt::AnimMode::AnimIf:
-          type = scalar(regs, st.anim_flag) != 0 ? VisualRender::Anim::ANIM
-                                                 : VisualRender::Anim::NONE;
-          break;
-        case RenderStmt::AnimMode::AnimIfAlt:
-          type = scalar(regs, st.anim_flag) != 0 ? VisualRender::Anim::ANIM_ALTERNATE
-                                                 : VisualRender::Anim::NONE;
-          break;
-        case RenderStmt::AnimMode::None:
-          break;
+        } else {
+          type = VisualRender::Anim::ANIM;
         }
         api.render_animation_or_image(type, image, alpha, origin, zoom);
         break;
