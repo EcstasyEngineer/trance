@@ -77,17 +77,19 @@ namespace pattern
     enum class Op { Image, Text, Subtext, SmallText, Spiral };
     Op op = Op::Image;
 
-    // Image op: the image register to draw (e.g. "current").
+    // Image op: the image register to draw (e.g. "current"). A register that was never
+    // written resolves to an empty Image (used where the original drew {}).
     std::string image_reg = "current";
 
-    // Image op animation selection:
-    //   None             -> render_image (no animation)
-    //   Anim / AnimAlt   -> render_animation_or_image with that fixed anim type
-    //   AnimIf <flag>    -> ANIM when scalar[flag] != 0, else NONE
-    //   AnimIfAlt <flag> -> ANIM_ALTERNATE when scalar[flag] != 0, else NONE
-    enum class AnimMode { None, Anim, AnimAlt, AnimIf, AnimIfAlt };
-    AnimMode anim = AnimMode::None;
-    std::string anim_flag;  // scalar register for AnimIf / AnimIfAlt
+    // Image op animation. has_anim=false draws a still (render_image). Otherwise
+    // render_animation_or_image with the type chosen each frame:
+    //   anim_gate non-empty and evaluates to 0 -> NONE
+    //   else anim_alt non-empty and evaluates to != 0 -> ANIM_ALTERNATE
+    //   else -> ANIM
+    // (syntax: `anim` / `anim if [gate]` / `anim alt [cond]` / `anim if [g] alt [c]`)
+    bool has_anim = false;
+    std::string anim_gate;  // `anim if [expr]`  -- show ANIM only when expr != 0
+    std::string anim_alt;   // `anim alt [expr]` -- use ANIM_ALTERNATE when expr != 0
 
     // Numeric params as raw [expr] text (empty => op default). Used per op:
     //   Image:               alpha, origin (zoom_origin), zoom

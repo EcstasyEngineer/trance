@@ -183,7 +183,6 @@ namespace
 }
 
 CompiledVisual::CompiledVisual(VisualControl& api, const pattern::Node& root,
-                               const std::string& render_preset_name,
                                const std::vector<pattern::RenderStmt>& render_block)
 {
   // Each Action leaf's behaviour is its ordered effect list. The descriptor IS the
@@ -201,20 +200,11 @@ CompiledVisual::CompiledVisual(VisualControl& api, const pattern::Node& root,
   };
   set_cycler(pattern::compile(root, make_action, _node_map));
 
-  if (!render_block.empty()) {
-    // Data-driven render: the block's [expr] params are evaluated each frame against the
-    // registers + named cycler nodes. No per-pattern C++.
-    auto stmts = render_block;
-    set_render([this, stmts](VisualRender& render) {
-      pattern::eval_render(stmts, render, _registers, _node_map, cycler());
-    });
-  } else {
-    // Legacy path: a named C++ render preset (render_preset.cpp), being retired as each
-    // built-in moves its render into a render_block. An unknown name falls through to a
-    // simple single-image default rather than failing playback.
-    auto preset = pattern::render_preset(render_preset_name);
-    set_render([this, preset](VisualRender& render) {
-      preset(render, _registers, _node_map, cycler());
-    });
-  }
+  // Render is data: the block's [expr] params are evaluated each frame against the
+  // registers + named cycler nodes (render_eval.cpp). An empty block falls back to a
+  // single-image default so playback never shows a blank frame.
+  auto stmts = render_block.empty() ? pattern::default_render_block() : render_block;
+  set_render([this, stmts](VisualRender& render) {
+    pattern::eval_render(stmts, render, _registers, _node_map, cycler());
+  });
 }
