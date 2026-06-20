@@ -3,6 +3,7 @@
 #include <trance/visual/api.h>
 #include <trance/visual/cyclers.h>
 #include <trance/visual/pattern_compiler.h>
+#include <trance/visual/render_eval.h>
 
 namespace
 {
@@ -182,7 +183,8 @@ namespace
 }
 
 CompiledVisual::CompiledVisual(VisualControl& api, const pattern::Node& root,
-                               const std::string& render_preset_name)
+                               const std::string& render_preset_name,
+                               const std::vector<pattern::RenderStmt>& render_block)
 {
   // Each Action leaf's behaviour is its ordered effect list. The descriptor IS the
   // behaviour here -- there is no separate hand-written lambda to drift from.
@@ -199,10 +201,20 @@ CompiledVisual::CompiledVisual(VisualControl& api, const pattern::Node& root,
   };
   set_cycler(pattern::compile(root, make_action, _node_map));
 
-  // The named render preset reads the registers + named cycler nodes; an unknown name
-  // falls through to a simple single-image default rather than failing playback.
-  auto preset = pattern::render_preset(render_preset_name);
-  set_render([this, preset](VisualRender& render) {
-    preset(render, _registers, _node_map, cycler());
-  });
+  if (!render_block.empty()) {
+    // Data-driven render: the block's [expr] params are evaluated each frame against the
+    // registers + named cycler nodes. No per-pattern C++.
+    auto stmts = render_block;
+    set_render([this, stmts](VisualRender& render) {
+      pattern::eval_render(stmts, render, _registers, _node_map, cycler());
+    });
+  } else {
+    // Legacy path: a named C++ render preset (render_preset.cpp), being retired as each
+    // built-in moves its render into a render_block. An unknown name falls through to a
+    // simple single-image default rather than failing playback.
+    auto preset = pattern::render_preset(render_preset_name);
+    set_render([this, preset](VisualRender& render) {
+      preset(render, _registers, _node_map, cycler());
+    });
+  }
 }

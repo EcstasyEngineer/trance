@@ -447,7 +447,7 @@ void Director::change_visual(uint32_t length)
       return;
     }
     const auto& p = _custom_patterns[custom_index];
-    _visual.reset(new CompiledVisual{*_visual_api, p.root, p.render});
+    _visual.reset(new CompiledVisual{*_visual_api, p.root, p.render, p.render_block});
     _last_custom_index = custom_index;
     _custom_visual_name = p.name;
     _last_visual_selection = trance_pb::Program_VisualType_NONE;
@@ -465,7 +465,9 @@ void Director::change_visual(uint32_t length)
   // leaves the current visual in place.
   auto compiled = _builtin_compiled.find(t);
   if (compiled != _builtin_compiled.end()) {
-    _visual.reset(new CompiledVisual{*_visual_api, compiled->second.root, compiled->second.render});
+    _visual.reset(
+        new CompiledVisual{*_visual_api, compiled->second.root, compiled->second.render,
+                           compiled->second.render_block});
   }
   _last_visual_selection = t;
 }

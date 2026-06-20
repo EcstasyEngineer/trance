@@ -4,6 +4,7 @@
 #include <trance/visual/render_preset.h>
 #include <trance/visual/visual.h>
 #include <string>
+#include <vector>
 
 class VisualControl;
 
@@ -15,7 +16,10 @@ class VisualControl;
 class CompiledVisual : public Visual
 {
 public:
-  CompiledVisual(VisualControl& api, const pattern::Node& root, const std::string& render_preset);
+  // `render_block`, when non-empty, is the data-driven render (run by render_eval.cpp)
+  // and takes precedence over the named `render_preset`.
+  CompiledVisual(VisualControl& api, const pattern::Node& root, const std::string& render_preset,
+                 const std::vector<pattern::RenderStmt>& render_block);
 
 private:
   // Named image registers an Image effect writes (e.g. "current"); read by the render

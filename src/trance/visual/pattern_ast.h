@@ -68,6 +68,37 @@ namespace pattern
     int32_t guard_value = 0;
   };
 
+  // One draw statement in a pattern's `render { ... }` block -- how a pattern describes
+  // WHAT is drawn, as data. The render evaluator (render_eval.cpp) runs the list each
+  // frame: it evaluates the [expr] params against live cycler state + registers and maps
+  // the statement to a VisualRender draw call. This replaces the per-pattern C++ presets.
+  struct RenderStmt
+  {
+    enum class Op { Image, Text, Subtext, SmallText, Spiral };
+    Op op = Op::Image;
+
+    // Image op: the image register to draw (e.g. "current").
+    std::string image_reg = "current";
+
+    // Image op animation selection:
+    //   None             -> render_image (no animation)
+    //   Anim / AnimAlt   -> render_animation_or_image with that fixed anim type
+    //   AnimIf <flag>    -> ANIM when scalar[flag] != 0, else NONE
+    //   AnimIfAlt <flag> -> ANIM_ALTERNATE when scalar[flag] != 0, else NONE
+    enum class AnimMode { None, Anim, AnimAlt, AnimIf, AnimIfAlt };
+    AnimMode anim = AnimMode::None;
+    std::string anim_flag;  // scalar register for AnimIf / AnimIfAlt
+
+    // Numeric params as raw [expr] text (empty => op default). Used per op:
+    //   Image:               alpha, origin (zoom_origin), zoom
+    //   Text:                origin, zoom, shadow_origin, shadow_zoom
+    //   Subtext / SmallText: alpha, origin
+    std::string alpha, origin, zoom, shadow_origin, shadow_zoom;
+
+    // Optional `when [cond]`: draw only if the expr evaluates non-zero. Empty => always.
+    std::string when;
+  };
+
   struct Node
   {
     enum class Type { Action, Seq, Par, One, Rep, Off, Burst };

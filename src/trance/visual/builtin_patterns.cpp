@@ -172,7 +172,12 @@ pattern flash_text {
   // one-frame flag. Render-equivalent via pattern_render_test.
   const char* kSimple = R"(
 pattern simple {
-  render simple
+  render {
+    image current anim_if anim_on : zoom [0.5 * image.progress]
+    spiral
+    small_text : alpha [1 / 5], origin 0.25
+    text when [counter.index == 1 or counter.index == 2] : origin 0.75, zoom 0.75, shadow_origin [0.5 * image.progress], shadow_zoom [0.5 * image.progress]
+  }
   one {
     every 1 : spiral_new, font, themes
     par {

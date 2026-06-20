@@ -35,9 +35,8 @@ namespace
     api.render_text(0.75f, 0.75f, 0.5f * progress, 0.5f * progress);
   }
 
-  // Faithful port of SlowFlashVisual::render (visual.cpp), reading the same cycler
-  // state via the node-id map and the "current" image register. Kept line-for-line
-  // equivalent so the render-log test can prove it before SlowFlashVisual is retired.
+  // SLOW_FLASH render: reads cycler state by node id (slow_loop/slow_main/slow_repeat/
+  // fast_* set in kSlowFlash) and the "current" image register, then emits the draw calls.
   void render_slow_flash(VisualRender& api, const pattern::Registers& regs,
                          const pattern::NodeMap& nodes, const Cycler*)
   {
@@ -77,8 +76,8 @@ namespace
                       1.f - fast_main->progress() / 8.f);
     }
   }
-  // Faithful port of FlashTextVisual::render (FLASH_TEXT). The captured `animated`
-  // flag and `alt` toggle come from scalar registers; start/end from image registers.
+  // FLASH_TEXT render. The `animated` flag and `alt` toggle come from scalar registers;
+  // start/end from image registers; image/image_repeat/subtext_counter by node id.
   void render_flash_text(VisualRender& api, const pattern::Registers& regs,
                          const pattern::NodeMap& nodes, const Cycler*)
   {
@@ -110,10 +109,10 @@ namespace
     }
   }
 
-  // Faithful port of AccelerateVisual::render (ACCELERATE). The ramp is one SequenceCycler
-  // ("ramp"); the active segment is ramp->children()[index()], whose image leaf (the
-  // image-annotated lane) and text leaf the render reads for progress/active. The anim
-  // type/alternate and text_on come from scalar registers. Each segment compiles to
+  // ACCELERATE render. The ramp is one SequenceCycler ("ramp"); the active segment is
+  // ramp->children()[index()], whose image leaf (the image-annotated lane) and text leaf
+  // the render reads for progress/active. The anim type/alternate and text_on come from
+  // scalar registers. Each segment compiles to
   // `repeat N one { par { image, spiral, upload-or-timer } text }`, so the active image
   // leaf is par.children()[0] and the text leaf is oneshot.children()[1].
   void render_accelerate(VisualRender& api, const pattern::Registers& regs,
@@ -163,8 +162,8 @@ namespace
     }
   }
 
-  // Faithful port of SubTextVisual::render (SUB_TEXT). `animation_on` and the `alt`
-  // toggle come from scalar registers; the image from the "current" register.
+  // SUB_TEXT render. `animation_on` and the `alt` toggle come from scalar registers;
+  // the image from the "current" register; image leaf by node id.
   void render_sub_text(VisualRender& api, const pattern::Registers& regs,
                        const pattern::NodeMap& nodes, const Cycler*)
   {
@@ -185,8 +184,8 @@ namespace
     api.render_text(.75f, .75f, image_zoom, image_zoom);
   }
 
-  // Faithful port of SimpleVisual::render (SIMPLE). The animation shows on every third
-  // image, tracked by the `anim_on` pulse flag instead of the old _anim_cycle counter.
+  // SIMPLE render. The animation shows on every third image, gated by the `anim_on`
+  // pulse flag (set by `pulse simple_counter every 3` in kSimple).
   void render_simple(VisualRender& api, const pattern::Registers& regs,
                      const pattern::NodeMap& nodes, const Cycler*)
   {
@@ -205,10 +204,9 @@ namespace
     }
   }
 
-  // Faithful port of ParallelVisual::render (SUPER_PARALLEL). Three offset image lanes
-  // read by id (prog0..2 progress, single0..2 active), the alt-animation toggle from
-  // the scalar register, and the three image registers. Render math is schedule-driven
-  // (no captured randomness), so pattern_render_test proves it frame-for-frame.
+  // SUPER_PARALLEL render. Three offset image lanes read by id (prog0..2 progress,
+  // single0..2 active), the alt-animation toggle from a scalar register, and the three
+  // image registers img0..2.
   void render_super_parallel(VisualRender& api, const pattern::Registers& regs,
                              const pattern::NodeMap& nodes, const Cycler* root)
   {
@@ -240,10 +238,10 @@ namespace
     }
   }
 
-  // Faithful port of SuperFastVisual::render (SUPER_FAST). The FSM state, animation
-  // timer, text_mod and alternate come from the sf_* scalar registers (written by the
-  // super_fast_tick effect); current/next from image registers; the rapid leaf supplies
-  // frame()/length()/progress(). States: 0 RAPID, 1 START, 2 ANIMATION, 3 END.
+  // SUPER_FAST render. The FSM state, animation timer, text_mod and alternate come from
+  // the sf_* scalar registers (written by the super_fast_tick effect); current/next from
+  // image registers; the rapid leaf supplies frame()/length()/progress().
+  // States: 0 RAPID, 1 START, 2 ANIMATION, 3 END.
   void render_super_fast(VisualRender& api, const pattern::Registers& regs,
                          const pattern::NodeMap& nodes, const Cycler*)
   {
@@ -283,8 +281,8 @@ namespace
     api.render_spiral();
   }
 
-  // Faithful port of AnimationVisual::render. Reads change_alt/change_counter/
-  // start_end_timer by id and the backup/current image registers.
+  // ANIMATION render. Reads change_alt/change_counter/start_end_timer by id and the
+  // backup/current image registers.
   void render_animation(VisualRender& api, const pattern::Registers& regs,
                         const pattern::NodeMap& nodes, const Cycler*)
   {

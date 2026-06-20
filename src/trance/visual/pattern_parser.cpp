@@ -265,7 +265,11 @@ namespace
           p.weight = next_uint("a weight");
         } else if (t.kind == Token::Ident && t.text == "render") {
           ++_i;
-          p.render = next_ident("a render preset name");
+          if (peek().kind == Token::Punct && peek().text == "{") {
+            p.render_block = parse_render_block();
+          } else {
+            p.render = next_ident("a render preset name");
+          }
         } else {
           break;
         }
@@ -350,6 +354,18 @@ namespace
     float next_float(const std::string& what)
     {
       return static_cast<float>(next_number(what));
+    }
+
+    // Raw text of a render param: a `[expr]` (kept unevaluated, run each frame by the
+    // render evaluator) or a plain number literal. Unlike next_number, this does NOT
+    // fold the value at parse time.
+    std::string next_expr_text(const std::string& what)
+    {
+      const Token& t = peek();
+      if (t.kind != Token::Expr && t.kind != Token::Number) {
+        err("expected a number or [expr] for " + what);
+      }
+      return _toks[_i++].text;
     }
 
     pattern::Node parse_node()
@@ -460,6 +476,95 @@ namespace
       }
       expect_punct("}");
       return kids;
+    }
+
+    // `render { <stmt>... }` -- the data-driven render block. Each statement is a draw
+    // op + optional `when [cond]` + `:`-separated `key [expr]` params. Stored unevaluated
+    // (RenderStmt) and run each frame by render_eval.cpp.
+    std::vector<pattern::RenderStmt> parse_render_block()
+    {
+      expect_punct("{");
+      std::vector<pattern::RenderStmt> stmts;
+      while (!(peek().kind == Token::Punct && peek().text == "}")) {
+        if (peek().kind == Token::End) {
+          err("unexpected end of input inside render block");
+        }
+        stmts.push_back(parse_render_stmt());
+      }
+      expect_punct("}");
+      if (stmts.empty()) {
+        err("empty render block");
+      }
+      return stmts;
+    }
+
+    pattern::RenderStmt parse_render_stmt()
+    {
+      using Op = pattern::RenderStmt::Op;
+      using AM = pattern::RenderStmt::AnimMode;
+      pattern::RenderStmt st;
+      std::string w = next_ident("a render op (image/text/subtext/small_text/spiral)");
+      if (w == "spiral") {
+        st.op = Op::Spiral;
+      } else if (w == "image") {
+        st.op = Op::Image;
+        st.image_reg = next_ident("an image register");
+        if (peek().kind == Token::Ident) {
+          const std::string& a = peek().text;
+          if (a == "anim") {
+            ++_i;
+            st.anim = AM::Anim;
+          } else if (a == "anim_alt") {
+            ++_i;
+            st.anim = AM::AnimAlt;
+          } else if (a == "anim_if") {
+            ++_i;
+            st.anim = AM::AnimIf;
+            st.anim_flag = next_ident("a flag register after anim_if");
+          } else if (a == "anim_if_alt") {
+            ++_i;
+            st.anim = AM::AnimIfAlt;
+            st.anim_flag = next_ident("a flag register after anim_if_alt");
+          }
+        }
+      } else if (w == "text") {
+        st.op = Op::Text;
+      } else if (w == "subtext") {
+        st.op = Op::Subtext;
+      } else if (w == "small_text") {
+        st.op = Op::SmallText;
+      } else {
+        err("unknown render op '" + w + "'");
+      }
+      if (peek().kind == Token::Ident && peek().text == "when") {
+        ++_i;
+        st.when = next_expr_text("a when condition");
+      }
+      if (accept_punct(":")) {
+        for (;;) {
+          int kl = peek().line;
+          int kc = peek().col;
+          std::string key = next_ident("a render param name");
+          std::string val = next_expr_text("a render param value");
+          if (key == "alpha") {
+            st.alpha = val;
+          } else if (key == "origin") {
+            st.origin = val;
+          } else if (key == "zoom") {
+            st.zoom = val;
+          } else if (key == "shadow_origin") {
+            st.shadow_origin = val;
+          } else if (key == "shadow_zoom") {
+            st.shadow_zoom = val;
+          } else {
+            throw ParseError{"unknown render param '" + key + "'", kl, kc};
+          }
+          if (!accept_punct(",")) {
+            break;
+          }
+        }
+      }
+      return st;
     }
 
     pattern::Node parse_primary()
