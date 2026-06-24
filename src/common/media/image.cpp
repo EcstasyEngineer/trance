@@ -111,9 +111,6 @@ static const int max_image_dimension = 16384;
 
 Image load_image(const std::string& path)
 {
-  // Leave a breadcrumb so a hard crash inside a native decoder names the file.
-  note_media_load(path);
-
   // Load JPEGs with the jpgd library since SFML does not support progressive
   // JPEGs.
   if (ext_is(path, "jpg") || ext_is(path, "jpeg")) {

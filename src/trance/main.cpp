@@ -124,9 +124,7 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
     return it->second;
   };
 
-  std::cout << "loading themes" << std::endl;
   auto theme_bank = std::make_unique<ThemeBank>(root_path, session, system, program());
-  std::cout << "\nloaded themes" << std::endl;
 
   std::unique_ptr<Renderer> renderer;
   bool realtime = settings.path.empty();
@@ -145,9 +143,7 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
     renderer.reset(new ScreenRenderer(system));
   }
 
-  std::cout << "\nloading session" << std::endl;
   Director director{session, system, *theme_bank, program(), *renderer};
-  std::cout << "\nloaded session" << std::endl;
 
   std::thread async_thread;
   std::atomic<bool> running = true;

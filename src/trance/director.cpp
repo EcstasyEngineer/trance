@@ -46,7 +46,6 @@ Director::Director(const trance_pb::Session& session, const trance_pb::System& s
 , _debug_font_ok{false}
 , _audio{nullptr}
 {
-  std::cout << "\npreloading GPU" << std::endl;
   static const std::size_t gl_preload = 1000;
   for (std::size_t i = 0; i < gl_preload; ++i) {
     themes.get_image(false);
@@ -779,23 +778,15 @@ void Director::draw_debug_overlay() const
   out << "\n";
 
   // Which theme slots the active image lanes source -- shown as '*' in the THEMES
-  // block below (no separate line). Literal lanes mark their slot directly; a
-  // runtime lane resolves to the last-pulled slot.
+  // block below (no separate line). Literal lanes mark their slot directly.
+  // (Runtime-lane resolution to the actual last-pulled slot was dropped with the
+  // api debug breadcrumb; a runtime lane won't mark a '*' until the overlay is
+  // rebuilt on the render layer.)
   auto snap = _themes.debug_snapshot();
   bool on_primary = false;
   bool on_alternate = false;
   bool on_runtime = false;
   collect_onscreen_slots(visual ? visual->cycler() : nullptr, on_primary, on_alternate, on_runtime);
-  // A runtime image lane resolves to the last-pulled slot. Apply this whenever a
-  // runtime lane is active (not only when no literal lane is), so a future mixed
-  // literal+runtime visual still reports the runtime slot.
-  if (on_runtime && _visual_api->debug_has_image()) {
-    if (_visual_api->debug_image_alternate()) {
-      on_alternate = true;
-    } else {
-      on_primary = true;
-    }
-  }
 
   // The two active themes; '*' = currently sourced on screen by an active image lane.
   const auto& pri = snap.slots[1];
