@@ -7,6 +7,7 @@
 #include <trance/visual/api.h>
 #include <trance/visual/builtin_patterns.h>
 #include <trance/visual/compiled_visual.h>
+#include <trance/visual/pattern_parser_v2.h>
 #include <trance/visual/cyclers.h>
 #include <trance/visual/visual.h>
 #include <algorithm>
@@ -84,6 +85,23 @@ void Director::build_builtin_patterns()
 {
   _builtin_compiled.clear();
   for (uint32_t t = 1; t <= 8; ++t) {
+    // Prefer the v2 intent-grammar source where one exists; it lowers to the same
+    // pattern::Node the v1 path produces, so everything downstream is identical.
+    std::string v2_source = builtin::pattern_source_v2(t);
+    if (!v2_source.empty()) {
+      auto v2 = patternv2::parse(v2_source);
+      if (!v2.ok) {
+        throw std::runtime_error("built-in v2 pattern " + std::to_string(t)
+                                 + " failed to parse: " + v2.error);
+      }
+      pattern::Parsed parsed;
+      parsed.name = std::move(v2.name);
+      parsed.weight = 1;
+      parsed.root = std::move(v2.root);  // render_block empty -> default_render_block()
+      _builtin_compiled.emplace(t, std::move(parsed));
+      continue;
+    }
+
     std::string source = builtin::pattern_source(t);
     if (source.empty()) {
       continue;
