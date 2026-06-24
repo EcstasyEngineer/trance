@@ -575,7 +575,7 @@ namespace
 
       expect_word("every");
 
-      // ---- ramped cadence (image only) ----
+      // ---- ramped cadence (`every <curve>`) ----
       if (!_c.next_is_digit()) {
         const std::size_t cat = _c.pos();
         const std::string cname = _c.word();
@@ -583,20 +583,21 @@ namespace
         if (it == _curves.end()) {
           throw ParseError{"unknown curve '" + cname + "' after every", cat};
         }
-        if (!is_image) {
-          throw ParseError{"ramped cadence is only supported on image streams (for now)", cat};
-        }
         std::string ramp_id;
         Node seq = build_ramp(it->second, e, slot, ramp_id);
-        Layer layer;
-        layer.phase_id = phase_id;
-        layer.reg = reg;
-        layer.zoom = "0.5 * " + ramp_id + ".progress";
-        parse_image_attrs(ramp_id, phase_id, layer);
-        if (_c.peek_word() == "anim") {
-          throw ParseError{"anim on a ramped cadence is not supported yet", _c.pos()};
+        if (is_image) {
+          Layer layer;
+          layer.phase_id = phase_id;
+          layer.reg = reg;
+          layer.zoom = "0.5 * " + ramp_id + ".progress";
+          parse_image_attrs(ramp_id, phase_id, layer);
+          if (_c.peek_word() == "anim") {
+            throw ParseError{"anim on a ramped cadence is not supported yet", _c.pos()};
+          }
+          _layers.push_back(layer);
         }
-        _layers.push_back(layer);
+        // Non-image ramps (e.g. a ramping subtext cadence -- sub_text's sub_speed) just
+        // fire their effect at the ramped interval; no render layer.
         return seq;
       }
 
