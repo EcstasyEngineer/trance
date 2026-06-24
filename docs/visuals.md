@@ -23,8 +23,8 @@ pattern DSL text                              pattern_parser.{h,cpp}
                                               Cycler tree          (cyclers.{h,cpp})
                                                 │  CompiledVisual   (compiled_visual.{h,cpp})
                                                 ▼
-                                              VisualControl effects + a named render preset
-                                                                   (render_preset.{h,cpp})
+                                              VisualControl effects + a data-driven render block
+                                                                   (render_eval.{h,cpp})
 ```
 
 1. **Parse** (`pattern_parser.{h,cpp}`). DSL source text → a normalized
@@ -39,8 +39,8 @@ pattern DSL text                              pattern_parser.{h,cpp}
    without SFML or protobuf).
 4. **CompiledVisual** (`compiled_visual.{h,cpp}`). Each leaf's effect list becomes
    a `std::function` (`run_effect`) that calls `VisualControl` and writes a
-   register block (`pattern::Registers`). The visual draws via a named render
-   preset.
+   register block (`pattern::Registers`). The visual draws via its data-driven
+   `render { }` block (or `pattern::default_render_block()` if it declares none).
 
 ## Cyclers — the schedule primitives
 
@@ -63,8 +63,8 @@ Key accessors used by the overlay and render presets (`cyclers.h`):
 - `length()`, `position()`, `frame()` (= `position()-1 mod length()`), `progress()`.
 - `active()` — set on the live path; the overlay reads this for "current section".
 - `index()` — **virtual**; the Rep/Seq position (and `1` during a `BurstCycler`
-  burst). A render preset reads loop/segment position through this. `0` for
-  leaf/parallel nodes.
+  burst). A render block reads loop/segment position through this (the `index`
+  attribute, e.g. `slow_repeat.index`). `0` for leaf/parallel nodes.
 - `phase()` / `image_slot()` / `image_label()` — pure annotations for the overlay
   (see below). They never affect scheduling.
 
@@ -78,7 +78,7 @@ draw call or mutates the pattern's scalar register block. The full enum is
 **Draw effects** (call `VisualControl` / write an image register):
 `image`, `text`, `anim`, `subtext`, `small_text`, `themes`, `font`, `spiral_new`,
 `spiral` (rotate), `upload`. Image effects (and `image reg NAME`, `anim reg NAME`)
-write a named image register; the render preset reads it.
+write a named image register; the render block reads it.
 
 **Scalar-state ops** — the *only* mutable state the language has. There are no
 general variables; these exist solely to express the handful of stateful built-in
@@ -108,9 +108,9 @@ fires; `generate VAR from A to B { … }` is a compile-time bounded expansion; a
 `[expr]` arithmetic evaluator (`+ - * / ^` and the active `generate` var) may
 appear anywhere an int is expected.
 
-## Registers and render presets
+## Registers and the render block
 
-`pattern::Registers` (`render_preset.h`) is the visual's mutable state:
+`pattern::Registers` (`pattern_runtime.h`) is the visual's mutable state:
 
 ```cpp
 struct Registers {
@@ -119,29 +119,50 @@ struct Registers {
 };
 ```
 
-Effects write the registers; a **render preset** (`render_preset.{h,cpp}`) reads
-them and the live cycler state to emit draw calls. A preset is the analogue of a
-hardcoded visual's render lambda, but it addresses cycler nodes by their DSL `id`
-through a `NodeMap` instead of captured C++ locals. `render_preset(name)` returns
-the named preset, or a single-image default if the name is unknown — so an
-authored pattern always renders something rather than failing playback.
+Effects write the registers; the pattern's **render block** describes *what is
+drawn* as data, and `eval_render` (`render_eval.{h,cpp}`) reads the registers plus
+the live cycler state each frame to emit draw calls. The render block is a
+`std::vector<pattern::RenderStmt>` (`pattern_ast.h`) — the data-driven replacement
+for the old per-pattern C++ render presets (`render_preset.{h,cpp}`, since
+deleted). Each `RenderStmt` is one draw op (`image`, `text`, `subtext`,
+`small_text`, `spiral`) with an optional `when [cond]` and a list of `[expr]`
+params (`alpha`, `origin`, `zoom`, `shadow_origin`, `shadow_zoom`). The `[expr]`s
+are evaluated per frame against register values and live cycler state, which the
+block addresses by node `id` through a `NodeMap` (`pattern_compiler.h`) — e.g.
+`slow_loop.active`, `slow_main.progress`, `slow_repeat.index`. Authored in the DSL
+as:
+
+```text
+render {
+  image current anim if [animation_on] alt [animation_alt] : alpha 1, origin [0.4 * ramp.progress], zoom [0.5 * ramp.progress]
+  spiral
+  text when [text_on] : origin [0.6 + 0.2 * ramp.progress], zoom [0.6 + 0.2 * ramp.progress]
+}
+```
+
+A pattern that declares no render block falls back to
+`pattern::default_render_block()` (current image + spiral + text), so playback
+never shows a blank frame. The legacy `render NAME` header (a named preset) is
+retired and no longer resolves to anything — a non-empty render block is the only
+mechanism now.
 
 ## The eight built-in patterns
 
 `Program::VisualType` still has its original eight values (`trance.proto:128`);
 the enum is unchanged, so old `.session` files keep working. Each value now maps
-to a DSL source string in `builtin_patterns.cpp`:
+to a DSL source string in `builtin_patterns.cpp`, each carrying its own inline
+`render { }` block:
 
-| Enum (value) | Pattern source | Render preset | Note |
-|---|---|---|---|
-| `ACCELERATE` (1) | `kAccelerate` | `accelerate` | Ramp of image segments, length 56→12; built with `generate` + `[expr]`. |
-| `SLOW_FLASH` (2) | `kSlowFlash` | `slow_flash` | Slow then fast flash phases (the canonical example). |
-| `SUB_TEXT` (3) | `kSubText` | `sub_text` | Image + scrolling subtext; `sub_speed`-gated cadence. |
-| `FLASH_TEXT` (4) | `kFlashText` | `flash_text` | 2-image crossfade + text. |
-| `PARALLEL` (5) | `kSimple` | `simple` | Single image (the enum name and behaviour don't match — this is one image). |
-| `SUPER_PARALLEL` (6) | `kSuperParallel` | `super_parallel` | 3-image staggered interleave. |
-| `ANIMATION` (7) | `kAnimation` | `animation` | Animation + crossfade image with a fade window. |
-| `SUPER_FAST` (8) | `kSuperFast` | `super_fast` | Rapid current/next cuts, driven by the isolated `super_fast_tick` FSM. |
+| Enum (value) | Pattern source | Note |
+|---|---|---|
+| `ACCELERATE` (1) | `kAccelerate` | Ramp of image segments, length 56→12; built with `generate` + `[expr]`. |
+| `SLOW_FLASH` (2) | `kSlowFlash` | Slow then fast flash phases (the canonical example). |
+| `SUB_TEXT` (3) | `kSubText` | Image + scrolling subtext; `sub_speed`-gated cadence. |
+| `FLASH_TEXT` (4) | `kFlashText` | 2-image crossfade + text. |
+| `PARALLEL` (5) | `kSimple` | Single image (the enum name and behaviour don't match — this is one image). |
+| `SUPER_PARALLEL` (6) | `kSuperParallel` | 3-image staggered interleave. |
+| `ANIMATION` (7) | `kAnimation` | Animation + crossfade image with a fade window. |
+| `SUPER_FAST` (8) | `kSuperFast` | Rapid current/next cuts, driven by the isolated `super_fast_tick` FSM. |
 
 `Director::build_builtin_patterns()` (`director.cpp:84`) parses all eight at
 startup and throws on a parse failure (built-in sources are compile-time

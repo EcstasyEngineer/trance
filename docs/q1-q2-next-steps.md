@@ -8,14 +8,21 @@ git-history forensics on the original repo, and (c) the two things the framing u
 This is a **direction to validate**, not a build order to execute blindly. Nothing here is
 actioned.
 
+> **Update — Phase 0 done on paper.** `phase0-validation.md` works all 8 built-ins against the
+> real sources and resolves the terminology. Two canonical renames adopted there and applied
+> below: **voice → stream** (in a hypnosis/audio context "voice" reads as spoken audio) and
+> **signal → curve** / **phase (time-section) → section**. Verdict: conditional go — expressible,
+> blocked only on the animation model (§5) and a replacement validation story.
+
 ---
 
 ## TL;DR verdict
 
 - **The core is right and the two responses agree on it** — that agreement is the signal.
-  Authoring surface = **voices** (content streams) + **phases** (named time) + **signals**
-  (time-varying values) + **theme relationships** (index, not primary/alternate) + **render
-  shapes** (`focus`/`fade`/`stack`/`cut`). It lowers to today's `pattern::Node` AST → Cyclers.
+  Authoring surface = **streams** (content streams; was "voices") + **sections** (named time;
+  was "phases") + **curves** (time-varying values; was "signals") + **theme relationships**
+  (index, not primary/alternate) + **render shapes** (`focus`/`fade`/`stack`/`cut`). It lowers
+  to today's `pattern::Node` AST → Cyclers.
   **Do not rewrite the runtime.** Both responses are emphatic and correct here.
 - **The history says we're recovering real intent, not inventing it.** The 8 visuals were
   chosen by early 2015 and never changed for 3+ years; only their *names and mechanics*
@@ -89,7 +96,7 @@ disposable, which is *why* dropping byte-identity is safe.
 
 | Dimension | Q1 (readability) | Q2 (intent) | My call |
 |---|---|---|---|
-| Surface unit name | `lane` | `voice` | **`voice`** for the surface (score metaphor carries intent); `lane` stays the IR term. |
+| Surface unit name | `lane` | `voice` | **`stream`** (revised in `phase0-validation.md` §1 — "voice" reads as spoken audio for this audience); `lane` stays the IR term. |
 | Layers | Surface → Frame IR → Cyclers (3) | Surface → **Score IR** → Frame IR → Cyclers (4) | **Start with 3 (Q1).** Add Score IR only when the overlay needs it (§4). |
 | Framing | "lane language" | "visual score language" (phases/voices/signals/theme-rel/shape) | **Q2's object model + Q1's concrete grammar/lowering.** They're complementary, not competing. |
 | `intent "..."` annotation | absent | present | **Adopt it** — cheapest "self-documenting" win regardless of grammar density. |

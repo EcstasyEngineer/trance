@@ -1,0 +1,121 @@
+# What the visual engine actually does today (plain-English)
+
+No jargon, no "lanes/voices/cadence." This is the ground truth the v2 intent grammar
+must compile down to. If a proposed intent can't be expressed in the terms below, it
+can't run — so this doc is the contract every later design depends on.
+
+---
+
+## 1. What the program is
+
+Trance plays **fullscreen, rhythmic, flashing visuals** (images, text, spirals,
+animations) timed to the frame, alongside a synthesized **entrainment audio bed**
+(binaural/isochronic tones). The intent is psychovisual: rhythm, repetition, and
+pairing aimed at a hypnosis-adjacent effect. Everything is deterministic integer
+frame math — there is no real-time clock, no physics, no randomness except where the
+pattern explicitly rolls a die.
+
+## 2. The only things that can appear on screen
+
+The engine has a **fixed, small vocabulary of draw operations** (`VisualControl` /
+`VisualRender` in `api.h`). This is the floor. Nothing can be shown that isn't one of:
+
+- **An image** — pulled from a **theme** (see §5). Can be drawn as a still, or as its
+  **animated** form (a gif/webm). "Animation" is not a separate thing — it's just
+  "draw this image slot as its moving version instead of a still."
+- **Text** — big foreground words, split by word / line / once.
+- **Subtext** — a secondary scrolling text line.
+- **Small text** — small caption text.
+- **A spiral** — the rotating background; you can change its type/width and rotate it.
+- **A font change**, and a **theme change** (swap which images/words are in play).
+
+Each draw op takes a few numbers: **alpha** (opacity), **origin** and **zoom** (size /
+position of the zoom), and for text a shadow origin/zoom. That's the entire painter's
+palette. Any intent ("overload," "conditioning") must ultimately become some
+combination of these ops with these numbers, over time.
+
+## 3. How timing works: a tree of frame-counters
+
+The schedule is a **tree**, and every node is just **a counter that counts frames**.
+Advancing the whole tree one frame at a time *is* playback. The node types (`cyclers.h`),
+in plain words:
+
+| Node | What it does |
+|---|---|
+| **Action** (leaf) | The only node that *does* anything. Fires its effects every N frames (or on frame K-of-N, or every frame). |
+| **One-shot** | Run its children together, once. Lasts as long as its longest child. |
+| **Parallel** | Run its children together, on repeat. |
+| **Sequence** | Run its children one after another. |
+| **Repeat** | Run one child N times. |
+| **Offset** | Run one child, but phase-shifted by K frames. |
+| **Burst** | A base loop randomly interrupted by a short burst, then a cooldown. (The one concession to "a little state.") |
+
+So "slow flashes then fast flashes" is literally a Sequence of two sub-trees; "three
+images at once" is a Parallel of three; "speed up" is a Sequence of Repeat blocks whose
+counters shrink. **Lengths are exact integers** — a Sequence's length is the sum of its
+children, a Parallel's is their least-common-multiple, etc. There is no call stack at
+runtime; the tree's positions are the whole state.
+
+## 4. What a leaf can do: effects
+
+When an Action leaf fires, it runs an ordered list of **effects**. Two kinds:
+
+- **Draw effects** — call one of the §2 ops (show an image, fire text, rotate the spiral…).
+- **Scalar/register ops** — the *only* mutable memory the language has. There are no real
+  variables. A tiny set exists purely to fake the few stateful built-ins: `set`, `inc`,
+  `toggle`, a captured random `roll` (e.g. "pick 2, 4, or 8 once"), a `pulse` counter
+  ("raise a flag every Nth fire"), `copy` (hand one image to another), and a single
+  guard `when` ("do this only if register == N"). Plus one escape hatch: `super_fast_tick`,
+  a hand-written 4-state machine for the one pattern that genuinely needed it.
+
+This register machinery is the ugliest part of today's system and the thing v2 most
+wants to delete. It exists only because the old grammar had no better way to say "every
+third image" or "this slows down over time."
+
+## 5. Themes, and the biggest limit
+
+Images and words come from **themes**. At any moment the engine holds a small set of
+"live" themes in slots, but the pattern language can only address **two**: **primary**
+and **alternate** (plus "runtime" = whatever was last pulled, and "random"). That binary
+is a hard limit baked into the data model. **Anything that wants 3+ themes at once — which
+is exactly what associative conditioning across multiple concept-themes would need — is
+impossible today** without a real change to the theme bank, the loader, and the draw API.
+This is the single most important runtime limitation to know.
+
+## 6. The render block: "what's drawn," separately from "when"
+
+Recently the engine split into two halves:
+
+- **The schedule** (§3–4) decides *when* things happen and writes registers.
+- **The render block** decides *what is actually painted each frame*. It's a short list
+  of draw statements (`image`, `text`, `subtext`, `small_text`, `spiral`), each with an
+  optional condition and number expressions for alpha/zoom/origin. Those expressions are
+  evaluated **every frame** against the live counters and registers (e.g. "zoom =
+  0.4 × how-far-through-this-ramp-we-are"). Run by `render_eval.cpp`.
+
+This is the part that's already "data, not code," and it's the natural lowering target
+for v2's render shapes.
+
+## 7. The contract for v2 (the compile-down invariant)
+
+Whatever the intent grammar looks like, the compiler must turn each pattern into:
+
+1. **A schedule tree** of the §3 node types, whose leaves fire
+2. **effects** from the §4 vocabulary (draw ops + the register ops), feeding
+3. **a render block** of §6 draw statements.
+
+…all bottoming out in the §2 painter's palette and the §5 (currently binary) theme model.
+
+That's the whole machine. v2 can be a **friendlier front-end** that lowers to this — and
+**must** lower to this (or to a deliberately-chosen extension of it, e.g. theme-index,
+which is a real runtime project, not just parser work). An intent that can't be reduced
+to "a counter tree firing these draw ops, painted by these statements" is, today,
+unbuildable. Keep that test in hand for every idea: *what counter tree and what draw
+statements would this become?*
+
+---
+
+*Source of truth: `src/trance/visual/api.h` (draw ops), `cyclers.h` (node types),
+`pattern_ast.h` / `pattern_parser.h` (effects + grammar), `render_eval.h` (render block),
+`builtin_patterns.cpp` (the 8 patterns as they exist). For the as-built developer
+reference (with file/line detail) see `visuals.md`; this doc is the conceptual floor.*

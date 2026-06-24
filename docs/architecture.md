@@ -89,7 +89,7 @@ play_session frame loop ──► Director ──► Visual (cycler tree + effec
 | `src/trance/` | The realtime player: `main.cpp`, `director.{h,cpp}`, `theme_bank.{h,cpp}`, GLSL `shaders.h`. |
 | `src/trance/media/` | Player-side media: `audio.{h,cpp}`, `entrainment.{h,cpp}` (the synthesised bed), `font.{h,cpp}`, `async_streamer.{h,cpp}`, video `export.{h,cpp}`. |
 | `src/trance/render/` | The `Renderer` interface and its subclasses: `render.{h,cpp}` (screen), `openvr.{h,cpp}` (SteamVR), `video_export.{h,cpp}` (offline encode). |
-| `src/trance/visual/` | The visual engine: the cycler/pattern system (~23 files). The pattern DSL parser/compiler, the `Cycler` tree, compiled visuals, render presets, and the headless tests. |
+| `src/trance/visual/` | The visual engine: the cycler/pattern system (~23 files). The pattern DSL parser/compiler, the `Cycler` tree, compiled visuals, the data-driven render blocks (`render_eval`), and the headless tests. |
 | `src/creator/` | The wxWidgets `.session` editor (separate executable). |
 | `src/jpgd/` | Vendored JPEG decoder (third-party). |
 
