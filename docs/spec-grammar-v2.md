@@ -96,6 +96,28 @@ whole-pattern motion (the review's "recursing curves to lower levels"). **Implem
 `zoom Z` rides the flash clock, `zoom Z over section` rides the section clock; `over pattern` is
 the natural next extension.
 
+> **Proposed refinement (under consideration — not yet adopted): everything is a (sub)pattern.**
+> The object model has four time-ish nouns — `pattern`, `phase`, `stream`, and the `flash` (one
+> image's showing). They may collapse into **one recursive concept: a pattern contains subpatterns**,
+> down to the atomic level (a single image shown for N frames is itself just a pattern of one image).
+> Worth taking seriously because:
+> - **It unifies the three clocks into one mechanism.** "Flash / section / pattern clock" become
+>   "the progress of *some enclosing (sub)pattern*"; `zoom Z over section` is then just "anchor to
+>   *that* ancestor" — no fixed clock vocabulary at all.
+> - **The implementation already works this way.** Clocks are already `<node-id>.progress` for an
+>   arbitrary node — `<flash>`, `<phase>`, and `root` are all node ids in the same map. The *runtime*
+>   is already a recursive tree (cyclers nest); only the surface vocabulary lags. So this is mostly a
+>   naming/structuring change, low implementation risk.
+> - **The grammar would mirror the cycler tree** (the compile target) one-to-one — lowering gets even
+>   more direct.
+>
+> **Resolve first:** how a pattern says whether its subpatterns run **in parallel** (today's
+> "streams") or **in sequence** (today's "phases") — *without* re-exposing raw `par`/`seq`, the
+> low-level wart v2 set out to hide. Likely: keep the defaults (named time-sections sequential,
+> content siblings parallel) and let nesting express the rest. Until that is settled this stays a
+> direction, not the spec — but implement clock-anchoring generically (`<any-node>.progress`, which
+> the parser already does) so adopting it later is free.
+
 ---
 
 ## 3. Grammar (EBNF-ish)
