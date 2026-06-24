@@ -45,24 +45,29 @@ pattern slow_flash repeat 2 {
 }
 )";
 
-  // 3 SUB_TEXT -- image with a subtext line.
+  // 3 SUB_TEXT -- the subtext cadence slows from every 12 to every 48 across the section
+  // (the sub_speed ramp, expressed as a curve); runtime image with an every-third anim.
   const char* kSubText = R"(
 pattern sub_text {
-  phase "Main" for 1536f {
-    description "Runtime image every 48 with a reward subtext line."
-    image runtime every 48
-    subtext reward every 48
+  phase "Main" for auto {
+    description "A runtime image (every third animates); a reward subtext whose cadence slows from every 12 to every 48 across the section; quick spiral."
+    curve subrate from 12 to 48
+    image runtime every 48 anim every 3rd
+    subtext reward every subrate
     spiral rate 4
   }
 }
 )";
 
-  // 4 FLASH_TEXT -- image + foreground word.
+  // 4 FLASH_TEXT -- the crossfade: each beat a reward image dissolves in over a concept
+  // image (a dissolve is just opacity + overlap -- the `over` layer's brightness ramps
+  // 0->1 across its flash while it overlaps the base). Co-timed word + caption.
   const char* kFlashText = R"(
 pattern flash_text {
   phase "Main" for 1024f {
-    description "Reward image every 64 with a co-timed reward word."
-    image reward every 64
+    description "Each beat a reward image dissolves in over a concept image (crossfade); reward word; caption; spiral."
+    image concept -> base every 64
+    image reward -> over every 64 brightness 1
     word reward every 64
     caption concept every 32
     spiral rate 2
