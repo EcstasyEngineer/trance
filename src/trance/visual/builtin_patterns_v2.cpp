@@ -13,12 +13,15 @@
 // set exists to prove v2 drives the real engine end-to-end without crashing.
 namespace
 {
-  // 1 ACCELERATE -- fast alternate cuts (ramp not yet in the grammar).
+  // 1 ACCELERATE -- the cadence ramp: cuts shorten 56 -> 12 with a pow6 dwell, image
+  // zoom sweeping continuously over the ramp. Lowers to the same 2770-frame ramp the v1
+  // built-in does (per-band slot/upload aside).
   const char* kAccelerate = R"(
 pattern accelerate {
-  phase "Ramp" for 2048f {
-    description "Fast reward-theme cuts with a quick spiral."
-    image reward every 16
+  escalate "Ramp" for auto {
+    description "Cuts accelerate from every 56 to every 12 frames; the image zoom intensifies across the whole ramp; quick spiral."
+    curve pace from 56 to 12 ease late
+    image concept every pace
     spiral rate 3
   }
 }
