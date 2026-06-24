@@ -21,27 +21,25 @@ namespace
   };
 
   // A named curve: a value moving A->B across a phase. Drives cadence (`every <curve>`,
-  // unrolled into a ramp of segments) or an attribute (`zoom <curve>`, a per-frame
-  // progress expression). The single time-bending primitive.
+  // unrolled into a ramp of segments) or an attribute (`zoom <curve>`).
   struct Curve
   {
     float from = 0.f;
     float to = 0.f;
-    std::string ease;  // "" / "linear" / "late" (front-loaded dwell)
+    std::string ease;
   };
 
-  // What one phase contributes to the generated render block.
-  struct PhaseRender
+  // One image layer contributed to the render block. Multiple layers with distinct
+  // registers composite (super_parallel); layers sharing a register across phases ternary
+  // by phase (slow_flash).
+  struct Layer
   {
-    std::string id;
-    bool has_image = false;
-    std::string image_zoom;   // full [expr] text, or empty
-    std::string image_alpha;  // full [expr] text, or empty
-    bool image_anim = false;          // draw the image's animated form
-    std::string image_anim_gate;      // register gating the anim (empty = always)
-    bool has_word = false;
-    bool has_subtext = false;
-    bool has_caption = false;
+    std::string phase_id;
+    std::string reg = "current";
+    std::string zoom;
+    std::string alpha;  // may be empty (=> 1)
+    bool anim = false;
+    std::string anim_gate;
   };
 
   // ---- tokenizer ------------------------------------------------------------
@@ -49,7 +47,6 @@ namespace
   {
   public:
     explicit Cursor(const std::string& src) : _src(src) {}
-
     std::size_t pos() const { return _i; }
 
     char peek_char()
@@ -125,6 +122,16 @@ namespace
       ++_i;
     }
 
+    bool accept(char c)
+    {
+      skip();
+      if (_i < _src.size() && _src[_i] == c) {
+        ++_i;
+        return true;
+      }
+      return false;
+    }
+
     std::string peek_word()
     {
       skip();
@@ -171,7 +178,6 @@ namespace
     n.effects = std::move(effects);
     return n;
   }
-
   Node repeat(uint32_t count, Node child)
   {
     Node n;
@@ -180,7 +186,14 @@ namespace
     n.children.push_back(std::move(child));
     return n;
   }
-
+  Node offset(uint32_t frames, Node child)
+  {
+    Node n;
+    n.type = Node::Type::Off;
+    n.count = frames;
+    n.children.push_back(std::move(child));
+    return n;
+  }
   Node group(Node::Type type, std::vector<Node> children)
   {
     Node n;
@@ -188,14 +201,12 @@ namespace
     n.children = std::move(children);
     return n;
   }
-
   Effect effect(Effect::Kind kind)
   {
     Effect e;
     e.kind = kind;
     return e;
   }
-
   Slot theme_to_slot(const std::string& w, std::size_t at)
   {
     if (w == "concept") return Slot::Primary;
@@ -203,9 +214,6 @@ namespace
     if (w == "runtime") return Slot::Runtime;
     throw ParseError{"unknown theme '" + w + "' (want concept|reward|runtime)", at};
   }
-
-  // Per-segment repeat count for a ramped cadence. "late" front-loads the dwell toward
-  // the fast (larger-length) end -- the accelerate feel: it lingers as it speeds up.
   uint32_t ease_count(const Curve& c, int L)
   {
     if (c.ease == "late") {
@@ -214,51 +222,57 @@ namespace
       const double denom = std::pow(base, 5.0);
       return 1u + (denom > 0.0 ? static_cast<uint32_t>(std::pow(d, 6.0) / denom) : 0u);
     }
-    return 1u;  // linear / default: one pass per length
+    return 1u;
   }
-
   std::string fnum(float v) { return std::to_string(v); }
 
   // ---- render-block generation ----------------------------------------------
-  std::vector<RenderStmt> build_render_block(const std::vector<PhaseRender>& phases)
+  std::vector<RenderStmt> build_render_block(const std::vector<Layer>& layers, uint32_t phase_count,
+                                             bool any_word, bool any_sub, bool any_caption)
   {
     std::vector<RenderStmt> rb;
 
-    std::vector<const PhaseRender*> img;
-    bool any_word = false, any_sub = false, any_caption = false;
-    for (const auto& p : phases) {
-      if (p.has_image) img.push_back(&p);
-      any_word = any_word || p.has_word;
-      any_sub = any_sub || p.has_subtext;
-      any_caption = any_caption || p.has_caption;
+    // Group layers by register, preserving first-seen order.
+    std::vector<std::string> order;
+    std::map<std::string, std::vector<const Layer*>> groups;
+    for (const auto& l : layers) {
+      if (!groups.count(l.reg)) {
+        order.push_back(l.reg);
+      }
+      groups[l.reg].push_back(&l);
     }
 
-    if (!img.empty()) {
-      RenderStmt image;
-      image.op = RenderStmt::Op::Image;
-      image.image_reg = "current";
-      if (img.size() == 1 && phases.size() == 1) {
-        image.zoom = img[0]->image_zoom;
-        image.alpha = img[0]->image_alpha;
-        if (img[0]->image_anim) {
-          image.has_anim = true;
-          image.anim_gate = img[0]->image_anim_gate;  // empty => always animate
+    for (const auto& reg : order) {
+      const auto& g = groups[reg];
+      RenderStmt im;
+      im.op = RenderStmt::Op::Image;
+      im.image_reg = reg;
+      if (g.size() == 1 || phase_count == 1) {
+        // One layer (or a single-phase pattern): draw each directly. For a single phase
+        // with several layers sharing a reg we still take the first (degenerate).
+        const Layer* l = g.front();
+        im.zoom = l->zoom;
+        im.alpha = l->alpha;
+        if (l->anim) {
+          im.has_anim = true;
+          im.anim_gate = l->anim_gate;
         }
       } else {
-        std::string zexpr, aexpr;
-        bool any_alpha = false;
-        for (const auto* p : img) {
-          zexpr += p->id + ".active ? (" + p->image_zoom + ") : ";
-          const std::string a = p->image_alpha.empty() ? "1" : p->image_alpha;
-          if (!p->image_alpha.empty()) any_alpha = true;
-          aexpr += p->id + ".active ? (" + a + ") : ";
+        // Same register across phases: pick the active phase's params (slow_flash).
+        std::string z, a;
+        bool any_a = false;
+        for (const auto* l : g) {
+          z += l->phase_id + ".active ? (" + l->zoom + ") : ";
+          const std::string av = l->alpha.empty() ? "1" : l->alpha;
+          if (!l->alpha.empty()) any_a = true;
+          a += l->phase_id + ".active ? (" + av + ") : ";
         }
-        zexpr += "0";
-        aexpr += "1";
-        image.zoom = zexpr;
-        if (any_alpha) image.alpha = aexpr;
+        z += "0";
+        a += "1";
+        im.zoom = z;
+        if (any_a) im.alpha = a;
       }
-      rb.push_back(image);
+      rb.push_back(im);
     }
 
     RenderStmt spiral;
@@ -266,25 +280,25 @@ namespace
     rb.push_back(spiral);
 
     if (any_word) {
-      RenderStmt text;
-      text.op = RenderStmt::Op::Text;
-      text.origin = "0.75";
-      text.zoom = "0.75";
-      rb.push_back(text);
+      RenderStmt t;
+      t.op = RenderStmt::Op::Text;
+      t.origin = "0.75";
+      t.zoom = "0.75";
+      rb.push_back(t);
     }
     if (any_sub) {
-      RenderStmt sub;
-      sub.op = RenderStmt::Op::Subtext;
-      sub.alpha = "0.25";
-      sub.origin = "0.375";
-      rb.push_back(sub);
+      RenderStmt s;
+      s.op = RenderStmt::Op::Subtext;
+      s.alpha = "0.25";
+      s.origin = "0.375";
+      rb.push_back(s);
     }
     if (any_caption) {
-      RenderStmt cap;
-      cap.op = RenderStmt::Op::SmallText;
-      cap.alpha = "0.2";
-      cap.origin = "0.5";
-      rb.push_back(cap);
+      RenderStmt c;
+      c.op = RenderStmt::Op::SmallText;
+      c.alpha = "0.2";
+      c.origin = "0.5";
+      rb.push_back(c);
     }
     return rb;
   }
@@ -325,7 +339,8 @@ namespace
       rootKids.push_back(std::move(init));
       rootKids.push_back(std::move(body));
       out.root = group(Node::Type::One, std::move(rootKids));
-      out.render_block = build_render_block(_phases_render);
+      out.render_block =
+          build_render_block(_layers, _phase_count, _any_word, _any_sub, _any_caption);
     }
 
   private:
@@ -341,13 +356,12 @@ namespace
     Node parse_phase()
     {
       const std::size_t at = _c.pos();
-      const std::string kw = _c.word();  // phase | escalate | deepen
+      const std::string kw = _c.word();
       if (kw != "phase" && kw != "escalate" && kw != "deepen") {
         throw ParseError{"expected phase|escalate|deepen, got '" + kw + "'", at};
       }
       const std::string label = _c.string_lit();
       expect_word("for");
-      // `for auto` = length is intrinsic (a cadence ramp decides it); else `for N f`.
       uint32_t length = 0;  // 0 = auto
       if (_c.peek_word() == "auto") {
         _c.word();
@@ -356,30 +370,38 @@ namespace
         _c.expect('f');
       }
       _c.expect('{');
-
       if (_c.peek_word() == "description") {
         _c.word();
         _c.string_lit();
       }
-
       _curves.clear();
       while (_c.peek_word() == "curve") {
         parse_curve();
       }
 
-      PhaseRender pr;
-      pr.id = label;
+      ++_phase_count;
+      const std::size_t layer_start = _layers.size();
 
       std::vector<Node> streams;
       while (_c.peek_char() != '}') {
-        streams.push_back(parse_statement(length, label, pr));
+        streams.push_back(parse_statement(length, label));
       }
       _c.expect('}');
       if (streams.empty()) {
         throw ParseError{"phase '" + label + "' has no content", _c.pos()};
       }
 
-      _phases_render.push_back(pr);
+      // Per-layer opacity ladder (1, 1/2, 1/3, ...) when a phase composites several layers
+      // and the author didn't set explicit brightness -- super_parallel's stack.
+      const std::size_t n = _layers.size() - layer_start;
+      if (n > 1) {
+        for (std::size_t k = 0; k < n; ++k) {
+          Layer& l = _layers[layer_start + k];
+          if (l.alpha.empty()) {
+            l.alpha = "1 / " + std::to_string(k + 1);
+          }
+        }
+      }
 
       Node phase = group(Node::Type::Par, std::move(streams));
       phase.id = label;
@@ -403,11 +425,8 @@ namespace
       _curves[name] = cv;
     }
 
-    // Parse `[zoom <val>] [brightness <val>]` after a stream's cadence, where <val> is a
-    // number (per-flash unless `over section`), or a curve name (a progress expression
-    // over the phase). Fills the image's render exprs; clock_id is the flash/ramp node.
-    void parse_image_attrs(const std::string& clock_id, const std::string& phase_id,
-                           PhaseRender& pr)
+    // `zoom`/`brightness` <number [over section] | curve> on an image layer.
+    void parse_image_attrs(const std::string& clock_id, const std::string& phase_id, Layer& layer)
     {
       while (_c.peek_word() == "zoom" || _c.peek_word() == "brightness") {
         const std::string attr = _c.word();
@@ -429,28 +448,24 @@ namespace
             throw ParseError{"unknown curve '" + cname + "'", cat};
           }
           const Curve& cv = it->second;
-          // value of the curve at the phase's progress: A + (B-A) * phase.progress
           expr = "(" + fnum(cv.from) + " + " + fnum(cv.to - cv.from) + " * " + phase_id +
                  ".progress)";
         }
         if (attr == "zoom") {
-          pr.image_zoom = expr;
+          layer.zoom = expr;
         } else {
-          pr.image_alpha = expr;
+          layer.alpha = expr;
         }
       }
     }
 
-    // Parse an optional `anim [every Nth]` on an image stream. `anim` alone always draws
-    // the animated form (anim-as-subject, e.g. ANIMATION); `anim every 3rd` pulses a
-    // counter so only every Nth showing animates (the accent, e.g. SIMPLE).
-    void parse_anim(Node& leaf, Slot slot, PhaseRender& pr)
+    void parse_anim(Node& leaf, Slot slot, Layer& layer)
     {
       if (_c.peek_word() != "anim") {
         return;
       }
       _c.word();
-      pr.image_anim = true;
+      layer.anim = true;
       if (_c.peek_word() == "every") {
         _c.word();
         const uint32_t period = _c.uint_lit();
@@ -470,7 +485,7 @@ namespace
         anim.guard_reg = flag;
         leaf.effects.push_back(pulse);
         leaf.effects.push_back(anim);
-        pr.image_anim_gate = flag;
+        layer.anim_gate = flag;
       } else {
         Effect anim = effect(Effect::Kind::Anim);
         anim.slot = slot;
@@ -478,7 +493,39 @@ namespace
       }
     }
 
-    Node parse_statement(uint32_t phase_length, const std::string& phase_id, PhaseRender& pr)
+    // `chance p` / `chance(p)`: re-roll each fire; gate this effect on a 1-in-n hit.
+    // Returns the roll effect to prepend (kind None if no chance present).
+    Effect parse_chance(Effect& gated)
+    {
+      Effect none = effect(Effect::Kind::Set);
+      none.target = "";  // sentinel: empty target = "no roll"
+      if (_c.peek_word() != "chance") {
+        return none;
+      }
+      _c.word();
+      const bool paren = _c.accept('(');
+      const float p = _c.number_lit();
+      if (paren) {
+        _c.expect(')');
+      }
+      uint32_t n = p > 0.f ? static_cast<uint32_t>(std::lround(1.0 / double(p))) : 2u;
+      if (n < 2) {
+        n = 2;
+      }
+      const std::string creg = "_chance" + std::to_string(_node_counter++);
+      Effect roll = effect(Effect::Kind::Roll);
+      roll.target = creg;
+      roll.choices.push_back(1);
+      for (uint32_t k = 1; k < n; ++k) {
+        roll.choices.push_back(0);
+      }
+      gated.guard = Effect::Guard::Ge;
+      gated.guard_reg = creg;
+      gated.guard_value = 1;
+      return roll;
+    }
+
+    Node parse_statement(uint32_t phase_length, const std::string& phase_id)
     {
       const std::size_t at = _c.pos();
       const std::string kw = _c.word();
@@ -498,20 +545,19 @@ namespace
         is_image = true;
       } else if (kw == "word") {
         kind = Effect::Kind::Text;
-        pr.has_word = true;
+        _any_word = true;
       } else if (kw == "caption") {
         kind = Effect::Kind::SmallSub;
-        pr.has_caption = true;
+        _any_caption = true;
       } else if (kw == "subtext") {
         kind = Effect::Kind::Subtext;
-        pr.has_subtext = true;
+        _any_sub = true;
       } else {
         throw ParseError{"unknown statement '" + kw + "'", at};
       }
 
       const std::size_t theme_at = _c.pos();
       const Slot slot = theme_to_slot(_c.word(), theme_at);
-      expect_word("every");
 
       Effect e = effect(kind);
       e.slot = slot;
@@ -519,7 +565,17 @@ namespace
         e.force = true;
       }
 
-      // Cadence: a curve name (ramp) or an integer (fixed beat).
+      // Optional `-> REG` (image layer register; default "current").
+      std::string reg = "current";
+      if (is_image && _c.accept('-')) {
+        _c.expect('>');
+        reg = _c.word();
+        e.target = reg;
+      }
+
+      expect_word("every");
+
+      // ---- ramped cadence (image only) ----
       if (!_c.next_is_digit()) {
         const std::size_t cat = _c.pos();
         const std::string cname = _c.word();
@@ -532,17 +588,19 @@ namespace
         }
         std::string ramp_id;
         Node seq = build_ramp(it->second, e, slot, ramp_id);
-        pr.has_image = true;
-        if (pr.image_zoom.empty()) {
-          pr.image_zoom = "0.5 * " + ramp_id + ".progress";  // continuous over the ramp
-        }
-        parse_image_attrs(ramp_id, phase_id, pr);
+        Layer layer;
+        layer.phase_id = phase_id;
+        layer.reg = reg;
+        layer.zoom = "0.5 * " + ramp_id + ".progress";
+        parse_image_attrs(ramp_id, phase_id, layer);
         if (_c.peek_word() == "anim") {
           throw ParseError{"anim on a ramped cadence is not supported yet", _c.pos()};
         }
+        _layers.push_back(layer);
         return seq;
       }
 
+      // ---- fixed cadence ----
       const std::size_t every_at = _c.pos();
       const uint32_t every = _c.uint_lit();
       if (every == 0) {
@@ -554,27 +612,43 @@ namespace
                          every_at};
       }
 
-      Node leaf = action(every, {e});
-      std::string clock_id;
+      // `stagger K` (phase-offset this stream).
+      uint32_t stagger = 0;
+      bool has_stagger = false;
+      if (_c.peek_word() == "stagger") {
+        _c.word();
+        stagger = _c.uint_lit();
+        has_stagger = true;
+      }
+
+      // `chance p`: prepend a roll, guard the content effect.
+      std::vector<Effect> effs;
+      Effect roll = parse_chance(e);
+      if (!roll.target.empty()) {
+        effs.push_back(roll);
+      }
+      effs.push_back(e);
+
+      Node leaf = action(every, std::move(effs));
+      Layer layer;
+      layer.phase_id = phase_id;
+      layer.reg = reg;
       if (is_image) {
         leaf.image_slot = slot;
-        clock_id = "_img" + std::to_string(_node_counter++);
+        const std::string clock_id = "_img" + std::to_string(_node_counter++);
         leaf.id = clock_id;
-        pr.has_image = true;
-        if (pr.image_zoom.empty()) {
-          pr.image_zoom = "0.5 * " + clock_id + ".progress";
-        }
+        layer.zoom = "0.5 * " + clock_id + ".progress";
+        parse_image_attrs(clock_id, phase_id, layer);
+        parse_anim(leaf, slot, layer);
+        _layers.push_back(layer);
       }
-      if (is_image) {
-        parse_image_attrs(clock_id, phase_id, pr);
-        parse_anim(leaf, slot, pr);
+
+      Node node = (phase_length == 0) ? std::move(leaf)
+                                      : repeat(phase_length / every, std::move(leaf));
+      if (has_stagger) {
+        node = offset(stagger, std::move(node));
       }
-      // A fixed beat in an auto phase repeats via the enclosing Par; otherwise it fills the
-      // declared length with an explicit Repeat.
-      if (phase_length == 0) {
-        return leaf;
-      }
-      return repeat(phase_length / every, std::move(leaf));
+      return node;
     }
 
     Node build_ramp(const Curve& c, const Effect& eff, Slot slot, std::string& clock_id_out)
@@ -599,9 +673,13 @@ namespace
     }
 
     Cursor _c;
-    std::vector<PhaseRender> _phases_render;
+    std::vector<Layer> _layers;
     std::map<std::string, Curve> _curves;
     uint32_t _node_counter = 0;
+    uint32_t _phase_count = 0;
+    bool _any_word = false;
+    bool _any_sub = false;
+    bool _any_caption = false;
   };
 
   std::string locate(const std::string& src, std::size_t pos)

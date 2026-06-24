@@ -82,12 +82,15 @@ pattern simple {
 }
 )";
 
-  // 6 SUPER_PARALLEL -- denser image cuts + word (true 3-lane stagger not yet in grammar).
+  // 6 SUPER_PARALLEL -- three staggered image layers compositing at once (the stack),
+  // brightest in front, plus a runtime word.
   const char* kSuperParallel = R"(
 pattern super_parallel {
   phase "Interleave" for 1152f {
-    description "Dense concept cuts every 16 with a runtime word."
-    image concept every 16
+    description "Three image layers each cutting every 96, staggered by 32 frames, composited front-to-back; runtime word."
+    image concept -> a every 96 stagger 0
+    image concept -> b every 96 stagger 32
+    image reward -> c every 96 stagger 64
     word runtime every 32
     spiral rate 3
   }
@@ -107,12 +110,14 @@ pattern animation {
 }
 )";
 
-  // 8 SUPER_FAST -- rapid runtime cuts (bursts/FSM dropped per the spec review).
+  // 8 SUPER_FAST -- rapid cuts with random variety (the FSM replaced by chance/anim, per
+  // the spec review: same effect, not the same exact frames).
   const char* kSuperFast = R"(
 pattern super_fast {
   phase "Blitz" for 2048f {
-    description "Rapid runtime cuts every 8 frames."
-    image runtime every 8
+    description "Rapid runtime cuts every 8; every fourth animates; words flash about a quarter of the time; quick spiral."
+    image runtime every 8 anim every 4th
+    word concept every 8 chance 0.25
     spiral rate 3
   }
 }
