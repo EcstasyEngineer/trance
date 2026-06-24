@@ -4,14 +4,14 @@
 #include <string>
 
 // Parser for the authorable pattern DSL (Framing B surface language). It produces a
-// normalized pattern::Node tree plus the pattern's name / weight / render preset.
+// normalized pattern::Node tree plus the pattern's name / weight / render block.
 // The grammar is deliberately explicit and bounded -- no conditionals, loops bounded
 // by a literal count, no mutable variables -- so a session can carry a pattern as
 // readable text and the engine can validate it before playback.
 //
 // Grammar (EBNF-ish):
-//   pattern   = "pattern" ident "{" { header } node "}"
-//   header    = "weight" int | "render" ident
+//   pattern   = "pattern" ident "{" { header } [ render-block ] node "}"
+//   header    = "weight" int | "render" ident   // "render" ident = legacy preset name, retired
 //   node      = { prefix } primary
 //   prefix    = "id" string | "phase" string | "image" slot [ "as" string ]
 //   primary   = "every" int [ "@" int ] [ "divide" int ] [ ":" effects ]
@@ -38,6 +38,14 @@
 //   guard     = "when" reg [ ( "==" | ">=" ) int ]     // run the effect only if true
 //   slot      = "primary" | "alternate" | "runtime" | "random" | "reg" ident
 //   split     = "word" | "line" | "word_gaps" | "line_gaps" | "once"
+//   // The render block describes WHAT is drawn, as data (run each frame by render_eval).
+//   // Each statement's [expr] params are evaluated against registers + live cycler state
+//   // (addressed by node id, e.g. `slow_loop.active`, `ramp.progress`).
+//   render-block = "render" "{" render-stmt { render-stmt } "}"
+//   render-stmt  = ( "image" reg [ "anim" [ "if" expr ] [ "alt" expr ] ]
+//                  | "text" | "subtext" | "small_text" | "spiral" )
+//                  [ "when" expr ] [ ":" render-param { "," render-param } ]
+//   render-param = ( "alpha" | "origin" | "zoom" | "shadow_origin" | "shadow_zoom" ) ( number | expr )
 //   // [expr] (an arithmetic expression over + - * / ^ and the active generate var) may
 //   // appear anywhere an int is expected; it is floored in integer contexts.
 namespace pattern

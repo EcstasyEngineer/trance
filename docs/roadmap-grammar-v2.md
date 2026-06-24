@@ -160,7 +160,9 @@ overload/conditioning patterns that don't exist today).
 2. **Validation.** Dropping identity discards the render-equivalence harness — our
    current safety net. v2 needs a new validation story: visual review, "render-family"
    snapshot tests, or property tests over the modifiers. **This is the biggest gap.**
-3. **Render is still hand-written C++ per pattern** (`render_preset.cpp`). The deep
+3. **Render is still hand-written C++ per pattern** (`render_preset.cpp`).
+   *(Since built — render is now data: per-pattern `render { }` blocks run by
+   `render_eval.cpp`; `render_preset.cpp` is deleted. See `visuals.md`.)* The deep
    v2 question: can render *also* become data? **→ Resolved in the Codex notes below:**
    a small fixed library of *parameterised render shapes* (`focus`/`fade`/`stack`/
    `cut`) configured from the DSL — NOT a full render-expression language. This is the

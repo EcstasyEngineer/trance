@@ -114,9 +114,9 @@ copy end -> start                   # copy one image register to another
 ```
 
 Image effects write image registers (`current`, `end`, `backup`, or any name you
-choose). The render preset reads them — match your register names to what the
-preset expects (the built-in presets in `render_preset.cpp` read `current` and
-preset-specific names).
+choose). The render block reads them — match the register names your effects write
+to the ones your `render { }` statements draw (the built-ins mostly draw
+`current`, plus pattern-specific names).
 
 ## `when` — the only conditional
 
@@ -154,16 +154,27 @@ generate L from 56 to 48 {
 }
 ```
 
-## Selecting the render preset
+## The `render { }` block — what gets drawn
 
-`render NAME` (a pattern header) names the render preset that turns your
-registers into pixels. Available presets are the eight built-in ones
-(`accelerate`, `slow_flash`, `sub_text`, `flash_text`, `simple`,
-`super_parallel`, `animation`, `super_fast` — see `render_preset.cpp`). If you
-omit `render`, or name an unknown preset, a single-image default is used so the
-pattern always renders something. Pick the preset whose register expectations
-match the registers your effects write (`simple` is the easiest starting point —
-it draws one `current` image plus spiral/text/subtext).
+A `render { }` block turns your registers and live timing state into pixels. It is
+a list of draw statements, each an op (`image`, `text`, `subtext`, `small_text`,
+`spiral`) with an optional `when [cond]` guard and `[expr]` params
+(`alpha`, `origin`, `zoom`, `shadow_origin`, `shadow_zoom`). The expressions are
+evaluated every frame against your registers and cycler state — which you address
+by node `id`, e.g. `slow_loop.active`, `ramp.progress`, `slow_repeat.index`:
+
+```text
+render {
+  image current : alpha 1, origin 0, zoom [0.375 * image.progress]
+  spiral
+  text when [text_on] : origin 0.6, zoom 0.6
+}
+```
+
+If you omit a `render { }` block entirely, a single-image default is used
+(`current` image + spiral + text) so the pattern always renders something — start
+there and add statements as you go. (The old `render NAME` header that named a
+built-in preset is retired and no longer does anything; use a `render { }` block.)
 
 ## Worked reference
 
