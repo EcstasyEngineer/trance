@@ -22,8 +22,9 @@ namespace patternv2
   {
     bool ok = false;
     std::string name;
-    pattern::Node root;  // lowered v1 AST, ready for pattern::compile
-    std::string error;   // "line:col: message" on failure
+    pattern::Node root;                            // lowered v1 AST, ready for pattern::compile
+    std::vector<pattern::RenderStmt> render_block;  // the generated "what is drawn" (zoom etc.)
+    std::string error;                             // "line:col: message" on failure
   };
 
   ParseResult parse(const std::string& source);

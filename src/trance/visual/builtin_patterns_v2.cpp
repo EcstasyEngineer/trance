@@ -34,8 +34,8 @@ pattern slow_flash repeat 2 {
     spiral rate 2
   }
   phase "Fast" for 512f {
-    description "Fast reward flashes every 8; reward words; quicker spiral."
-    image reward every 8
+    description "Fast reward flashes every 8; reward words; quicker spiral. The image zoom sweeps across the WHOLE fast section (section clock) instead of resetting per flash."
+    image reward every 8 zoom 0.5 over section
     word reward every 16
     spiral rate 4
   }

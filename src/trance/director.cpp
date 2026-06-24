@@ -97,7 +97,8 @@ void Director::build_builtin_patterns()
       pattern::Parsed parsed;
       parsed.name = std::move(v2.name);
       parsed.weight = 1;
-      parsed.root = std::move(v2.root);  // render_block empty -> default_render_block()
+      parsed.root = std::move(v2.root);
+      parsed.render_block = std::move(v2.render_block);  // per-flash zoom etc.
       _builtin_compiled.emplace(t, std::move(parsed));
       continue;
     }
