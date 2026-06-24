@@ -21,7 +21,7 @@ pattern accelerate {
   escalate "Ramp" for auto {
     description "Cuts accelerate from every 56 to every 12 frames; the image zoom intensifies across the whole ramp; quick spiral."
     curve pace from 56 to 12 ease late
-    image concept every pace
+    image concept every pace zoom 0.5
     spiral rate 3
   }
 }
@@ -32,7 +32,7 @@ pattern accelerate {
 pattern slow_flash repeat 2 {
   deepen "Slow" for 1024f {
     description "Slow concept flashes every 64; gentle spiral; caption underneath."
-    image concept every 64
+    image concept every 64 zoom 0.5
     caption concept every 64
     spiral rate 2
   }
@@ -52,21 +52,22 @@ pattern sub_text {
   phase "Main" for auto {
     description "A runtime image (every third animates); a reward subtext whose cadence slows from every 12 to every 48 across the section; quick spiral."
     curve subrate from 12 to 48
-    image runtime every 48 anim every 3rd
+    image runtime every 48 zoom 0.5 anim every 3rd
     subtext reward every subrate
     spiral rate 4
   }
 }
 )";
 
-  // 4 FLASH_TEXT -- the crossfade: each beat a reward image dissolves in over a concept
-  // image (a dissolve is just opacity + overlap -- the `over` layer's brightness ramps
-  // 0->1 across its flash while it overlaps the base). Co-timed word + caption.
+  // 4 FLASH_TEXT -- a per-flash pulse: each beat the reward image zooms 0->100% while its
+  // brightness fades 0->100->0 (a triangle). Composed from explicit modifiers (zoom +
+  // `fade inout`), no baked construct. (A continuous A->B dissolve would need a copy/prev
+  // handoff; this is the per-flash pulse spec instead.)
   const char* kFlashText = R"(
 pattern flash_text {
   phase "Main" for 1024f {
-    description "Successive reward images dissolve into one another -- a continuous crossfade (each image hands off to the next); reward word; caption; spiral."
-    crossfade reward every 64
+    description "Each beat a reward image zooms in while its brightness fades up then down (a pulse); reward word; caption; spiral."
+    image reward every 64 zoom 1 brightness 1 fade inout
     word reward every 64
     caption concept every 32
     spiral rate 2
@@ -79,7 +80,7 @@ pattern flash_text {
 pattern simple {
   phase "Main" for 2048f {
     description "One steady runtime image every 64; every third showing animates (the accent); caption; spiral."
-    image runtime every 64 anim every 3rd
+    image runtime every 64 zoom 0.5 anim every 3rd
     caption concept every 32
     spiral rate 3
   }
@@ -92,9 +93,9 @@ pattern simple {
 pattern super_parallel {
   phase "Interleave" for 1152f {
     description "Three image layers each cutting every 96, staggered by 32 frames, composited front-to-back; runtime word."
-    image concept -> a every 96 stagger 0
-    image concept -> b every 96 stagger 32
-    image reward -> c every 96 stagger 64
+    image concept -> a every 96 stagger 0 zoom 0.5
+    image concept -> b every 96 stagger 32 zoom 0.5
+    image reward -> c every 96 stagger 64 zoom 0.5
     word runtime every 32
     spiral rate 3
   }
@@ -107,7 +108,7 @@ pattern super_parallel {
 pattern animation {
   phase "Main" for 1024f {
     description "The concept image plays as animation throughout (anim is the subject); runtime caption; spiral."
-    image concept every 32 anim
+    image concept every 32 zoom 0.5 anim
     caption runtime every 32
     spiral rate 3
   }
@@ -120,7 +121,7 @@ pattern animation {
 pattern super_fast {
   phase "Blitz" for 2048f {
     description "Rapid runtime cuts every 8; every fourth animates; words flash about a quarter of the time; quick spiral."
-    image runtime every 8 anim every 4th
+    image runtime every 8 zoom 0.5 anim every 4th
     word concept every 8 chance 0.25
     spiral rate 3
   }

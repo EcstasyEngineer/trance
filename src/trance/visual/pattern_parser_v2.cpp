@@ -456,15 +456,17 @@ namespace
           const float v = _c.number_lit();
           // `fade in` (default) ramps 0->V across the clock; `fade out` ramps V->0 -- so a
           // pair of layers (one each way) genuinely cross-fade rather than sawtooth.
-          bool fade_out = false;
+          int fade = 0;  // 0 = in (0->V), 1 = out (V->0), 2 = inout (0->V->0 triangle)
           if (_c.peek_word() == "fade") {
             _c.word();
             const std::size_t dat = _c.pos();
             const std::string dir = _c.word();
             if (dir == "out") {
-              fade_out = true;
+              fade = 1;
+            } else if (dir == "inout") {
+              fade = 2;
             } else if (dir != "in") {
-              throw ParseError{"expected 'fade in' or 'fade out'", dat};
+              throw ParseError{"expected 'fade in', 'fade out', or 'fade inout'", dat};
             }
           }
           std::string clock = clock_id;
@@ -473,8 +475,13 @@ namespace
             expect_word("section");
             clock = phase_id;
           }
-          expr = fade_out ? (fnum(v) + " * (1 - " + clock + ".progress)")
-                          : (fnum(v) + " * " + clock + ".progress");
+          if (fade == 2) {
+            expr = fnum(v) + " * (1 - abs(2 * " + clock + ".progress - 1))";
+          } else if (fade == 1) {
+            expr = fnum(v) + " * (1 - " + clock + ".progress)";
+          } else {
+            expr = fnum(v) + " * " + clock + ".progress";
+          }
         } else {
           const std::size_t cat = _c.pos();
           const std::string cname = _c.word();
@@ -573,49 +580,6 @@ namespace
         return action(1, {e});
       }
 
-      // `crossfade THEME every N` -- a CONTINUOUS crossfade: each beat the current image is
-      // handed to `prev` (copy) before a new one is pulled, then prev fades out while
-      // current fades in. Because prev is the previous current, successive images dissolve
-      // into each other with no hard cut at the beat boundary (the v1 flash_text handoff).
-      if (kw == "crossfade") {
-        const Slot xslot = parse_theme();
-        expect_word("every");
-        const std::size_t xat = _c.pos();
-        const uint32_t every = _c.uint_lit();
-        if (every == 0) {
-          throw ParseError{"'every 0' is not a valid beat", xat};
-        }
-        if (phase_length != 0 && phase_length % every != 0) {
-          throw ParseError{"beat " + std::to_string(every) + " does not divide phase length " +
-                               std::to_string(phase_length),
-                           xat};
-        }
-        Effect cp = effect(Effect::Kind::Copy);
-        cp.src = "current";
-        cp.target = "prev";
-        Effect im = effect(Effect::Kind::Image);
-        im.slot = xslot;
-        im.target = "current";
-        Node leaf = action(every, {cp, im});
-        leaf.image_slot = xslot;
-        const std::string clock = "_xf" + std::to_string(_node_counter++);
-        leaf.id = clock;
-        Layer prev;
-        prev.phase_id = phase_id;
-        prev.reg = "prev";
-        prev.zoom = "0.5 * " + clock + ".progress";
-        prev.alpha = "1 - " + clock + ".progress";  // fade out
-        Layer cur;
-        cur.phase_id = phase_id;
-        cur.reg = "current";
-        cur.zoom = "0.5 * " + clock + ".progress";
-        cur.alpha = clock + ".progress";  // fade in
-        _layers.push_back(prev);
-        _layers.push_back(cur);
-        return (phase_length == 0) ? std::move(leaf)
-                                   : repeat(phase_length / every, std::move(leaf));
-      }
-
       Effect::Kind kind;
       bool is_image = false;
       if (kw == "image") {
@@ -666,7 +630,6 @@ namespace
           Layer layer;
           layer.phase_id = phase_id;
           layer.reg = reg;
-          layer.zoom = "0.5 * " + ramp_id + ".progress";
           parse_image_attrs(ramp_id, phase_id, layer);
           if (_c.peek_word() == "anim") {
             throw ParseError{"anim on a ramped cadence is not supported yet", _c.pos()};
@@ -715,7 +678,6 @@ namespace
         leaf.image_slot = slot;
         const std::string clock_id = "_img" + std::to_string(_node_counter++);
         leaf.id = clock_id;
-        layer.zoom = "0.5 * " + clock_id + ".progress";
         parse_image_attrs(clock_id, phase_id, layer);
         parse_anim(leaf, slot, layer);
         _layers.push_back(layer);
