@@ -99,11 +99,6 @@ public:
   uint32_t debug_spiral_width() const;
   const std::string& debug_font() const;
   const std::string& debug_subfont() const;
-  // Theme slot that fed the most recently pulled image: false = primary (slot[1]),
-  // true = alternate (slot[2]). Persists across frames. has_image() is false until
-  // the first image is pulled.
-  bool debug_has_image() const;
-  bool debug_image_alternate() const;
 
 private:
   float zoom_intensity(float zoom_origin, float zoom) const;
@@ -127,10 +122,6 @@ private:
 
   // Alpha of each image layer drawn during the current frame (debug overlay).
   mutable std::vector<float> _debug_layers;
-  // Theme slot of the most recently pulled image (debug overlay). Persists across
-  // frames; see debug_image_alternate().
-  mutable bool _debug_has_image = false;
-  mutable bool _debug_last_image_alternate = false;
 };
 
 #endif

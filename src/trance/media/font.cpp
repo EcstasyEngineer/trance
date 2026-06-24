@@ -142,7 +142,6 @@ FontCache::FontCache(const std::string& root_path, const trance_pb::Session& ses
 , _font_cache_size{font_cache_size}
 {
   // Preload some fonts.
-  std::cout << "\npreloading fonts";
   static const std::string preload_chars =
       "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-!?():;,.";
 
@@ -154,14 +153,12 @@ FontCache::FontCache(const std::string& root_path, const trance_pb::Session& ses
   uint32_t i = 0;
   for (const auto& font_path : fonts) {
     const auto& font = get_font(font_path);
-    std::cout << ".";
     font.get_vertices(preload_chars, true);
     font.get_vertices(preload_chars, false);
     if (++i >= font_cache_size) {
       return;
     }
   }
-  std::cout << std::endl;
 }
 
 const Font& FontCache::get_font(const std::string& font_path) const

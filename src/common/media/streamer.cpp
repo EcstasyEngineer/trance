@@ -336,8 +336,6 @@ bool is_gif_animated(const std::string& path)
 
 std::unique_ptr<Streamer> load_animation(const std::string& path)
 {
-  // Leave a breadcrumb so a hard crash inside giflib/libvpx names the file.
-  note_media_load(path);
   if (ext_is(path, "gif")) {
     return std::unique_ptr<Streamer>{new GifStreamer(path)};
   }
