@@ -409,6 +409,27 @@ namespace
       return phase;
     }
 
+    // A theme reference: `theme N` (index), or the aliases concept/reward/runtime.
+    // theme 0 = concept = primary, theme 1 = reward = alternate. theme N>=2 needs the
+    // ThemeBank runtime extension (3+ simultaneous live themes) and is rejected here --
+    // the grammar surface is ready; the runtime is its own project (spec §7 Extension #1).
+    Slot parse_theme()
+    {
+      const std::size_t at = _c.pos();
+      const std::string w = _c.word();
+      if (w == "theme") {
+        const std::size_t nat = _c.pos();
+        const uint32_t n = _c.uint_lit();
+        if (n == 0) return Slot::Primary;
+        if (n == 1) return Slot::Alternate;
+        throw ParseError{"theme " + std::to_string(n) +
+                             ": 3+ simultaneous themes need the ThemeBank runtime extension "
+                             "(only theme 0/1 are supported today)",
+                         nat};
+      }
+      return theme_to_slot(w, at);
+    }
+
     void parse_curve()
     {
       expect_word("curve");
@@ -556,8 +577,7 @@ namespace
         throw ParseError{"unknown statement '" + kw + "'", at};
       }
 
-      const std::size_t theme_at = _c.pos();
-      const Slot slot = theme_to_slot(_c.word(), theme_at);
+      const Slot slot = parse_theme();
 
       Effect e = effect(kind);
       e.slot = slot;
