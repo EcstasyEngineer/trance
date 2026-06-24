@@ -9,25 +9,36 @@ namespace
 {
   using pattern::Effect;
   using pattern::Node;
+  using pattern::RenderStmt;
   using pattern::Slot;
 
-  // A parse error carrying a source position, mapped to "line:col: message" by parse().
   struct ParseError
   {
     std::string message;
     std::size_t pos;
   };
 
+  // What one phase needs in the generated render block ("what is drawn"). Filled as the
+  // phase's streams parse; the whole set becomes a single render block in parse_pattern.
+  struct PhaseRender
+  {
+    std::string id;                 // phase node-id (= label); also the section clock
+    bool has_image = false;
+    std::string img_flash_id;       // image leaf node-id (the flash clock: 0..1 each showing)
+    float zoom = 0.5f;              // zoom amount (matches the originals' ~0.5)
+    bool zoom_section = false;      // anchor zoom to the phase clock, not the flash clock
+    bool has_word = false;
+    bool has_subtext = false;
+    bool has_caption = false;
+  };
+
   // ---- tokenizer ------------------------------------------------------------
-  // Minimal hand cursor over the source: skips whitespace and `# ... EOL` comments,
-  // and exposes ident / string / number / punctuation lexemes on demand.
   class Cursor
   {
   public:
     explicit Cursor(const std::string& src) : _src(src) {}
 
     std::size_t pos() const { return _i; }
-    bool eof() { skip(); return _i >= _src.size(); }
 
     char peek_char()
     {
@@ -35,7 +46,6 @@ namespace
       return _i < _src.size() ? _src[_i] : '\0';
     }
 
-    // A bare word: identifier (a-z A-Z 0-9 _) -- keywords and theme names are words.
     std::string word()
     {
       skip();
@@ -49,7 +59,6 @@ namespace
       return _src.substr(start, _i - start);
     }
 
-    // A double-quoted string literal (no escapes needed for this grammar).
     std::string string_lit()
     {
       skip();
@@ -64,7 +73,7 @@ namespace
         throw ParseError{"unterminated string", start};
       }
       std::string s = _src.substr(start, _i - start);
-      ++_i;  // closing quote
+      ++_i;
       return s;
     }
 
@@ -104,7 +113,6 @@ namespace
       ++_i;
     }
 
-    // Peek the next word without consuming (for keyword dispatch); "" at EOF/non-word.
     std::string peek_word()
     {
       skip();
@@ -136,7 +144,7 @@ namespace
     std::size_t _i = 0;
   };
 
-  // ---- node construction helpers -------------------------------------------
+  // ---- node helpers ---------------------------------------------------------
   Node action(uint32_t length, std::vector<Effect> effects = {})
   {
     Node n;
@@ -163,6 +171,13 @@ namespace
     return n;
   }
 
+  Effect effect(Effect::Kind kind)
+  {
+    Effect e;
+    e.kind = kind;
+    return e;
+  }
+
   Slot theme_to_slot(const std::string& w, std::size_t at)
   {
     if (w == "concept") return Slot::Primary;
@@ -171,7 +186,76 @@ namespace
     throw ParseError{"unknown theme '" + w + "' (want concept|reward|runtime)", at};
   }
 
-  // ---- the parser -----------------------------------------------------------
+  // ---- render-block generation ----------------------------------------------
+  // The image zoom is the whole point: per-flash (sawtooth, `<flash>.progress`) by
+  // default -- restoring the punch the v1 visuals had -- or per-section (continuous,
+  // `<phase>.progress`) when the author wrote `zoom Z over section`.
+  std::string zoom_term(const PhaseRender& p)
+  {
+    const std::string clock = p.zoom_section ? p.id : p.img_flash_id;
+    return std::to_string(p.zoom) + " * " + clock + ".progress";
+  }
+
+  std::vector<RenderStmt> build_render_block(const std::vector<PhaseRender>& phases)
+  {
+    std::vector<RenderStmt> rb;
+
+    std::vector<const PhaseRender*> img;
+    bool any_word = false, any_sub = false, any_caption = false;
+    for (const auto& p : phases) {
+      if (p.has_image) img.push_back(&p);
+      any_word = any_word || p.has_word;
+      any_sub = any_sub || p.has_subtext;
+      any_caption = any_caption || p.has_caption;
+    }
+
+    if (!img.empty()) {
+      RenderStmt image;
+      image.op = RenderStmt::Op::Image;
+      image.image_reg = "current";
+      if (img.size() == 1 && phases.size() == 1) {
+        image.zoom = zoom_term(*img[0]);
+      } else {
+        // Per-phase: pick the active section's zoom (the v1 visuals do the same ternary).
+        std::string expr;
+        for (const auto* p : img) {
+          expr += p->id + ".active ? (" + zoom_term(*p) + ") : ";
+        }
+        expr += "0";
+        image.zoom = expr;
+      }
+      rb.push_back(image);
+    }
+
+    RenderStmt spiral;
+    spiral.op = RenderStmt::Op::Spiral;
+    rb.push_back(spiral);
+
+    if (any_word) {
+      RenderStmt text;
+      text.op = RenderStmt::Op::Text;
+      text.origin = "0.75";
+      text.zoom = "0.75";
+      rb.push_back(text);
+    }
+    if (any_sub) {
+      RenderStmt sub;
+      sub.op = RenderStmt::Op::Subtext;
+      sub.alpha = "0.25";
+      sub.origin = "0.375";
+      rb.push_back(sub);
+    }
+    if (any_caption) {
+      RenderStmt cap;
+      cap.op = RenderStmt::Op::SmallText;
+      cap.alpha = "0.2";
+      cap.origin = "0.5";
+      rb.push_back(cap);
+    }
+    return rb;
+  }
+
+  // ---- parser ---------------------------------------------------------------
   class Parser
   {
   public:
@@ -196,7 +280,6 @@ namespace
         throw ParseError{"a pattern needs at least one phase", _c.pos()};
       }
 
-      // pattern { phases } -> One{ init , [repeat] Sequence{ phases } }
       Node body = phases.size() == 1 ? std::move(phases[0])
                                      : group(Node::Type::Seq, std::move(phases));
       if (reps > 1) {
@@ -208,16 +291,10 @@ namespace
       rootKids.push_back(std::move(init));
       rootKids.push_back(std::move(body));
       out.root = group(Node::Type::One, std::move(rootKids));
+      out.render_block = build_render_block(_phases_render);
     }
 
   private:
-    static Effect effect(Effect::Kind kind)
-    {
-      Effect e;
-      e.kind = kind;
-      return e;
-    }
-
     void expect_word(const char* w)
     {
       const std::size_t at = _c.pos();
@@ -237,34 +314,35 @@ namespace
       const std::string label = _c.string_lit();
       expect_word("for");
       const uint32_t length = _c.uint_lit();
-      _c.expect('f');  // frames unit
+      _c.expect('f');
       _c.expect('{');
 
       if (_c.peek_word() == "description") {
         _c.word();
-        _c.string_lit();  // metadata only; not lowered
+        _c.string_lit();
       }
+
+      PhaseRender pr;
+      pr.id = label;
 
       std::vector<Node> streams;
       while (_c.peek_char() != '}') {
-        streams.push_back(parse_statement(length));
+        streams.push_back(parse_statement(length, pr));
       }
       _c.expect('}');
       if (streams.empty()) {
         throw ParseError{"phase '" + label + "' has no content", _c.pos()};
       }
 
-      // Streams are parallel-by-default; the phase node carries the section label.
+      _phases_render.push_back(pr);
+
       Node phase = group(Node::Type::Par, std::move(streams));
       phase.id = label;
       phase.phase = label;
       return phase;
     }
 
-    // A content stream `T theme every M` -> Repeat(length/M, Action(M, effect)); the
-    // image case also annotates the leaf's image_slot so it surfaces in the overlay.
-    // `spiral rate K` -> Action(1, SpiralRot).
-    Node parse_statement(uint32_t phase_length)
+    Node parse_statement(uint32_t phase_length, PhaseRender& pr)
     {
       const std::size_t at = _c.pos();
       const std::string kw = _c.word();
@@ -284,10 +362,13 @@ namespace
         is_image = true;
       } else if (kw == "word") {
         kind = Effect::Kind::Text;
+        pr.has_word = true;
       } else if (kw == "caption") {
         kind = Effect::Kind::SmallSub;
+        pr.has_caption = true;
       } else if (kw == "subtext") {
         kind = Effect::Kind::Subtext;
+        pr.has_subtext = true;
       } else {
         throw ParseError{"unknown statement '" + kw + "'", at};
       }
@@ -306,6 +387,17 @@ namespace
                          every_at};
       }
 
+      // Optional image zoom: `zoom Z` (per-flash) or `zoom Z over section` (per-section).
+      if (is_image && _c.peek_word() == "zoom") {
+        _c.word();
+        pr.zoom = _c.number_lit();
+        if (_c.peek_word() == "over") {
+          _c.word();
+          expect_word("section");
+          pr.zoom_section = true;
+        }
+      }
+
       Effect e = effect(kind);
       e.slot = slot;
       if (kind == Effect::Kind::SmallSub) {
@@ -314,14 +406,18 @@ namespace
       Node leaf = action(every, {e});
       if (is_image) {
         leaf.image_slot = slot;
+        leaf.id = "_img" + std::to_string(_img_counter++);
+        pr.has_image = true;
+        pr.img_flash_id = leaf.id;
       }
       return repeat(phase_length / every, std::move(leaf));
     }
 
     Cursor _c;
+    std::vector<PhaseRender> _phases_render;
+    uint32_t _img_counter = 0;
   };
 
-  // Map a byte offset to "line:col" for error reporting.
   std::string locate(const std::string& src, std::size_t pos)
   {
     std::size_t line = 1, col = 1;
