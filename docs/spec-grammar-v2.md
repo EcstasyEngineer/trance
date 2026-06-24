@@ -440,10 +440,17 @@ otherwise.
 `Slot` is hard-coded `{None, Primary, Alternate, Runtime}` (`pattern_ast.h:20`) and every
 image/text/anim API param is a `bool alternate`. Conditioning across multiple distinct
 concept-themes needs: `Slot` → a `ThemeRef`/index; a ThemeBank + loader redesign holding
-K live themes; and widening every `bool alternate` signature to an index. The grammar
-accepts `theme N` syntactically and the compiler rejects N≥2 *additional* live themes
-until this lands. `pair` ships at the two-theme floor today. This is a runtime project,
-not parser work.
+K live themes; and widening every `bool alternate` signature to an index. **Status
+(implemented):** the v2 parser accepts `theme N` (with `concept`/`reward` as aliases for
+`theme 0`/`theme 1`), maps 0→primary and 1→alternate, and **hard-errors on `theme N≥2`**
+with a message pointing at this extension — so the surface and the compile-time guard are
+done. Associative conditioning therefore ships *today at the two-theme floor* (`image theme 0`
+paired with `word theme 1` on the same beat). **Still outstanding (the runtime project):**
+`Slot` → a `ThemeRef`/index, the ThemeBank's fixed 4-slot rotating queue (`_active_themes[4]`:
+prev/primary/alternate/next) generalized to hold K *displayable* themes, the load/swap core
+(`advance_theme`/`do_swap`/`async_update`/cache sizing) reworked for K, and `get_image(bool)`
+→ `get_image(index)`. That is its own go/no-go, deliberately deferred so it can't destabilise
+the working build.
 
 **Extension #2 — entrainment lock (`every locked`, `spiral locked`, `beat.phase`).**
 There is no audio/tempo symbol under `src/trance/visual`; the entrainment generator is a
