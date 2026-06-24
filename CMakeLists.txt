@@ -271,3 +271,26 @@ if(TRANCE_BUILD_CREATOR)
     target_link_libraries(creator PRIVATE ws2_32 winmm shlwapi)
   endif()
 endif()
+
+# ---------------------------------------------------------------------------
+# Headless tests (no SFML/protobuf). Default OFF; enable with -DTRANCE_BUILD_TESTS=ON
+# and run via `ctest`. These link only the parser/compiler/cyclers, so they build
+# with a bare C++17 compiler and need none of the vcpkg media dependencies.
+# ---------------------------------------------------------------------------
+option(TRANCE_BUILD_TESTS "Build headless unit tests" OFF)
+if(TRANCE_BUILD_TESTS)
+  enable_testing()
+
+  # Golden schedule-signature test: freezes the cycler-tree shape each of the 8
+  # built-ins compiles to (docs/spec-grammar-v2.md §7 "blocking predecessor"), so a
+  # v2 re-port -- or any accidental parser/compiler change -- is caught structurally.
+  add_executable(golden_signature_test
+    src/trance/visual/builtin_patterns.cpp
+    src/trance/visual/cyclers.cpp
+    src/trance/visual/pattern_compiler.cpp
+    src/trance/visual/pattern_parser.cpp
+    src/trance/visual/golden_signature_test.cpp)
+  target_include_directories(golden_signature_test PRIVATE src/)
+  target_link_libraries(golden_signature_test PRIVATE trance_options)
+  add_test(NAME golden_signature_test COMMAND golden_signature_test)
+endif()
