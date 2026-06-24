@@ -196,10 +196,12 @@ add_executable(trance
   src/trance/theme_bank.cpp
   src/trance/visual/api.cpp
   src/trance/visual/builtin_patterns.cpp
+  src/trance/visual/builtin_patterns_v2.cpp
   src/trance/visual/compiled_visual.cpp
   src/trance/visual/cyclers.cpp
   src/trance/visual/pattern_compiler.cpp
   src/trance/visual/pattern_parser.cpp
+  src/trance/visual/pattern_parser_v2.cpp
   src/trance/visual/render_eval.cpp
   src/trance/visual/visual.cpp)
 
