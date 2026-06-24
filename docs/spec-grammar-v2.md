@@ -429,6 +429,17 @@ it mints the inner `Repeat 2` node (so its `.index` is referenceable), emits the
 It is the one named render shape in the grammar precisely because no combination of
 `pair`/`anim`/curve reproduces a `copy`-based handoff.
 
+**Status (implemented):** `crossfade THEME every N` is in the v2 parser. Each beat the leaf
+fires `copy current -> prev` then pulls a new `current`, and the render draws two layers on
+one flash clock: `prev` at `alpha [1 - .progress]` (fade **out**) and `current` at
+`alpha [.progress]` (fade **in**). Because `prev` is the previous `current`, successive images
+dissolve into one another with no hard cut at the beat boundary — the v1 handoff. A first,
+simpler attempt (`image -> over ... brightness 1`) was only a per-flash fade-*in* over a static
+base — a sawtooth, not a crossfade; fixed by adding a per-flash fade **direction**
+(`brightness V fade in|out`, ramping `V*.progress` vs `V*(1-.progress)`) and then the
+`copy`-based handoff above. `fade in`/`fade out` is now a general per-flash modifier on
+`zoom`/`brightness`.
+
 ---
 
 ## 7. Required runtime extensions

@@ -65,9 +65,8 @@ pattern sub_text {
   const char* kFlashText = R"(
 pattern flash_text {
   phase "Main" for 1024f {
-    description "Each beat a reward image dissolves in over a concept image (crossfade); reward word; caption; spiral."
-    image concept -> base every 64
-    image reward -> over every 64 brightness 1
+    description "Successive reward images dissolve into one another -- a continuous crossfade (each image hands off to the next); reward word; caption; spiral."
+    crossfade reward every 64
     word reward every 64
     caption concept every 32
     spiral rate 2
