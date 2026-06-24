@@ -85,13 +85,16 @@ attribute — those intents lower to minted state: `.lap` → the wrapping `Repe
 params are **values, never predicates** — the only conditionals in the language live in
 a `when` guard (register-vs-literal) or inside a paint block.
 
-**Two clocks (normative).** Every time-varying number is anchored to one of two clocks: the
-**flash clock** (one image's 0→100% on-screen lifetime — the owning stream node's `.progress`)
-or the **pattern clock** (the whole pattern's 0→100% — `root.progress`); a phase's `.progress`
-sits between them. "Zoom in over each flash" anchors to the flash clock; "slowly brighten across
-the whole pattern" anchors to the pattern clock. This is the single idea behind both per-image
-effects and whole-pattern effects — the same `curve`, just a different clock. (This is what the
-review meant by "recursing curves to lower levels.")
+**Clocks (normative).** Every time-varying number is anchored to one of three clocks: the
+**flash clock** (one image's 0→100% on-screen lifetime — the owning stream node's `.progress`);
+the **section clock** (a phase's 0→100% — `<phase>.progress`); or the **pattern clock** (the whole
+pattern's 0→100% — `root.progress`). "Zoom in over each flash" rides the flash clock (a sawtooth
+that resets each showing); "zoom in across the whole fast section" rides the section clock (one
+continuous sweep over the phase); "slowly brighten across the whole pattern" rides the pattern
+clock. Same effect, different clock — the single idea behind per-flash, per-section, and
+whole-pattern motion (the review's "recursing curves to lower levels"). **Implemented for zoom:**
+`zoom Z` rides the flash clock, `zoom Z over section` rides the section clock; `over pattern` is
+the natural next extension.
 
 ---
 
@@ -214,8 +217,13 @@ Every effect lives at one of three places; keeping them straight is most of the 
 
 - **Frame ops — what happens DURING one flash** (anchored to the flash clock):
   - **zoom** — the built-in zoom action (`origin` → `zoom`): an image grows/shifts across its
-    flash. **PRESERVED from today's engine** (`render_image`'s `zoom_origin`/`zoom`); written
-    `zoom V` / `origin V`. This is the signature motion and must not be lost in a rewrite.
+    flash. **PRESERVED from today's engine** (`render_image`'s `zoom_origin`/`zoom`); the
+    signature motion, not to be lost in a rewrite. **Implemented** (v2 parser): `zoom Z` rides the
+    **flash clock** (sawtooth, `Z * <flash>.progress` — resets each showing, the punchy default);
+    **`zoom Z over section`** re-anchors to the **section clock** so the zoom sweeps continuously
+    across the whole phase (`Z * <phase>.progress`) instead of resetting per flash. Used on
+    `slow_flash`'s fast phase: the image zooms once across the entire fast section rather than
+    sawtoothing per cut. (Same effect, different clock — §2.)
   - **fade / opacity** — `brightness` (alpha), constant or ramping across the flash.
   - *(future whole-pattern frame ops, on the pattern clock: fluid distort, border blur.)*
 - **Border ops — how one flash gives way to the next:**
