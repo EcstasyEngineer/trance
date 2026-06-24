@@ -37,6 +37,8 @@ namespace
     bool has_image = false;
     std::string image_zoom;   // full [expr] text, or empty
     std::string image_alpha;  // full [expr] text, or empty
+    bool image_anim = false;          // draw the image's animated form
+    std::string image_anim_gate;      // register gating the anim (empty = always)
     bool has_word = false;
     bool has_subtext = false;
     bool has_caption = false;
@@ -238,6 +240,10 @@ namespace
       if (img.size() == 1 && phases.size() == 1) {
         image.zoom = img[0]->image_zoom;
         image.alpha = img[0]->image_alpha;
+        if (img[0]->image_anim) {
+          image.has_anim = true;
+          image.anim_gate = img[0]->image_anim_gate;  // empty => always animate
+        }
       } else {
         std::string zexpr, aexpr;
         bool any_alpha = false;
@@ -435,6 +441,43 @@ namespace
       }
     }
 
+    // Parse an optional `anim [every Nth]` on an image stream. `anim` alone always draws
+    // the animated form (anim-as-subject, e.g. ANIMATION); `anim every 3rd` pulses a
+    // counter so only every Nth showing animates (the accent, e.g. SIMPLE).
+    void parse_anim(Node& leaf, Slot slot, PhaseRender& pr)
+    {
+      if (_c.peek_word() != "anim") {
+        return;
+      }
+      _c.word();
+      pr.image_anim = true;
+      if (_c.peek_word() == "every") {
+        _c.word();
+        const uint32_t period = _c.uint_lit();
+        const std::string suf = _c.peek_word();
+        if (suf == "st" || suf == "nd" || suf == "rd" || suf == "th") {
+          _c.word();
+        }
+        const std::string ctr = "_actr" + std::to_string(_node_counter);
+        const std::string flag = "_anim" + std::to_string(_node_counter++);
+        Effect pulse = effect(Effect::Kind::Pulse);
+        pulse.target = ctr;
+        pulse.mod_literal = static_cast<int32_t>(period);
+        pulse.flag = flag;
+        Effect anim = effect(Effect::Kind::Anim);
+        anim.slot = slot;
+        anim.guard = Effect::Guard::Truthy;
+        anim.guard_reg = flag;
+        leaf.effects.push_back(pulse);
+        leaf.effects.push_back(anim);
+        pr.image_anim_gate = flag;
+      } else {
+        Effect anim = effect(Effect::Kind::Anim);
+        anim.slot = slot;
+        leaf.effects.push_back(anim);
+      }
+    }
+
     Node parse_statement(uint32_t phase_length, const std::string& phase_id, PhaseRender& pr)
     {
       const std::size_t at = _c.pos();
@@ -494,6 +537,9 @@ namespace
           pr.image_zoom = "0.5 * " + ramp_id + ".progress";  // continuous over the ramp
         }
         parse_image_attrs(ramp_id, phase_id, pr);
+        if (_c.peek_word() == "anim") {
+          throw ParseError{"anim on a ramped cadence is not supported yet", _c.pos()};
+        }
         return seq;
       }
 
@@ -521,6 +567,7 @@ namespace
       }
       if (is_image) {
         parse_image_attrs(clock_id, phase_id, pr);
+        parse_anim(leaf, slot, pr);
       }
       // A fixed beat in an auto phase repeats via the enclosing Par; otherwise it fills the
       // declared length with an explicit Repeat.

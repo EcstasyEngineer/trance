@@ -74,8 +74,8 @@ pattern flash_text {
   const char* kSimple = R"(
 pattern simple {
   phase "Main" for 2048f {
-    description "One steady runtime image every 64; caption; spiral."
-    image runtime every 64
+    description "One steady runtime image every 64; every third showing animates (the accent); caption; spiral."
+    image runtime every 64 anim every 3rd
     caption concept every 32
     spiral rate 3
   }
@@ -94,12 +94,13 @@ pattern super_parallel {
 }
 )";
 
-  // 7 ANIMATION -- image + caption (anim-as-subject not yet in grammar).
+  // 7 ANIMATION -- anim-as-subject: the image is ALWAYS drawn as its animated form, so
+  // the animation is the main event rather than an accent.
   const char* kAnimation = R"(
 pattern animation {
   phase "Main" for 1024f {
-    description "Concept image every 32 with a runtime caption."
-    image concept every 32
+    description "The concept image plays as animation throughout (anim is the subject); runtime caption; spiral."
+    image concept every 32 anim
     caption runtime every 32
     spiral rate 3
   }
