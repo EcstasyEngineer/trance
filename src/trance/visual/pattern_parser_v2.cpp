@@ -37,6 +37,7 @@ namespace
     std::string phase_id;
     std::string reg = "current";
     std::string zoom;
+    std::string origin;
     std::string alpha;  // may be empty (=> 1)
     bool anim = false;
     std::string anim_gate;
@@ -148,6 +149,32 @@ namespace
       return _i < _src.size() && std::isdigit(static_cast<unsigned char>(_src[_i]));
     }
 
+    bool next_is_bracket()
+    {
+      skip();
+      return _i < _src.size() && _src[_i] == '[';
+    }
+
+    // Capture the raw text between `[` and the matching `]` (no nesting; render exprs use
+    // parens, not brackets), returned verbatim for the render evaluator to run each frame.
+    std::string bracket_expr()
+    {
+      skip();
+      if (_i >= _src.size() || _src[_i] != '[') {
+        throw ParseError{"expected '['", _i};
+      }
+      const std::size_t start = ++_i;
+      while (_i < _src.size() && _src[_i] != ']') {
+        ++_i;
+      }
+      if (_i >= _src.size()) {
+        throw ParseError{"unterminated [expr]", start};
+      }
+      std::string s = _src.substr(start, _i - start);
+      ++_i;  // closing ]
+      return s;
+    }
+
   private:
     void skip()
     {
@@ -228,7 +255,8 @@ namespace
 
   // ---- render-block generation ----------------------------------------------
   std::vector<RenderStmt> build_render_block(const std::vector<Layer>& layers, uint32_t phase_count,
-                                             bool any_word, bool any_sub, bool any_caption)
+                                             bool any_word, bool any_sub, bool any_caption,
+                                             bool any_spiral)
   {
     std::vector<RenderStmt> rb;
 
@@ -242,42 +270,68 @@ namespace
       groups[l.reg].push_back(&l);
     }
 
-    for (const auto& reg : order) {
-      const auto& g = groups[reg];
+    const auto emit_layer = [&](const std::string& reg, const Layer* l) {
       RenderStmt im;
       im.op = RenderStmt::Op::Image;
       im.image_reg = reg;
-      if (g.size() == 1 || phase_count == 1) {
-        // One layer (or a single-phase pattern): draw each directly. For a single phase
-        // with several layers sharing a reg we still take the first (degenerate).
-        const Layer* l = g.front();
-        im.zoom = l->zoom;
-        im.alpha = l->alpha;
-        if (l->anim) {
-          im.has_anim = true;
-          im.anim_gate = l->anim_gate;
+      im.zoom = l->zoom;
+      im.origin = l->origin;
+      im.alpha = l->alpha;
+      if (l->anim) {
+        im.has_anim = true;
+        im.anim_gate = l->anim_gate;
+      }
+      rb.push_back(im);
+    };
+
+    for (const auto& reg : order) {
+      const auto& g = groups[reg];
+      if (g.size() == 1) {
+        emit_layer(reg, g.front());
+      } else if (phase_count == 1) {
+        // One phase compositing several layers on the same register: draw each (the stack).
+        for (const Layer* l : g) {
+          emit_layer(reg, l);
         }
       } else {
-        // Same register across phases: pick the active phase's params (slow_flash).
-        std::string z, a;
-        bool any_a = false;
+        // Same register across phases: pick the active phase's params via a `.active` ternary
+        // (slow_flash). Guard empty zoom with the op default 0, and ternary the anim gate too
+        // so animation isn't silently dropped on a cross-phase reuse.
+        RenderStmt im;
+        im.op = RenderStmt::Op::Image;
+        im.image_reg = reg;
+        std::string z, a, an;
+        bool any_a = false, any_anim = false;
         for (const auto* l : g) {
-          z += l->phase_id + ".active ? (" + l->zoom + ") : ";
+          z += l->phase_id + ".active ? (" + (l->zoom.empty() ? "0" : l->zoom) + ") : ";
           const std::string av = l->alpha.empty() ? "1" : l->alpha;
           if (!l->alpha.empty()) any_a = true;
           a += l->phase_id + ".active ? (" + av + ") : ";
+          std::string gv = "0";
+          if (l->anim) {
+            any_anim = true;
+            gv = l->anim_gate.empty() ? "1" : l->anim_gate;
+          }
+          an += l->phase_id + ".active ? (" + gv + ") : ";
         }
         z += "0";
         a += "1";
+        an += "0";
         im.zoom = z;
         if (any_a) im.alpha = a;
+        if (any_anim) {
+          im.has_anim = true;
+          im.anim_gate = an;
+        }
+        rb.push_back(im);
       }
-      rb.push_back(im);
     }
 
-    RenderStmt spiral;
-    spiral.op = RenderStmt::Op::Spiral;
-    rb.push_back(spiral);
+    if (any_spiral) {
+      RenderStmt spiral;
+      spiral.op = RenderStmt::Op::Spiral;
+      rb.push_back(spiral);
+    }
 
     if (any_word) {
       RenderStmt t;
@@ -340,7 +394,7 @@ namespace
       rootKids.push_back(std::move(body));
       out.root = group(Node::Type::One, std::move(rootKids));
       out.render_block =
-          build_render_block(_layers, _phase_count, _any_word, _any_sub, _any_caption);
+          build_render_block(_layers, _phase_count, _any_word, _any_sub, _any_caption, _any_spiral);
     }
 
   private:
@@ -441,63 +495,103 @@ namespace
       cv.to = _c.number_lit();
       if (_c.peek_word() == "ease") {
         _c.word();
+        const std::size_t eat = _c.pos();
         cv.ease = _c.word();
+        // Only `late` (the accelerate pow6 dwell) is implemented; `linear` is uniform.
+        // Reject the rest loudly rather than silently degrading the ramp to flat.
+        if (cv.ease != "late" && cv.ease != "linear") {
+          throw ParseError{"ease '" + cv.ease +
+                               "' not implemented (use 'late' for a front-loaded dwell, or omit "
+                               "for linear)",
+                           eat};
+        }
       }
       _curves[name] = cv;
     }
 
-    // `zoom`/`brightness` <number [over section] | curve> on an image layer.
+    // Resolve `over <anchor>` to a clock node-id: section->phase, pattern/root->root,
+    // flash->the owning leaf. The three-clock model as one fixed anchor set.
+    std::string parse_anchor(const std::string& clock_id, const std::string& phase_id)
+    {
+      const std::size_t at = _c.pos();
+      const std::string w = _c.word();
+      if (w == "section") return phase_id;
+      if (w == "pattern" || w == "root") return "root";
+      if (w == "flash") return clock_id;
+      throw ParseError{"unknown clock anchor '" + w + "' (want section|pattern|flash)", at};
+    }
+
+    // Substitute the author-facing `self` token (the owning flash) with the real leaf id.
+    static std::string subst_self(std::string e, const std::string& clock_id)
+    {
+      std::string out;
+      for (std::size_t i = 0; i < e.size();) {
+        const bool boundary_before = (i == 0) || !(std::isalnum((unsigned char)e[i - 1]) || e[i - 1] == '_');
+        if (boundary_before && e.compare(i, 4, "self") == 0 &&
+            (i + 4 >= e.size() || !(std::isalnum((unsigned char)e[i + 4]) || e[i + 4] == '_'))) {
+          out += clock_id;
+          i += 4;
+        } else {
+          out += e[i++];
+        }
+      }
+      return out;
+    }
+
+    // `(zoom|brightness|origin|alpha) value` (repeatable), where value is:
+    //   <number> [fade in|out|inout|hold] [over <anchor>]   -- a per-clock ramp (or `hold` = const)
+    //   <curve>                                              -- a per-frame progress expr (section)
+    //   [<raw expr>]                                         -- the escape hatch (reads <node>.attr, `self`)
     void parse_image_attrs(const std::string& clock_id, const std::string& phase_id, Layer& layer)
     {
-      while (_c.peek_word() == "zoom" || _c.peek_word() == "brightness") {
-        const std::string attr = _c.word();
+      for (;;) {
+        const std::string a = _c.peek_word();
+        if (a != "zoom" && a != "brightness" && a != "origin" && a != "alpha") {
+          break;
+        }
+        _c.word();
         std::string expr;
-        if (_c.next_is_digit()) {
+        if (_c.next_is_bracket()) {
+          expr = subst_self(_c.bracket_expr(), clock_id);
+        } else if (_c.next_is_digit()) {
           const float v = _c.number_lit();
-          // `fade in` (default) ramps 0->V across the clock; `fade out` ramps V->0 -- so a
-          // pair of layers (one each way) genuinely cross-fade rather than sawtooth.
-          int fade = 0;  // 0 = in (0->V), 1 = out (V->0), 2 = inout (0->V->0 triangle)
-          if (_c.peek_word() == "fade") {
-            _c.word();
-            const std::size_t dat = _c.pos();
-            const std::string dir = _c.word();
-            if (dir == "out") {
-              fade = 1;
-            } else if (dir == "inout") {
-              fade = 2;
-            } else if (dir != "in") {
-              throw ParseError{"expected 'fade in', 'fade out', or 'fade inout'", dat};
+          int fade = 0;  // 0=in (0->V), 1=out (V->0), 2=inout (triangle), 3=hold (constant V)
+          std::string clock = clock_id;
+          for (;;) {  // fade direction and over-anchor in any order
+            if (_c.peek_word() == "fade") {
+              _c.word();
+              const std::size_t dat = _c.pos();
+              const std::string dir = _c.word();
+              if (dir == "out") fade = 1;
+              else if (dir == "inout") fade = 2;
+              else if (dir == "hold") fade = 3;
+              else if (dir != "in") throw ParseError{"expected fade in|out|inout|hold", dat};
+            } else if (_c.peek_word() == "hold") {
+              _c.word();
+              fade = 3;  // constant V (the explicit non-ramp form)
+            } else if (_c.peek_word() == "over") {
+              _c.word();
+              clock = parse_anchor(clock_id, phase_id);
+            } else {
+              break;
             }
           }
-          std::string clock = clock_id;
-          if (_c.peek_word() == "over") {
-            _c.word();
-            expect_word("section");
-            clock = phase_id;
-          }
-          if (fade == 2) {
-            expr = fnum(v) + " * (1 - abs(2 * " + clock + ".progress - 1))";
-          } else if (fade == 1) {
-            expr = fnum(v) + " * (1 - " + clock + ".progress)";
-          } else {
-            expr = fnum(v) + " * " + clock + ".progress";
-          }
+          if (fade == 3) expr = fnum(v);
+          else if (fade == 2) expr = fnum(v) + " * (1 - abs(2 * " + clock + ".progress - 1))";
+          else if (fade == 1) expr = fnum(v) + " * (1 - " + clock + ".progress)";
+          else expr = fnum(v) + " * " + clock + ".progress";
         } else {
           const std::size_t cat = _c.pos();
           const std::string cname = _c.word();
           auto it = _curves.find(cname);
-          if (it == _curves.end()) {
-            throw ParseError{"unknown curve '" + cname + "'", cat};
-          }
+          if (it == _curves.end()) throw ParseError{"unknown curve '" + cname + "'", cat};
           const Curve& cv = it->second;
           expr = "(" + fnum(cv.from) + " + " + fnum(cv.to - cv.from) + " * " + phase_id +
                  ".progress)";
         }
-        if (attr == "zoom") {
-          layer.zoom = expr;
-        } else {
-          layer.alpha = expr;
-        }
+        if (a == "zoom") layer.zoom = expr;
+        else if (a == "origin") layer.origin = expr;
+        else layer.alpha = expr;  // brightness or alpha
       }
     }
 
@@ -550,16 +644,16 @@ namespace
       if (paren) {
         _c.expect(')');
       }
-      uint32_t n = p > 0.f ? static_cast<uint32_t>(std::lround(1.0 / double(p))) : 2u;
-      if (n < 2) {
-        n = 2;
-      }
+      // 100-bucket roll: round(100*p) ones among 100 entries, so 0.25 / 0.4 / 0.9 are
+      // distinct (a 1-in-round(1/p) scheme would collapse 0.4 / 0.5 / 0.6 all to 50%).
+      uint32_t ones = static_cast<uint32_t>(std::lround(100.0 * double(p)));
+      if (ones < 1) ones = 1;
+      if (ones > 99) ones = 99;
       const std::string creg = "_chance" + std::to_string(_node_counter++);
       Effect roll = effect(Effect::Kind::Roll);
       roll.target = creg;
-      roll.choices.push_back(1);
-      for (uint32_t k = 1; k < n; ++k) {
-        roll.choices.push_back(0);
+      for (uint32_t k = 0; k < 100; ++k) {
+        roll.choices.push_back(k < ones ? 1 : 0);
       }
       gated.guard = Effect::Guard::Ge;
       gated.guard_reg = creg;
@@ -573,8 +667,19 @@ namespace
       const std::string kw = _c.word();
 
       if (kw == "spiral") {
-        expect_word("rate");
-        const float rate = _c.number_lit();
+        _any_spiral = true;
+        if (_c.peek_word() == "locked") {
+          const std::size_t lat = _c.pos();
+          _c.word();
+          throw ParseError{"spiral locked: entrainment period unavailable -- needs the "
+                           "entrainment runtime hook (Extension #2)",
+                           lat};
+        }
+        float rate = 0.f;  // bare `spiral` is allowed; default rate
+        if (_c.peek_word() == "rate") {
+          _c.word();
+          rate = _c.number_lit();
+        }
         Effect e = effect(Effect::Kind::SpiralRot);
         e.rate = rate;
         return action(1, {e});
@@ -616,6 +721,15 @@ namespace
 
       expect_word("every");
 
+      // `every locked` -- entrainment-synced cadence. Reserved; needs the runtime hook.
+      if (_c.peek_word() == "locked") {
+        const std::size_t lat = _c.pos();
+        _c.word();
+        throw ParseError{"every locked: entrainment period unavailable -- needs the entrainment "
+                         "runtime hook (Extension #2)",
+                         lat};
+      }
+
       // ---- ramped cadence (`every <curve>`) ----
       if (!_c.next_is_digit()) {
         const std::size_t cat = _c.pos();
@@ -655,11 +769,9 @@ namespace
 
       // `stagger K` (phase-offset this stream).
       uint32_t stagger = 0;
-      bool has_stagger = false;
       if (_c.peek_word() == "stagger") {
         _c.word();
         stagger = _c.uint_lit();
-        has_stagger = true;
       }
 
       // `chance p`: prepend a roll, guard the content effect.
@@ -685,7 +797,9 @@ namespace
 
       Node node = (phase_length == 0) ? std::move(leaf)
                                       : repeat(phase_length / every, std::move(leaf));
-      if (has_stagger) {
+      // Only a real, non-zero, non-full-period shift mints an Offset (stagger 0 would
+      // pre-advance a whole period).
+      if (stagger != 0) {
         node = offset(stagger, std::move(node));
       }
       return node;
@@ -717,6 +831,7 @@ namespace
     std::map<std::string, Curve> _curves;
     uint32_t _node_counter = 0;
     uint32_t _phase_count = 0;
+    bool _any_spiral = false;
     bool _any_word = false;
     bool _any_sub = false;
     bool _any_caption = false;
