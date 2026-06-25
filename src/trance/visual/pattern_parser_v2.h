@@ -28,7 +28,9 @@ namespace patternv2
     std::string error;                             // "line:col: message" on failure
   };
 
-  ParseResult parse(const std::string& source);
+  // `locked_period_frames` is the program's entrainment beat period in frames (0 = no pulsed
+  // bed); `every locked` / `spiral locked` lower against it, or hard-error when 0.
+  ParseResult parse(const std::string& source, uint32_t locked_period_frames = 0);
 }
 
 #endif

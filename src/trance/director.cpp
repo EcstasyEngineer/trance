@@ -84,12 +84,30 @@ void Director::set_program(const trance_pb::Program& program)
 void Director::build_builtin_patterns()
 {
   _builtin_compiled.clear();
+  // Entrainment beat period in frames for `every locked` (Extension #2): the period of the
+  // program's highest-amplitude pulsed layer. 0 when there is no pulsed bed (`locked` then
+  // hard-errors). A compile-time snapshot of the program's bed; it does not track a live
+  // reconfigure, which is fine -- the bed is static per program.
+  uint32_t locked_frames = 0;
+  {
+    float best_db = -1e30f;
+    float hz = 0.f;
+    for (const auto& l : _program->entrainment().layer()) {
+      if (l.pulse_hz() > 0.f && l.amplitude_db() >= best_db) {
+        best_db = l.amplitude_db();
+        hz = l.pulse_hz();
+      }
+    }
+    if (hz > 0.f) {
+      locked_frames = uint32_t(double(_program->global_fps()) / double(hz) + 0.5);
+    }
+  }
   for (uint32_t t = 1; t <= 8; ++t) {
     // Prefer the v2 intent-grammar source where one exists; it lowers to the same
     // pattern::Node the v1 path produces, so everything downstream is identical.
     std::string v2_source = builtin::pattern_source_v2(t);
     if (!v2_source.empty()) {
-      auto v2 = patternv2::parse(v2_source);
+      auto v2 = patternv2::parse(v2_source, locked_frames);
       if (!v2.ok) {
         throw std::runtime_error("built-in v2 pattern " + std::to_string(t)
                                  + " failed to parse: " + v2.error);

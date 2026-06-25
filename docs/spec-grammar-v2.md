@@ -505,6 +505,15 @@ attribute set, so a flash can be gated on the audio pulse peak. Equal periods al
 because the audio and visual clocks are independent. Syntax is reserved; using it without
 the hook is a compile-error — never a silent hardcode.
 
+**Status (part (a) implemented).** The Director computes the program's beat period in frames
+(its highest-amplitude pulsed `EntrainmentLayer`'s `pulse_hz` → `round(global_fps / hz)`) and
+threads it into `patternv2::parse`. **`every locked`** now lowers to `Action every <period>` —
+a cadence locked to the entrainment beat (a compile-time snapshot of the program's bed) — or
+hard-errors "entrainment period unavailable" when the program has no pulsed bed. This is the
+"grammar mostly supports it" line the review asked for. **`spiral locked` and `beat.phase`
+remain deferred** (part (b)): genuine *phase* coincidence needs a per-frame audio→visual clock
+threaded into `render_eval`'s attribute set — the real runtime project, out of scope here.
+
 **Extension #3 — per-segment node addressing for ramps (exact `accelerate`/`escalate`/
 `deepen` attribute fidelity).** An unrolled `generate`/ramp Sequence exposes only the
 **enclosing** node's `progress()`/`index()` to `resolve_ident`'s six-attr set; the active
