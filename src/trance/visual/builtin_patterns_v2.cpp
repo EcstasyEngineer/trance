@@ -59,15 +59,14 @@ pattern sub_text {
 }
 )";
 
-  // 4 FLASH_TEXT -- a per-flash pulse: each beat the reward image zooms 0->100% while its
-  // brightness fades 0->100->0 (a triangle). Composed from explicit modifiers (zoom +
-  // `fade inout`), no baked construct. (A continuous A->B dissolve would need a copy/prev
-  // handoff; this is the per-flash pulse spec instead.)
+  // 4 FLASH_TEXT -- a continuous crossfade: reward images dissolve one into the next with no
+  // hard cut (A100/B0 -> A50/B50 -> A0/B100, then B into C...). `crossfade` lowers to the
+  // copy-handoff (current -> prev each beat) + two complementary-opacity layers.
   const char* kFlashText = R"(
 pattern flash_text {
   phase "Main" for 1024f {
-    description "Each beat a reward image zooms in while its brightness fades up then down (a pulse); reward word; caption; spiral."
-    image reward every 64 zoom 1 brightness 1 fade inout
+    description "Reward images dissolve continuously into one another (two on screen at once, crossfading); each image zooms in once across the time it is visible; reward word; caption; spiral."
+    crossfade reward every 64 zoom 1
     word reward every 64
     caption concept every 32
     spiral rate 2

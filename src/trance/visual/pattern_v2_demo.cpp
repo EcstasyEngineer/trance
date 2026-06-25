@@ -189,10 +189,10 @@ pattern over_themed {
 }
 )");
 
-  rc |= run("flash_text pulse -- zoom 0->100, brightness fade 0->100->0 per flash", R"(
+  rc |= run("flash_text crossfade -- prev fades out while current fades in (A->B->C dissolve)", R"(
 pattern xfade {
   phase "Main" for 1024f {
-    image reward every 64 zoom 1 brightness 1 fade inout
+    crossfade reward every 64 zoom 1
     spiral rate 2
   }
 }

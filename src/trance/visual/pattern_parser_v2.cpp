@@ -691,6 +691,69 @@ namespace
         return action(1, {e});
       }
 
+      // `crossfade THEME every N [zoom V]` -- a CONTINUOUS image crossfade. Each beat the
+      // current image is handed to `prev` (Copy) before a fresh one is pulled into
+      // `current`, then `prev` fades out while `current` fades in over the flash clock.
+      // Because `prev` IS the previous `current`, successive images dissolve into one
+      // another with no hard cut at the beat boundary: A100/B0 -> A50/B50 -> A0/B100, then
+      // B dissolving into C, and so on. The complementary opacity is intrinsic (that is what
+      // makes it a crossfade and not a per-flash pulse); `zoom` is an optional modifier.
+      if (kw == "crossfade") {
+        const Slot xslot = parse_theme();
+        expect_word("every");
+        const std::size_t xat = _c.pos();
+        const uint32_t every = _c.uint_lit();
+        if (every == 0) {
+          throw ParseError{"'every 0' is not a valid beat", xat};
+        }
+        if (phase_length != 0 && phase_length % every != 0) {
+          _warnings.push_back(_loc(xat) + ": beat " + std::to_string(every) +
+                              " does not divide phase length " + std::to_string(phase_length) +
+                              " -- the stream ends " + std::to_string(phase_length % every) +
+                              " frames early");
+        }
+        // Leaf: hand the current image to `prev`, then pull a fresh one into `current`.
+        Effect cp = effect(Effect::Kind::Copy);
+        cp.src = "current";
+        cp.target = "prev";
+        Effect im = effect(Effect::Kind::Image);
+        im.slot = xslot;
+        im.target = "current";
+        Node leaf = action(every, {cp, im});
+        leaf.image_slot = xslot;
+        const std::string clock = "_xf" + std::to_string(_node_counter++);
+        leaf.id = clock;
+
+        // Optional per-image zoom. An image lives for TWO beats -- it fades in as `current`
+        // (beat N) then fades out as `prev` (beat N+1) -- so the zoom is split across the pair
+        // into ONE continuous ramp 0 -> Z over the image's whole visible life: `current`
+        // covers 0 -> Z/2, `prev` continues Z/2 -> Z. (Both layers share the per-beat clock,
+        // so giving them the same expression would restart the zoom mid-life -- the old
+        // double-zoom bug. The +0.5 offset on `prev` is what makes it one smooth zoom.)
+        std::string cur_zoom, prev_zoom;
+        if (_c.peek_word() == "zoom") {
+          _c.word();
+          const float z = _c.number_lit();
+          cur_zoom = fnum(z * 0.5f) + " * " + clock + ".progress";
+          prev_zoom = fnum(z * 0.5f) + " * (1 + " + clock + ".progress)";
+        }
+
+        Layer prev;
+        prev.phase_id = phase_id;
+        prev.reg = "prev";
+        prev.alpha = "1 - " + clock + ".progress";  // outgoing image fades out
+        prev.zoom = prev_zoom;
+        Layer cur;
+        cur.phase_id = phase_id;
+        cur.reg = "current";
+        cur.alpha = clock + ".progress";  // incoming image fades in
+        cur.zoom = cur_zoom;
+        _layers.push_back(prev);
+        _layers.push_back(cur);
+        return (phase_length == 0) ? std::move(leaf)
+                                   : repeat(phase_length / every, std::move(leaf));
+      }
+
       Effect::Kind kind;
       bool is_image = false;
       if (kw == "image") {
