@@ -468,9 +468,11 @@ namespace
     }
 
     // A theme reference: `theme N` (index), or the aliases concept/reward/runtime.
-    // theme 0 = concept = primary, theme 1 = reward = alternate. theme N>=2 needs the
-    // ThemeBank runtime extension (3+ simultaneous live themes) and is rejected here --
-    // the grammar surface is ready; the runtime is its own project (spec §7 Extension #1).
+    // theme 0 = concept = primary, theme 1 = reward = alternate. The engine is
+    // bi-thematic by design (ThemeBank holds exactly two live themes; every accessor is
+    // a `bool alternate`, a VRAM-budget decision), so only theme 0/1 exist. theme N>=2
+    // is a hard error -- 3+ simultaneous live themes is a decided non-goal, not deferred
+    // work (spec-grammar-v2.md §7).
     Slot parse_theme()
     {
       const std::size_t at = _c.pos();
@@ -479,15 +481,11 @@ namespace
         const std::size_t nat = _c.pos();
         const uint32_t n = _c.uint_lit();
         if (n == 0) return Slot::Primary;
-        // The grammar surface supports any `theme N`; today the runtime holds two distinct
-        // display slots, so N>=2 clamps to slot 1 and warns. 3+ DISTINCT live themes are the
-        // ThemeBank K-slot rotation (Extension #1 runtime), scoped as its own project.
-        if (n >= 2) {
-          _warnings.push_back(_loc(nat) + ": theme " + std::to_string(n) +
-                              " clamps to theme 1 -- 3+ distinct live themes need the ThemeBank "
-                              "runtime (Extension #1; grammar surface is complete)");
-        }
-        return Slot::Alternate;
+        if (n == 1) return Slot::Alternate;
+        throw ParseError{"theme index out of range: the engine holds exactly two live themes "
+                         "(0 = concept/primary, 1 = reward/alternate); theme " +
+                             std::to_string(n) + " does not exist",
+                         nat};
       }
       return theme_to_slot(w, at);
     }

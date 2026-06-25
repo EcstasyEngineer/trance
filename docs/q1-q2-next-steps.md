@@ -56,9 +56,9 @@ roadmap and the code:
    scalar-register state machine. (both; `q2` §1.3 is the sharper write-up)
 5. **`pick`/`choice` (sample once) vs `jitter`/`random` (resample) is a required distinction** —
    without it you re-invent registers to say "picked once." (both)
-6. **Theme *index*, not primary/alternate** — and this is a real ThemeBank/API runtime project,
-   not parser work. Grammar accepts `theme N`; compiler rejects `N>2` until the bank supports it.
-   (both, emphatically)
+6. **Two themes, named** — `theme 0`/`theme 1` (concept/reward) map to the engine's two live banks.
+   3+ simultaneous themes was evaluated and **dropped** as a non-goal (bi-thematic engine; §7 of
+   the spec). The consultants' "theme-index over K banks" framing does not apply.
 7. **Render shapes, not render expressions, as the surface** — `focus`/`fade`/`stack`/`cut`
    lower to today's `RenderStmt` list via the existing `render_eval`. (both)
 8. **Keep v1 forever; version v2; don't auto-migrate stored patterns.** Built-ins are
@@ -195,9 +195,9 @@ That trades *structural* verbosity for *modifier* density. Fewer lines, but not 
 
 Worth stating so the case isn't only "smaller" — the same redesign *grows* the space:
 
-- **3+ themes** (theme-index over K live themes) — impossible today (binary slot).
 - **Cross-theme pairing / associative conditioning** — `image theme 0` with `text theme 1` on the
-  same beat becomes first-class (`same(voice)`, `other(voice)`).
+  same beat becomes first-class. (Pairwise over the engine's two live themes; 3+ simultaneous themes
+  is a decided non-goal — see `spec-grammar-v2.md` §7.)
 - **New cadences** — `jitter(2..8)` (true per-fire variation, not just a captured constant),
   `chance(p)`, `burst(...)` as a general primitive.
 - **Shared signals** — one `tension` ramp driving cadence + zoom + spiral + anim-rate together
@@ -225,8 +225,9 @@ watch run.
 - **Phase 2 — render shapes.** Implement `focus`/`fade`/`stack`/`cut` as functions emitting
   current `RenderStmt` lists; reuse `render_eval` wholesale. Validate all 8 render through shapes.
   This is the riskiest *fidelity* bet — do it early so breakages surface early.
-- **Phase 3 — theme-index (`ThemeRef`).** Generalize `Slot`→`ThemeRef`; accept `theme N`; reject
-  `N>2`. Scope the ThemeBank K>2 runtime as a *separate* project (don't build it speculatively).
+- **Phase 3 — themes.** `theme 0`/`theme 1` map to the two live banks (primary/alternate); `theme N`
+  for N≥2 is a hard error. K>2 live themes is a **decided non-goal** (bi-thematic engine; see
+  `spec-grammar-v2.md` §7) — not built.
 - **Phase 4 — the intent surface grammar.** Voices + phases + `init`, lowering to Frame IR using
   signals (P1) + shapes (P2) + themes (P3). Add the v2 marker; move built-ins to v2; custom stays
   v1. Mandatory `intent "…"` per pattern.
