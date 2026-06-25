@@ -9,6 +9,60 @@
 
 ---
 
+## 0. Decisions locked (supersede conflicting draft text below)
+
+These were decided with the user after the workflow, and are grounded in the actual render
+code (`shaders.h`, `api.cpp`, `render_eval.cpp`). Where §1–§12 conflict, **this section wins.**
+
+**0.1 Multi-parameter effects — already handled, no new concept.** An effect is
+`verb (param modulator)*` — a verb followed by any number of `param modulator` pairs, each
+independently curve-drivable by the one rule. This is exactly how `image` already takes
+`zoom M fade in origin M`. A bare leading modulator is the effect's "main" knob; the rest
+default. So a multi-param effect like the warp below needs no new grammar machinery.
+
+**0.2 The `drunk` effect is a WAVE WARP (shader), not an origin/zoom wobble.** Supersedes
+§4.5. The intent is an "under-water" sinusoidal displacement of the image, not a positional
+jitter (a plain jitter is just `origin`/`zoom` with a random modulator — not worth a new
+primitive). Grammar:
+```
+warp amplitude (curve 0 -> 0.3)  wavelength 0.2  speed (curve 1 -> 3)
+```
+**Feasibility (grounded):** the image fragment shader (`shaders.h:55-67`) is
+`out_colour * texture2D(texture, out_texture_coord)`. The warp adds `warp_amp / warp_wavelength
+/ warp_speed / warp_time` uniforms and displaces the sampled coord, e.g.
+`coord += warp_amp * sin(coord.yx / warp_wavelength + warp_time * warp_speed)`. **Required
+runtime extension (bounded):** the shader lines + a `RenderStmt` warp-param trio (live `[expr]`
+like zoom) + uniform plumbing in `api.cpp`/`render.cpp` + a per-frame `warp_time`. This
+REPLACES §4.5's `Effect::Kind::Walk` register-walk design (and moots its fps-normalization /
+dead-zone gaps in A.1/§12, since time comes from the frame clock, though `warp_speed` still
+scales per-second). `drunk <intensity>` becomes sugar for `warp amplitude <intensity>` with a
+sensible default wavelength/speed. If this proves too costly it can be deferred without
+changing any other primitive.
+
+**0.3 Text CAN crossfade — Extension #4 (resolves the fatal A.1 gap).** Add (a) a **text
+content register** so `copy` can stash text, and (b) an **alpha param on `render_text`**. The
+image shader's `out_colour` is already a `vec4` with alpha (`shaders.h:60-65`), so text drawn
+through it fades with no shader change — only `render_text`'s signature + a text-register map
+in `compiled_visual`. With this, the EX6 `flash_text` text dissolve lowers as written.
+
+**0.4 Spiral: `look{}` grammar selector; SPEED is a curve; COLOR/DIRECTION stay settings.**
+The spiral fragment shader (`shaders.h:82-99`) has **7 types** (`spiral_type` 1–7, correct the
+draft's "5"), `width` = arm count, `acolour`/`bcolour`, and a `time` uniform that spins it.
+- `look { spiral type=N width=W }` → a deterministic `SpiralSet` effect (Extension #3) pinning
+  type/width (replacing `change_spiral`'s random roll). Hard-errors until Ext#3 lands (no
+  silent fallback — corrects the A.1 note).
+- `spiral speed <curve>` → drives the `time` uniform's per-frame rate (Extension #1).
+- `acolour`/`bcolour`/direction remain Program-proto settings, walled off from the grammar.
+
+**0.5 `super_fast`: commit to randomness primitives; delete `SuperFastTick`.** No `raw {}`
+escape hatch. Accept "same effect, not the same frames." Closes that §12 open question.
+
+**Still open after these decisions:** nested-pattern register-name scoping (`cur`/`prev`
+collisions across subpatterns — A.1 / plan-risk), the `every <curve>` un-id'd-segment limit,
+and `warp` parameter tuning. These are implementation-time calls, flagged in Appendix A.
+
+---
+
 ## 1. Design principles
 
 1. **Two nouns, one rule.** The entire language is:
