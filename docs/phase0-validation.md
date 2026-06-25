@@ -192,11 +192,14 @@ count for modifier density (fewer lines, not fewer concepts). next-steps §6's g
 mitigation: mandatory `description "…"`, a ~3-modifier-per-line smell cap (push overflow into a named
 `curve`), and judge readability on `accelerate`/`sub_text`/`animation`, never on `super_parallel`.
 
-### 3.5 `theme N` for N>2 is syntax-only until a separate runtime project
-Unchanged from the docs, restated because it's the headline affordance: the grammar can accept
-`theme 2`, but the binary primary/alternate slot + ThemeBank/loader means N>2 does nothing until a
-scoped ThemeBank redesign lands. **Don't sell 3+ themes as a v2 feature** — it's a separate project
-gated behind v2. The AST change (`Slot` → `ThemeRef`) is the only part that's "front-end."
+### 3.5 `theme N` is bounded to two — 3+ live themes is a decided non-goal
+The engine is **bi-thematic by design**: `ThemeBank` holds exactly two live themes (primary +
+alternate, plus an async load/unload slot) and every accessor is a `bool alternate`, a VRAM-budget
+decision. The grammar therefore offers exactly `theme 0`/`theme 1` (`concept`/`reward`); `theme N`
+for N≥2 is a **hard parse error**, not a deferred capability. Associative conditioning is inherently
+pairwise, so two banks is sufficient; 3+ *simultaneous* themes was evaluated and **dropped** (it
+would cost K× VRAM and a rewrite of the riskiest loader subsystem for no authoring need). See
+`spec-grammar-v2.md` §7 "non-goal."
 
 ---
 

@@ -14,3 +14,9 @@ CMakeFiles/
 cmake_install.cmake
 CTestTestfile.cmake
 compile_commands.json
+
+# Headless v2 build artifacts + machine-specific build scripts (paths are local).
+obj/
+*.exe
+build_golden.bat
+build_v2_demo.bat
