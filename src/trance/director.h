@@ -49,6 +49,8 @@ public:
 
   void render_spiral(float spiral, uint32_t spiral_width, uint32_t spiral_type) const;
   void render_image(const Image& image, float alpha, float zoom_origin, float zoom) const;
+  // v3 wave warp: set the per-frame sinusoidal image-displacement state (amp 0 = no warp).
+  void set_warp(float amp, float wavelength, float speed);
 
   sf::Vector2f text_size(const Font& font, const std::string& text, bool large) const;
   void render_text(const Font& font, const std::string& text, bool large, const sf::Color& colour,
@@ -74,6 +76,12 @@ private:
   GLuint _new_program;
   GLuint _spiral_program;
   GLuint _quad_buffer;
+
+  // v3 wave-warp state (set per frame by set_warp; read by render_image). 0 amp = disabled.
+  float _warp_amp = 0.f;
+  float _warp_wavelength = 0.2f;
+  float _warp_speed = 0.f;
+  float _warp_time = 0.f;
 
   mutable Renderer::State _render_state;
   Renderer& _renderer;

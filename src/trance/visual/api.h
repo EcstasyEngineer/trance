@@ -65,6 +65,8 @@ public:
   // curve-driven per-frame speed (spiral speed is a render param like zoom). Same method as
   // VisualControl::rotate_spiral; VisualApiImpl's single override satisfies both.
   virtual void rotate_spiral(float amount) = 0;
+  // v3 wave warp: set the per-frame image-displacement state (amp 0 = disabled).
+  virtual void set_warp(float amp, float wavelength, float speed) = 0;
 };
 
 class VisualApiImpl : public VisualControl, public VisualRender
@@ -95,6 +97,7 @@ public:
   void render_subtext(float alpha, float zoom_origin) const override;
   void render_small_subtext(float alpha, float zoom_origin) const override;
   void render_spiral() const override;
+  void set_warp(float amp, float wavelength, float speed) override;
 
   // Debug overlay accessors. Reset the per-frame layer capture at the start of
   // a rendered frame; render_image() then records the alpha of each image layer

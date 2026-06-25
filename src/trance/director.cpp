@@ -204,6 +204,16 @@ bool Director::vr_enabled() const
   return _renderer.vr_enabled();
 }
 
+void Director::set_warp(float amp, float wavelength, float speed)
+{
+  // v3 wave warp. Called once per frame from the render block (before the image draws); the
+  // time base advances per call so the wave animates. amp 0 => the shader leaves coords untouched.
+  _warp_amp = amp;
+  _warp_wavelength = wavelength;
+  _warp_speed = speed;
+  _warp_time += 1.f / 60.f;
+}
+
 void Director::render_spiral(float spiral, uint32_t spiral_width, uint32_t spiral_type) const
 {
   glEnable(GL_BLEND);
@@ -322,6 +332,10 @@ void Director::render_image(const Image& image, float alpha, float zoom_origin, 
   glUniform1f(glGetUniformLocation(_new_program, "far_plane"), 1.f + far_plane_distance());
   glUniform1f(glGetUniformLocation(_new_program, "eye_offset"), eye_offset());
   glUniform4f(glGetUniformLocation(_new_program, "colour"), 1.f, 1.f, 1.f, alpha);
+  glUniform1f(glGetUniformLocation(_new_program, "warp_amp"), _warp_amp);
+  glUniform1f(glGetUniformLocation(_new_program, "warp_wavelength"), _warp_wavelength);
+  glUniform1f(glGetUniformLocation(_new_program, "warp_speed"), _warp_speed);
+  glUniform1f(glGetUniformLocation(_new_program, "warp_time"), _warp_time);
 
   GLuint position_location = glGetAttribLocation(_new_program, "virtual_position");
   glEnableVertexAttribArray(position_location);
@@ -395,6 +409,7 @@ void Director::render_text(const Font& font, const std::string& text, bool large
   glUniform1f(glGetUniformLocation(_new_program, "eye_offset"), eye_offset());
   glUniform4f(glGetUniformLocation(_new_program, "colour"), colour.r / 255.f, colour.g / 255.f,
               colour.b / 255.f, colour.a / 255.f);
+  glUniform1f(glGetUniformLocation(_new_program, "warp_amp"), 0.f);  // text never warps
 
   GLuint position_location = glGetAttribLocation(_new_program, "virtual_position");
   glEnableVertexAttribArray(position_location);

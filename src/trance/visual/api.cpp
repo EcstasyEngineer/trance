@@ -307,6 +307,11 @@ void VisualApiImpl::render_small_subtext(float alpha, float zoom_origin) const
                         zoom_intensity(zoom_origin, zoom_origin));
 }
 
+void VisualApiImpl::set_warp(float amp, float wavelength, float speed)
+{
+  _director.set_warp(amp, wavelength, speed);
+}
+
 void VisualApiImpl::render_spiral() const
 {
   _director.render_spiral(_spiral, _spiral_width, _spiral_type);

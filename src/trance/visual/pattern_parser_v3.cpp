@@ -453,6 +453,28 @@ namespace
         parse_look(sink);
         return;
       }
+      if (kw == "warp" || kw == "drunk") {
+        _c.word();
+        RenderStmt rs;
+        rs.op = RenderStmt::Op::Warp;
+        rs.origin = "0.15";  // default wavelength
+        rs.speed = "2";      // default speed
+        if (kw == "drunk") {
+          // sugar: drunk <intensity> == warp amplitude <intensity> (defaults for the rest).
+          rs.zoom = parse_modulator();
+        } else {
+          // warp (amplitude MOD | wavelength MOD | speed MOD)* -- the multi-param form.
+          for (;;) {
+            const std::string p = _c.peek_word();
+            if (p == "amplitude") { _c.word(); rs.zoom = parse_modulator(); }
+            else if (p == "wavelength") { _c.word(); rs.origin = parse_modulator(); }
+            else if (p == "speed") { _c.word(); rs.speed = parse_modulator(); }
+            else break;
+          }
+        }
+        _render.push_back(rs);
+        return;
+      }
       if (kw == "spiral") {
         _c.word();
         RenderStmt rs;
