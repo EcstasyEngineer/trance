@@ -1,11 +1,14 @@
 # Trance Visual Grammar v3 — Design Specification
 
-> Status: DESIGN (target grammar). The shipped v2 parser implements a subset; this
-> document defines the v3 surface and its exact lowering to the **existing** cycler +
-> effect + render-block runtime. Two runtime extensions are required and are named
-> explicitly (§9); everything else lowers with zero runtime change. Where this spec
-> and any older prose disagree, **the parser and the runtime enums are the source of
-> truth** (`pattern_ast.h`, `compiled_visual.cpp`, `render_eval.cpp`, `api.cpp`).
+> Status: **SHIPPED** (Phases 1–4 implemented; `pattern_parser_v3.{h,cpp}` +
+> `builtin_patterns_v3.cpp`, the director's preferred built-in path). This document defines the
+> v3 surface and its exact lowering to the cycler + effect + render-block runtime. The runtime
+> extensions it needed are built: curve-driven spiral speed, the `SpiralSet` selector, and the
+> wave warp shader. The **one deferred** piece is a text-content register so text can crossfade
+> like images (Ext#4) — the text path is a single live slot, not a register. The v2 grammar and
+> the `super_fast` FSM have been retired. Where this spec and any older prose disagree, **the
+> parser and runtime enums are the source of truth** (`pattern_ast.h`, `compiled_visual.cpp`,
+> `render_eval.cpp`, `api.cpp`). §0 (locked decisions) governs the rest.
 
 ---
 
