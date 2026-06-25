@@ -94,6 +94,9 @@ void Director::build_builtin_patterns()
         throw std::runtime_error("built-in v2 pattern " + std::to_string(t)
                                  + " failed to parse: " + v2.error);
       }
+      for (const auto& w : v2.warnings) {
+        std::cerr << "v2 built-in " << t << " warning: " << w << std::endl;
+      }
       pattern::Parsed parsed;
       parsed.name = std::move(v2.name);
       parsed.weight = 1;

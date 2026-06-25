@@ -24,6 +24,7 @@ namespace patternv2
     std::string name;
     pattern::Node root;                            // lowered v1 AST, ready for pattern::compile
     std::vector<pattern::RenderStmt> render_block;  // the generated "what is drawn" (zoom etc.)
+    std::vector<std::string> warnings;             // non-fatal "line:col: message" diagnostics
     std::string error;                             // "line:col: message" on failure
   };
 
