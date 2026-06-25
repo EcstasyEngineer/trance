@@ -792,8 +792,6 @@ namespace
         e.src = next_ident("a source register");
         expect_punct("->");
         e.target = next_ident("a destination register");
-      } else if (w == "super_fast_tick") {
-        e.kind = K::SuperFastTick;
       } else {
         err("unknown effect '" + w + "'");
       }

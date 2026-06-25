@@ -244,6 +244,18 @@ namespace
     }
     std::string new_id() { return "_n" + std::to_string(_idc++); }
 
+    // Append a render statement, gated by the enclosing pattern's `.active` so that in a `seq`
+    // only the running sub-pattern's draws paint (in a `par` every child is active together, so
+    // the gate is a harmless always-true). This is what keeps sequenced phases from overdrawing.
+    void push_render(RenderStmt rs)
+    {
+      if (!_regs.empty()) {
+        const std::string gate = _regs.back().cid + ".active";
+        rs.when = rs.when.empty() ? gate : ("(" + rs.when + ") and " + gate);
+      }
+      _render.push_back(std::move(rs));
+    }
+
     void expect_word(const char* w)
     {
       const std::size_t at = _c.pos();
@@ -472,7 +484,7 @@ namespace
             else break;
           }
         }
-        _render.push_back(rs);
+        push_render(rs);
         return;
       }
       if (kw == "spiral") {
@@ -486,7 +498,7 @@ namespace
           _c.word();
           rs.speed = parse_modulator();
         }
-        _render.push_back(rs);
+        push_render(rs);
         return;
       }
       if (kw == "copy") {
@@ -505,7 +517,7 @@ namespace
         sink.push_back(e);
         return;
       }
-      if (kw == "image" || kw == "word" || kw == "caption" || kw == "draw") {
+      if (kw == "image" || kw == "word" || kw == "caption" || kw == "subtext" || kw == "draw") {
         parse_draw(span, sink);
         return;
       }
@@ -555,7 +567,7 @@ namespace
         rs.op = RenderStmt::Op::Image;
         rs.image_reg = qreg;
         parse_params(rs);
-        _render.push_back(rs);
+        push_render(rs);
         return;
       }
 
@@ -574,32 +586,103 @@ namespace
         e.slot = slot;
         e.target = qreg;
         _written.insert(qreg);
-        sink.push_back(e);
         RenderStmt rs;
         rs.op = RenderStmt::Op::Image;
         rs.image_reg = qreg;
         parse_params(rs);
-        _render.push_back(rs);
+        std::vector<Effect> extra;  // anim load / anim-gate pulse
+        parse_anim(rs, slot, extra);
+        Effect roll = parse_chance(e);
+        if (!roll.target.empty()) sink.push_back(roll);
+        sink.push_back(e);
+        for (auto& x : extra) sink.push_back(x);
+        push_render(rs);
         return;
       }
 
-      // word / caption: text path (no register in Phase 1; Phase 4 adds a text register + alpha).
-      Effect e = effect(kw == "word" ? Effect::Kind::Text : Effect::Kind::SmallSub);
+      // word / caption / subtext: the text path. (Text content is a single live slot, not a
+      // register, so text cannot crossfade/stash today -- that is the one deferred runtime
+      // extension; see docs/spec-grammar-v3.md Ext#4.)
+      Effect::Kind ek = kw == "word" ? Effect::Kind::Text
+                        : kw == "subtext" ? Effect::Kind::Subtext
+                                          : Effect::Kind::SmallSub;
+      Effect e = effect(ek);
       e.slot = slot;
       if (kw == "caption") e.force = true;
-      sink.push_back(e);
       RenderStmt rs;
-      rs.op = (kw == "word") ? RenderStmt::Op::Text : RenderStmt::Op::SmallText;
+      rs.op = kw == "word" ? RenderStmt::Op::Text
+              : kw == "subtext" ? RenderStmt::Op::Subtext
+                                : RenderStmt::Op::SmallText;
       if (kw == "word") {
         rs.origin = "0.75";
         rs.zoom = "0.75";
+      } else if (kw == "subtext") {
+        rs.alpha = "0.25";
+        rs.origin = "0.375";
       } else {
         rs.alpha = "0.2";
         rs.origin = "0.5";
       }
-      // Allow params (origin/zoom) to override the defaults.
+      // Allow params (origin/zoom/alpha) to override the defaults, then an optional `chance`.
       parse_params(rs);
-      _render.push_back(rs);
+      Effect roll = parse_chance(e);
+      if (!roll.target.empty()) {
+        sink.push_back(roll);
+        rs.when = e.guard_reg + " >= 1";  // draw the text only on a chance hit (it flashes)
+      }
+      sink.push_back(e);
+      push_render(rs);
+    }
+
+    // `anim` (always animate) / `anim every Nth` (animate every Nth fire, gated by a pulse).
+    // Adds the change-animation load (+ pulse) to `extra`; sets has_anim/anim_gate on the draw.
+    void parse_anim(RenderStmt& rs, Slot slot, std::vector<Effect>& extra)
+    {
+      if (_c.peek_word() != "anim") return;
+      _c.word();
+      rs.has_anim = true;
+      Effect load = effect(Effect::Kind::Anim);
+      load.slot = slot;
+      extra.push_back(load);
+      if (_c.peek_word() == "every") {
+        _c.word();
+        const uint32_t n = _c.uint_lit();
+        const std::string suf = _c.peek_word();
+        if (suf == "st" || suf == "nd" || suf == "rd" || suf == "th") _c.word();
+        const std::string ctr = "_actr" + std::to_string(_idc);
+        const std::string flag = "_anim" + std::to_string(_idc);
+        ++_idc;
+        Effect pulse = effect(Effect::Kind::Pulse);
+        pulse.target = ctr;
+        pulse.mod_literal = static_cast<int32_t>(n);
+        pulse.flag = flag;
+        extra.push_back(pulse);
+        rs.anim_gate = flag;  // render animates only when the flag is set (every Nth)
+      }
+    }
+
+    // `chance p` / `chance(p)`: a 100-bucket roll that gates the draw on a 1-in-... hit.
+    // Returns the roll effect to prepend (empty target => no chance).
+    Effect parse_chance(Effect& gated)
+    {
+      Effect none = effect(Effect::Kind::Set);
+      none.target = "";
+      if (_c.peek_word() != "chance") return none;
+      _c.word();
+      const bool paren = _c.accept('(');
+      const float p = _c.number_lit();
+      if (paren) _c.expect(')');
+      uint32_t ones = static_cast<uint32_t>(std::lround(100.0 * double(p)));
+      if (ones < 1) ones = 1;
+      if (ones > 99) ones = 99;
+      const std::string creg = "_chance" + std::to_string(_idc++);
+      Effect roll = effect(Effect::Kind::Roll);
+      roll.target = creg;
+      for (uint32_t k = 0; k < 100; ++k) roll.choices.push_back(k < ones ? 1 : 0);
+      gated.guard = Effect::Guard::Ge;
+      gated.guard_reg = creg;
+      gated.guard_value = 1;
+      return roll;
     }
 
     // `every LEN [-> NAME] { body }` -> Rep(span/LEN, Action(LEN, body-effects)). Opens a CLOCK

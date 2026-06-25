@@ -14,12 +14,9 @@ namespace builtin
   // `visual_type` is the Program::VisualType enum value (1=ACCELERATE .. 8=SUPER_FAST).
   std::string pattern_source(uint32_t visual_type);
 
-  // The same built-ins re-authored in the v2 intent grammar (docs/spec-grammar-v2.md),
-  // parsed by patternv2::parse. Non-empty for a type means "compile this type from v2
-  // instead of the v1 source above". Empty means "not yet ported; use pattern_source".
-  // NOTE: these are currently SIMPLIFIED smoke versions (image/text/spiral streams);
-  // full-fidelity ramps/anim/render-shapes are the continuing grammar work.
-  std::string pattern_source_v2(uint32_t visual_type);
+  // The same built-ins authored in the v3 intent grammar (docs/spec-grammar-v3.md), parsed by
+  // patternv3::parse. The director prefers this when non-empty (else falls back to v1).
+  std::string pattern_source_v3(uint32_t visual_type);
 }
 
 #endif
