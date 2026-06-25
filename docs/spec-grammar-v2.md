@@ -35,7 +35,7 @@ construction.
 > - **Implemented:** `pattern [repeat N]`; `phase`/`escalate`/`deepen "X" for INTf | for auto`;
 >   `description`; `curve NAME from A to B [ease late|linear]` (only `late` weights the dwell);
 >   curve→cadence ramp (`every <curve>`, image only) and curve→attribute; `image`/`word`/
->   `caption`/`subtext`; `theme 0|1` (+ `concept`/`reward`/`runtime`; **`theme N≥2` hard-errors**);
+>   `caption`/`subtext`; `theme N` (`concept`/`reward` = `theme 0`/`1`; **N≥2 warns + clamps** to slot 1);
 >   `-> NAME` image register; `every INT` (non-divisor = warning); `stagger K`; `chance(p)`
 >   (100-bucket); `zoom`/`brightness`/`origin`/`alpha` with `[EXPR]` escape, `fade in|out|inout`,
 >   `hold`, and `over section|pattern|flash`; `anim` / `anim every Nth`; `spiral [rate K]`;
@@ -483,12 +483,14 @@ otherwise.
 `Slot` is hard-coded `{None, Primary, Alternate, Runtime}` (`pattern_ast.h:20`) and every
 image/text/anim API param is a `bool alternate`. Conditioning across multiple distinct
 concept-themes needs: `Slot` → a `ThemeRef`/index; a ThemeBank + loader redesign holding
-K live themes; and widening every `bool alternate` signature to an index. **Status
-(implemented):** the v2 parser accepts `theme N` (with `concept`/`reward` as aliases for
-`theme 0`/`theme 1`), maps 0→primary and 1→alternate, and **hard-errors on `theme N≥2`**
-with a message pointing at this extension — so the surface and the compile-time guard are
-done. Associative conditioning therefore ships *today at the two-theme floor* (`image theme 0`
-paired with `word theme 1` on the same beat). **Still outstanding (the runtime project):**
+K live themes; and widening every `bool alternate` signature to an index. **Status (grammar
+surface complete; runtime is the remaining project):** the v2 parser accepts `theme N` for
+any N (with `concept`/`reward` as `theme 0`/`theme 1`), lowers 0→primary and 1→alternate, and
+for **N≥2 clamps to slot 1 and emits a warning** (no longer a hard error) — so the full
+theme-index surface parses, lowers, and runs today, just with only two *distinct* display
+slots. Associative conditioning ships at the two-theme floor (`image theme 0` paired with
+`word theme 1` on the same beat). **Still outstanding — the runtime that makes N≥2 a DISTINCT
+theme (a deliberate, risk-scoped go/no-go):**
 `Slot` → a `ThemeRef`/index, the ThemeBank's fixed 4-slot rotating queue (`_active_themes[4]`:
 prev/primary/alternate/next) generalized to hold K *displayable* themes, the load/swap core
 (`advance_theme`/`do_swap`/`async_update`/cache sizing) reworked for K, and `get_image(bool)`
