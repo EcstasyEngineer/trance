@@ -361,7 +361,10 @@ namespace
   class Parser
   {
   public:
-    explicit Parser(const std::string& src) : _c(src), _src(src) {}
+    Parser(const std::string& src, uint32_t locked_period)
+    : _c(src), _src(src), _locked_period(locked_period)
+    {
+    }
 
     void parse_pattern(patternv2::ParseResult& out)
     {
@@ -722,17 +725,23 @@ namespace
 
       expect_word("every");
 
-      // `every locked` -- entrainment-synced cadence. Reserved; needs the runtime hook.
+      // Cadence source: `locked` (entrainment beat, Ext #2), a curve (ramp), or a literal int.
+      bool locked = false;
+      uint32_t locked_every = 0;
       if (_c.peek_word() == "locked") {
         const std::size_t lat = _c.pos();
         _c.word();
-        throw ParseError{"every locked: entrainment period unavailable -- needs the entrainment "
-                         "runtime hook (Extension #2)",
-                         lat};
+        if (_locked_period == 0) {
+          throw ParseError{"every locked: entrainment period unavailable (this program has no "
+                           "pulsed entrainment bed) -- Extension #2",
+                           lat};
+        }
+        locked = true;
+        locked_every = _locked_period;
       }
 
       // ---- ramped cadence (`every <curve>`) ----
-      if (!_c.next_is_digit()) {
+      if (!locked && !_c.next_is_digit()) {
         const std::size_t cat = _c.pos();
         const std::string cname = _c.word();
         auto it = _curves.find(cname);
@@ -756,20 +765,23 @@ namespace
         return seq;
       }
 
-      // ---- fixed cadence ----
-      const std::size_t every_at = _c.pos();
-      const uint32_t every = _c.uint_lit();
-      if (every == 0) {
-        throw ParseError{"'every 0' is not a valid beat", every_at};
-      }
-      if (phase_length != 0 && phase_length % every != 0) {
-        // Warn, don't reject (spec §5.1 / §9 decision #5): floor division keeps the whole
-        // beats; the stream just ends one partial interval early. Allowing this is what lets
-        // authors write deliberate polyrhythms.
-        _warnings.push_back(_loc(every_at) + ": beat " + std::to_string(every) +
-                            " does not divide phase length " + std::to_string(phase_length) +
-                            " -- the stream ends " + std::to_string(phase_length % every) +
-                            " frames early");
+      // ---- fixed cadence ---- (literal beat, or the locked entrainment period)
+      uint32_t every = locked_every;
+      if (!locked) {
+        const std::size_t every_at = _c.pos();
+        every = _c.uint_lit();
+        if (every == 0) {
+          throw ParseError{"'every 0' is not a valid beat", every_at};
+        }
+        if (phase_length != 0 && phase_length % every != 0) {
+          // Warn, don't reject (spec §5.1 / §9 decision #5): floor division keeps the whole
+          // beats; the stream just ends one partial interval early -- this is what lets authors
+          // write deliberate polyrhythms.
+          _warnings.push_back(_loc(every_at) + ": beat " + std::to_string(every) +
+                              " does not divide phase length " + std::to_string(phase_length) +
+                              " -- the stream ends " + std::to_string(phase_length % every) +
+                              " frames early");
+        }
       }
 
       // `stagger K` (phase-offset this stream).
@@ -851,6 +863,7 @@ namespace
     std::map<std::string, Curve> _curves;
     uint32_t _node_counter = 0;
     uint32_t _phase_count = 0;
+    uint32_t _locked_period = 0;  // entrainment beat period in frames (0 = no pulsed bed)
     bool _any_spiral = false;
     bool _any_word = false;
     bool _any_sub = false;
@@ -875,11 +888,11 @@ namespace
 
 namespace patternv2
 {
-  ParseResult parse(const std::string& source)
+  ParseResult parse(const std::string& source, uint32_t locked_period_frames)
   {
     ParseResult out;
     try {
-      Parser p(source);
+      Parser p(source, locked_period_frames);
       p.parse_pattern(out);
       out.ok = true;
     } catch (const ParseError& e) {
