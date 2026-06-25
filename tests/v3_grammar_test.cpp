@@ -107,6 +107,23 @@ pattern twin for 512f {
     }
   }
 
+  // 3b. Spiral speed is a curve-drivable render param; look{} lowers to a SpiralSet effect.
+  {
+    auto pr = parse(R"(
+pattern s for 240f {
+  look { spiral type=3 width=6 }
+  image concept zoom 0.5
+  spiral speed (curve 1 -> 3)
+})");
+    check(pr.ok, std::string("spiral: parses") + (pr.ok ? "" : (" -- " + pr.error)));
+    if (pr.ok) {
+      bool spiral_speed = false;
+      for (const auto& st : pr.render_block)
+        if (st.op == pattern::RenderStmt::Op::Spiral && !st.speed.empty()) spiral_speed = true;
+      check(spiral_speed, "spiral: speed lowers to a render-side [expr]");
+    }
+  }
+
   // 4. `over` resolution check fails loud on an unknown clock (no silent-zero).
   {
     auto pr = parse("pattern x for 100f { image concept zoom (curve 0 -> 1 over nope) }");

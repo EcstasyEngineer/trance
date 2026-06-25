@@ -288,6 +288,11 @@ namespace pattern
       }
       switch (st.op) {
       case RenderStmt::Op::Spiral:
+        // Spiral speed is a curve-drivable render param (v3): advance the spiral phase by the
+        // per-frame speed before drawing, so `spiral speed (curve ...)` reads exactly like zoom.
+        if (!st.speed.empty()) {
+          api.rotate_spiral(eval_num(st.speed, 0.0, regs, nodes, root));
+        }
         api.render_spiral();
         break;
       case RenderStmt::Op::Image: {
