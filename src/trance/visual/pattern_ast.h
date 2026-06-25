@@ -75,7 +75,7 @@ namespace pattern
   // the statement to a VisualRender draw call. This replaces the per-pattern C++ presets.
   struct RenderStmt
   {
-    enum class Op { Image, Text, Subtext, SmallText, Spiral };
+    enum class Op { Image, Text, Subtext, SmallText, Spiral, Warp };
     Op op = Op::Image;
 
     // Image op: the image register to draw (e.g. "current"). A register that was never

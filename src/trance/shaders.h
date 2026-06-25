@@ -60,9 +60,22 @@ varying vec2 out_texture_coord;
 // Input alpha value.
 varying vec4 out_colour;
 
+// v3 "wave" warp: a sinusoidal under-water displacement of the sampled texture coordinate.
+// warp_amp == 0 (the default) leaves the coordinate untouched, so a non-warped draw is
+// byte-identical to before.
+uniform float warp_amp;
+uniform float warp_wavelength;
+uniform float warp_speed;
+uniform float warp_time;
+
 void main()
 {
-  gl_FragColor = out_colour * texture2D(texture, out_texture_coord);
+  vec2 coord = out_texture_coord;
+  if (warp_amp != 0.0) {
+    float wl = max(warp_wavelength, 0.001);
+    coord += warp_amp * sin(coord.yx / wl + warp_time * warp_speed);
+  }
+  gl_FragColor = out_colour * texture2D(texture, coord);
 }
 )";
 

@@ -295,6 +295,13 @@ namespace pattern
         }
         api.render_spiral();
         break;
+      case RenderStmt::Op::Warp:
+        // v3 wave warp: amp in zoom, wavelength in origin, speed in speed. Set once per frame;
+        // image draws later in the block read it. amp 0 => no displacement.
+        api.set_warp(eval_num(st.zoom, 0.0, regs, nodes, root),
+                     eval_num(st.origin, 0.2, regs, nodes, root),
+                     eval_num(st.speed, 0.0, regs, nodes, root));
+        break;
       case RenderStmt::Op::Image: {
         Image image = image_reg(regs, st.image_reg);
         float alpha = eval_num(st.alpha, 1.0, regs, nodes, root);

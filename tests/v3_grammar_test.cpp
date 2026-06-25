@@ -124,6 +124,30 @@ pattern s for 240f {
     }
   }
 
+  // 3c. The wave warp (and `drunk` sugar) lowers to a Warp render op with params.
+  {
+    auto pr = parse(R"(
+pattern w for 240f {
+  warp amplitude (curve 0 -> 0.3) wavelength 0.2 speed 2
+  image concept zoom 0.5
+})");
+    check(pr.ok, std::string("warp: parses") + (pr.ok ? "" : (" -- " + pr.error)));
+    bool has_warp = false;
+    if (pr.ok)
+      for (const auto& st : pr.render_block)
+        if (st.op == pattern::RenderStmt::Op::Warp && !st.zoom.empty()) has_warp = true;
+    check(has_warp, "warp: lowers to a Warp op carrying an amplitude expr");
+
+    auto pd = parse("pattern d for 240f { drunk (curve 0 -> 0.3) image concept zoom 0.5 }");
+    bool drunk_warp = pd.ok;
+    if (pd.ok) {
+      drunk_warp = false;
+      for (const auto& st : pd.render_block)
+        if (st.op == pattern::RenderStmt::Op::Warp) drunk_warp = true;
+    }
+    check(drunk_warp, "drunk: is sugar for a warp op");
+  }
+
   // 4. `over` resolution check fails loud on an unknown clock (no silent-zero).
   {
     auto pr = parse("pattern x for 100f { image concept zoom (curve 0 -> 1 over nope) }");
