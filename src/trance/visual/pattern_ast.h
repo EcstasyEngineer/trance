@@ -40,8 +40,7 @@ namespace pattern
       Roll,      // scalars[target] = choices[random(choices.size())]
       Pulse,     // bounded counter -> one-frame flag (see fields below)
       Copy,      // images[target] = images[src]
-      SpiralSet, // deterministically set spiral type (ivalue) + width (mod_literal)
-      SuperFastTick  // SUPER_FAST's isolated FSM (writes its own fixed registers)
+      SpiralSet  // deterministically set spiral type (ivalue) + width (mod_literal)
     };
     Kind kind = Kind::Image;
     Slot slot = Slot::None;

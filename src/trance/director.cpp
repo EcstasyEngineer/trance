@@ -7,7 +7,7 @@
 #include <trance/visual/api.h>
 #include <trance/visual/builtin_patterns.h>
 #include <trance/visual/compiled_visual.h>
-#include <trance/visual/pattern_parser_v2.h>
+#include <trance/visual/pattern_parser_v3.h>
 #include <trance/visual/cyclers.h>
 #include <trance/visual/visual.h>
 #include <algorithm>
@@ -103,27 +103,28 @@ void Director::build_builtin_patterns()
     }
   }
   for (uint32_t t = 1; t <= 8; ++t) {
-    // Prefer the v2 intent-grammar source where one exists; it lowers to the same
-    // pattern::Node the v1 path produces, so everything downstream is identical.
-    std::string v2_source = builtin::pattern_source_v2(t);
-    if (!v2_source.empty()) {
-      auto v2 = patternv2::parse(v2_source, locked_frames);
-      if (!v2.ok) {
-        throw std::runtime_error("built-in v2 pattern " + std::to_string(t)
-                                 + " failed to parse: " + v2.error);
+    // Prefer the v3 intent grammar (docs/spec-grammar-v3.md) -- the primitive grammar that
+    // supersedes v2's baked constructs. It lowers to the same pattern::Node + RenderStmt IR.
+    std::string v3_source = builtin::pattern_source_v3(t);
+    if (!v3_source.empty()) {
+      auto v3 = patternv3::parse(v3_source, locked_frames);
+      if (!v3.ok) {
+        throw std::runtime_error("built-in v3 pattern " + std::to_string(t) +
+                                 " failed to parse: " + v3.error);
       }
-      for (const auto& w : v2.warnings) {
-        std::cerr << "v2 built-in " << t << " warning: " << w << std::endl;
+      for (const auto& w : v3.warnings) {
+        std::cerr << "v3 built-in " << t << " warning: " << w << std::endl;
       }
       pattern::Parsed parsed;
-      parsed.name = std::move(v2.name);
+      parsed.name = std::move(v3.name);
       parsed.weight = 1;
-      parsed.root = std::move(v2.root);
-      parsed.render_block = std::move(v2.render_block);  // per-flash zoom etc.
+      parsed.root = std::move(v3.root);
+      parsed.render_block = std::move(v3.render_block);
       _builtin_compiled.emplace(t, std::move(parsed));
       continue;
     }
 
+    // Final fallback: the original v1 grammar source.
     std::string source = builtin::pattern_source(t);
     if (source.empty()) {
       continue;

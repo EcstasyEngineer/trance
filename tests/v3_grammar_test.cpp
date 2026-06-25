@@ -4,6 +4,7 @@
 // registers are lexically pattern-scoped so two sibling crossfades never collide.
 //
 // Headless: parser + compiler + cyclers, no SFML/protobuf. Run via ctest.
+#include <trance/visual/builtin_patterns.h>
 #include <trance/visual/cyclers.h>
 #include <trance/visual/pattern_ast.h>
 #include <trance/visual/pattern_compiler.h>
@@ -153,6 +154,24 @@ pattern w for 240f {
     auto pr = parse("pattern x for 100f { image concept zoom (curve 0 -> 1 over nope) }");
     check(!pr.ok && pr.error.find("nope") != std::string::npos,
           "resolution: `over nope` is a hard parse error");
+  }
+
+  // 5. Every shipped v3 built-in parses and lowers to a runnable tree.
+  {
+    const char* names[] = {"", "accelerate", "slow_flash", "sub_text",     "flash_text",
+                           "simple",         "super_parallel", "animation", "super_fast"};
+    for (uint32_t t = 1; t <= 8; ++t) {
+      auto pr = parse(builtin::pattern_source_v3(t));
+      check(pr.ok, std::string("builtin ") + names[t] + ": parses" +
+                       (pr.ok ? "" : (" -- " + pr.error)));
+      if (pr.ok) {
+        Cycler* root = pattern::compile(pr.root);
+        check(root && root->length() > 0,
+              std::string("builtin ") + names[t] + ": lowers to a runnable tree (len=" +
+                  std::to_string(root ? root->length() : 0) + ")");
+        delete root;
+      }
+    }
   }
 
   std::cout << "\n" << (g_fail ? "FAILED: " : "all v3 grammar checks passed (")

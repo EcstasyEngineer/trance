@@ -196,12 +196,11 @@ add_executable(trance
   src/trance/theme_bank.cpp
   src/trance/visual/api.cpp
   src/trance/visual/builtin_patterns.cpp
-  src/trance/visual/builtin_patterns_v2.cpp
+  src/trance/visual/builtin_patterns_v3.cpp
   src/trance/visual/compiled_visual.cpp
   src/trance/visual/cyclers.cpp
   src/trance/visual/pattern_compiler.cpp
   src/trance/visual/pattern_parser.cpp
-  src/trance/visual/pattern_parser_v2.cpp
   src/trance/visual/pattern_parser_v3.cpp
   src/trance/visual/render_eval.cpp
   src/trance/visual/visual.cpp)
@@ -284,23 +283,10 @@ option(TRANCE_BUILD_TESTS "Build headless unit tests" OFF)
 if(TRANCE_BUILD_TESTS)
   enable_testing()
 
-  # v2 grammar sanity + behavioral test. NOT a parity test -- it asserts the shipped v2
-  # built-ins parse, lower to a runnable tree, and paint, plus targeted behavioral checks
-  # (e.g. flash_text genuinely crossfades). We deliberately do not freeze the originals'
-  # compiled-tree shape; the grammar is meant to supersede them, not match byte-for-byte.
-  add_executable(v2_grammar_test
-    src/trance/visual/builtin_patterns_v2.cpp
-    src/trance/visual/cyclers.cpp
-    src/trance/visual/pattern_compiler.cpp
-    src/trance/visual/pattern_parser_v2.cpp
-    tests/v2_grammar_test.cpp)
-  target_include_directories(v2_grammar_test PRIVATE src/)
-  target_link_libraries(v2_grammar_test PRIVATE trance_options)
-  add_test(NAME v2_grammar_test COMMAND v2_grammar_test)
-
-  # v3 grammar test: the new primitive grammar (nesting, crossfade-from-primitives, lexical
-  # register scoping). Headless -- parser + compiler + cyclers only.
+  # v3 grammar test: the primitive grammar (nesting, crossfade-from-primitives, lexical
+  # register scoping, all 8 built-ins). Headless -- parser + compiler + cyclers only.
   add_executable(v3_grammar_test
+    src/trance/visual/builtin_patterns_v3.cpp
     src/trance/visual/cyclers.cpp
     src/trance/visual/pattern_compiler.cpp
     src/trance/visual/pattern_parser_v3.cpp

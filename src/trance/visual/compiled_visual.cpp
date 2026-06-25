@@ -52,64 +52,6 @@ namespace
     }
   }
 
-  // SUPER_FAST's 4-state FSM, isolated here (the one genuine state machine among the
-  // visuals). Ticks once per call; reads/writes its own fixed scalar registers
-  // (sf_*) and the current/next image registers. The render_super_fast preset reads
-  // the same registers plus the "rapid" leaf's frame. Faithful port of the rapid
-  // action lambda in the former SuperFastVisual ctor. States: 0 RAPID, 1 START, 2
-  // ANIMATION, 3 END.
-  void run_super_fast_tick(VisualControl& api, pattern::Registers& regs)
-  {
-    auto& s = regs.scalars;
-    int32_t& state = s["sf_state"];
-    int32_t& atimer = s["sf_anim_timer"];
-    int32_t& cooldown = s["sf_cooldown"];
-    int32_t& tmod = s["sf_text_mod"];
-    int32_t& alt = s["sf_alternate"];
-
-    if (atimer == 4) {
-      api.maybe_upload_next();
-    }
-    if (cooldown) {
-      --cooldown;
-    }
-    if (state == 0) {
-      tmod = (1 + tmod) % 4;
-    }
-    if (state == 3) {
-      tmod = 0;
-      cooldown = 8;
-      state = 0;
-    }
-    if (state == 2) {
-      --atimer;
-      if (!atimer) {
-        state = 3;
-      }
-    }
-    if (state == 1) {
-      state = 2;
-      --atimer;
-    }
-    if (state == 0 && !cooldown && random_chance(12)) {
-      state = 1;
-      atimer = 8 + static_cast<int32_t>(random(9));
-      alt = !alt;
-      api.change_animation(alt != 0);
-    }
-    if (state != 2) {
-      Image current = regs.images["next"];
-      if (!current) {
-        current = api.get_image(alt != 0);
-      }
-      regs.images["current"] = current;
-      regs.images["next"] = api.get_image(alt != 0);
-      if (tmod == 0) {
-        api.change_text(VisualControl::SPLIT_WORD, alt != 0);
-      }
-    }
-  }
-
   void run_effect(const pattern::Effect& e, VisualControl& api, pattern::Registers& regs)
   {
     using K = pattern::Effect::Kind;
@@ -177,9 +119,6 @@ namespace
       break;
     case K::SpiralSet:
       api.set_spiral(static_cast<uint32_t>(e.ivalue), static_cast<uint32_t>(e.mod_literal));
-      break;
-    case K::SuperFastTick:
-      run_super_fast_tick(api, regs);
       break;
     }
   }
