@@ -40,6 +40,7 @@ namespace pattern
       Roll,      // scalars[target] = choices[random(choices.size())]
       Pulse,     // bounded counter -> one-frame flag (see fields below)
       Copy,      // images[target] = images[src]
+      SpiralSet, // deterministically set spiral type (ivalue) + width (mod_literal)
       SuperFastTick  // SUPER_FAST's isolated FSM (writes its own fixed registers)
     };
     Kind kind = Kind::Image;
@@ -95,7 +96,8 @@ namespace pattern
     //   Image:               alpha, origin (zoom_origin), zoom
     //   Text:                origin, zoom, shadow_origin, shadow_zoom
     //   Subtext / SmallText: alpha, origin
-    std::string alpha, origin, zoom, shadow_origin, shadow_zoom;
+    //   Spiral:              speed (per-frame rotation advance; empty => static)
+    std::string alpha, origin, zoom, shadow_origin, shadow_zoom, speed;
 
     // Optional `when [cond]`: draw only if the expr evaluates non-zero. Empty => always.
     std::string when;

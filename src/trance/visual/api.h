@@ -31,6 +31,9 @@ public:
 
   virtual void rotate_spiral(float amount) = 0;
   virtual void change_spiral() = 0;
+  // Deterministically pin the spiral shape/width (v3 `look { spiral type/width }`), instead of
+  // change_spiral()'s random roll. Does not touch the rotation phase.
+  virtual void set_spiral(uint32_t type, uint32_t width) = 0;
   virtual void change_animation(bool alternate = false) = 0;
   virtual void change_font(bool force = false) = 0;
   virtual void change_text(SplitType split_type, bool alternate = false) = 0;
@@ -58,6 +61,10 @@ public:
   virtual void render_subtext(float alpha, float zoom_origin) const = 0;
   virtual void render_small_subtext(float alpha, float zoom_origin) const = 0;
   virtual void render_spiral() const = 0;
+  // Exposed on the render interface so the v3 render block can advance the spiral by a
+  // curve-driven per-frame speed (spiral speed is a render param like zoom). Same method as
+  // VisualControl::rotate_spiral; VisualApiImpl's single override satisfies both.
+  virtual void rotate_spiral(float amount) = 0;
 };
 
 class VisualApiImpl : public VisualControl, public VisualRender
@@ -72,6 +79,7 @@ public:
 
   void rotate_spiral(float amount) override;
   void change_spiral() override;
+  void set_spiral(uint32_t type, uint32_t width) override;
   void change_animation(bool alternate = false) override;
   void change_font(bool force = false) override;
   void change_text(SplitType split_type, bool alternate = false) override;

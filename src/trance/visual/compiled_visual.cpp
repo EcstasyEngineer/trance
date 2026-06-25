@@ -175,6 +175,9 @@ namespace
     case K::Copy:
       regs.images[e.target] = regs.images[e.src];
       break;
+    case K::SpiralSet:
+      api.set_spiral(static_cast<uint32_t>(e.ivalue), static_cast<uint32_t>(e.mod_literal));
+      break;
     case K::SuperFastTick:
       run_super_fast_tick(api, regs);
       break;

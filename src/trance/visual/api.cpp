@@ -96,6 +96,13 @@ void VisualApiImpl::change_spiral()
   _spiral_width = 360 / (1 + random(6));
 }
 
+void VisualApiImpl::set_spiral(uint32_t type, uint32_t width)
+{
+  // Deterministic pin (v3 look{}). type is 1-based in the shader (spiral_type 1..7); clamp.
+  _spiral_type = type == 0 ? 0 : (type > spiral_type_max ? spiral_type_max : type) - 1;
+  _spiral_width = width == 0 ? _spiral_width : width;
+}
+
 void VisualApiImpl::change_animation(bool alternate)
 {
   _themes.change_animation(alternate);

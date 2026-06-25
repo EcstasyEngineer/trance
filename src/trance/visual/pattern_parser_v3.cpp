@@ -449,18 +449,21 @@ namespace
         children.push_back(parse_cadence(span));
         return;
       }
+      if (kw == "look") {
+        parse_look(sink);
+        return;
+      }
       if (kw == "spiral") {
         _c.word();
-        if (_c.peek_word() == "speed") {
-          _c.word();
-          // Phase 1: a constant speed lowers to a SpiralRot rate; a curve is Phase 2 (stairstep).
-          const float rate = _c.number_lit();
-          Effect e = effect(Effect::Kind::SpiralRot);
-          e.rate = rate;
-          sink.push_back(e);
-        }
         RenderStmt rs;
         rs.op = RenderStmt::Op::Spiral;
+        // Spiral SPEED is a curve-drivable render param (constant or curve), advanced per frame
+        // by render_eval -- the same modulator class as zoom/fade. Shape/width/color are settings
+        // (the `look {}` header), not animated.
+        if (_c.peek_word() == "speed") {
+          _c.word();
+          rs.speed = parse_modulator();
+        }
         _render.push_back(rs);
         return;
       }
@@ -485,6 +488,34 @@ namespace
         return;
       }
       throw ParseError{"unknown statement '" + kw + "'", at};
+    }
+
+    // `look { spiral type=N width=W }` -- SETTINGS, not per-frame: a deterministic SpiralSet that
+    // pins the spiral shape/width (replacing change_spiral's random roll). Fires once.
+    void parse_look(std::vector<Effect>& sink)
+    {
+      expect_word("look");
+      _c.expect('{');
+      while (_c.peek_char() != '}') {
+        const std::size_t at = _c.pos();
+        const std::string w = _c.word();
+        if (w == "spiral") {
+          Effect e = effect(Effect::Kind::SpiralSet);
+          for (;;) {
+            const std::string p = _c.peek_word();
+            if (p != "type" && p != "width") break;
+            _c.word();
+            _c.expect('=');
+            const uint32_t v = _c.uint_lit();
+            if (p == "type") e.ivalue = static_cast<int32_t>(v);
+            else e.mod_literal = static_cast<int32_t>(v);
+          }
+          sink.push_back(e);
+        } else {
+          throw ParseError{"unknown look property '" + w + "'", at};
+        }
+      }
+      _c.expect('}');
     }
 
     void parse_draw(uint32_t /*span*/, std::vector<Effect>& sink)
