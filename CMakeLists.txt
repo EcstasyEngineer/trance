@@ -202,6 +202,7 @@ add_executable(trance
   src/trance/visual/pattern_compiler.cpp
   src/trance/visual/pattern_parser.cpp
   src/trance/visual/pattern_parser_v2.cpp
+  src/trance/visual/pattern_parser_v3.cpp
   src/trance/visual/render_eval.cpp
   src/trance/visual/visual.cpp)
 
@@ -296,4 +297,15 @@ if(TRANCE_BUILD_TESTS)
   target_include_directories(v2_grammar_test PRIVATE src/)
   target_link_libraries(v2_grammar_test PRIVATE trance_options)
   add_test(NAME v2_grammar_test COMMAND v2_grammar_test)
+
+  # v3 grammar test: the new primitive grammar (nesting, crossfade-from-primitives, lexical
+  # register scoping). Headless -- parser + compiler + cyclers only.
+  add_executable(v3_grammar_test
+    src/trance/visual/cyclers.cpp
+    src/trance/visual/pattern_compiler.cpp
+    src/trance/visual/pattern_parser_v3.cpp
+    tests/v3_grammar_test.cpp)
+  target_include_directories(v3_grammar_test PRIVATE src/)
+  target_link_libraries(v3_grammar_test PRIVATE trance_options)
+  add_test(NAME v3_grammar_test COMMAND v3_grammar_test)
 endif()
