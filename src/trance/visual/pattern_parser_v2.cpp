@@ -479,11 +479,15 @@ namespace
         const std::size_t nat = _c.pos();
         const uint32_t n = _c.uint_lit();
         if (n == 0) return Slot::Primary;
-        if (n == 1) return Slot::Alternate;
-        throw ParseError{"theme " + std::to_string(n) +
-                             ": 3+ simultaneous themes need the ThemeBank runtime extension "
-                             "(only theme 0/1 are supported today)",
-                         nat};
+        // The grammar surface supports any `theme N`; today the runtime holds two distinct
+        // display slots, so N>=2 clamps to slot 1 and warns. 3+ DISTINCT live themes are the
+        // ThemeBank K-slot rotation (Extension #1 runtime), scoped as its own project.
+        if (n >= 2) {
+          _warnings.push_back(_loc(nat) + ": theme " + std::to_string(n) +
+                              " clamps to theme 1 -- 3+ distinct live themes need the ThemeBank "
+                              "runtime (Extension #1; grammar surface is complete)");
+        }
+        return Slot::Alternate;
       }
       return theme_to_slot(w, at);
     }
