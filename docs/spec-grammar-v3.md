@@ -57,9 +57,34 @@ draft's "5"), `width` = arm count, `acolour`/`bcolour`, and a `time` uniform tha
 **0.5 `super_fast`: commit to randomness primitives; delete `SuperFastTick`.** No `raw {}`
 escape hatch. Accept "same effect, not the same frames." Closes that §12 open question.
 
-**Still open after these decisions:** nested-pattern register-name scoping (`cur`/`prev`
-collisions across subpatterns — A.1 / plan-risk), the `every <curve>` un-id'd-segment limit,
-and `warp` parameter tuning. These are implementation-time calls, flagged in Appendix A.
+**0.6 Register scoping — lexical, pattern-scoped, compile-time qualified (resolves the A.1
+collision).** A register name is **local to its nearest enclosing `pattern`**; cadence blocks
+(`every`/`loop`) do **not** open a new register scope (so a `copy cur -> prev` inside an
+`every` and the `image-reg cur/prev` draws in the same pattern hit the same registers — which
+is exactly what crossfade needs).
+- **Qualification.** The compiler prefixes each bare register name with its pattern's id-path
+  before emitting to the flat runtime maps (`regs.images` / `regs.scalars`). Two sibling
+  crossfade sub-patterns each writing `cur`/`prev` become `A.cur`/`A.prev` and `B.cur`/`B.prev`
+  — **collision impossible**, at any nesting depth. A loop's iterations reuse the same pattern
+  scope, so `cur`/`prev` correctly **persist** across beats (the handoff still works).
+- **Resolution (lexical).** A bare reference binds to the nearest enclosing pattern that uses
+  that name. To deliberately read another pattern's register (descriptive power), write a
+  **qualified `OtherPattern.reg`** — the same `pattern.name` form the compiler uses internally.
+- **AST cost (minimal — the explicit design constraint).** No new AST node types;
+  `Effect.target`, `Effect.src`, and `RenderStmt.image_reg` stay `std::string`. The parser
+  already walks the pattern nesting; it adds a scope stack and qualifies register names at parse
+  time. **Runtime is unchanged** — still a flat string→value map, the keys are just qualified.
+  Pure compile-time string transformation.
+- **Safety.** The §7.4 resolution check rejects a bare name that resolves to nothing and a
+  qualified name whose target pattern/register does not exist — so an unresolved register is a
+  **parse error**, never the silent-zero dark-screen footgun.
+- **Rejected:** explicit `reg NAME` declarations (ceremony hurts common-case legibility);
+  collision-only suffixing `cur#2` (unpredictable for cross-references); first-class register
+  handles (a new binding concept = AST over-engineering). Lexical auto-qualification is the best
+  compromise of legibility (bare local names), power (qualified cross-refs), and minimal AST.
+
+**Still open after these decisions:** the `every <curve>` un-id'd-segment limit and `warp`
+parameter tuning — implementation-time calls, flagged in Appendix A.
 
 ---
 
