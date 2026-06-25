@@ -28,6 +28,23 @@ construction.
 > principle, from this review: *the intent defines the full visible behavior in its most
 > collapsed form; nothing visual is hardcoded in the compiler.* See the §9 decisions.
 
+> **⚠ AS-BUILT STATUS (this document describes the TARGET grammar; the shipped parser
+> implements a subset).** `pattern_parser_v2.cpp` is the source of truth for what parses today.
+> Many §3 productions and §8 worked examples use constructs that are **not yet built** — treat
+> §8 as design intent, and `builtin_patterns_v2.cpp` as the lowers-today counterpart.
+> - **Implemented:** `pattern [repeat N]`; `phase`/`escalate`/`deepen "X" for INTf | for auto`;
+>   `description`; `curve NAME from A to B [ease late|linear]` (only `late` weights the dwell);
+>   curve→cadence ramp (`every <curve>`, image only) and curve→attribute; `image`/`word`/
+>   `caption`/`subtext`; `theme 0|1` (+ `concept`/`reward`/`runtime`; **`theme N≥2` hard-errors**);
+>   `-> NAME` image register; `every INT` (non-divisor = warning); `stagger K`; `chance(p)`
+>   (100-bucket); `zoom`/`brightness`/`origin`/`alpha` with `[EXPR]` escape, `fade in|out|inout`,
+>   `hold`, and `over section|pattern|flash`; `anim` / `anim every Nth`; `spiral [rate K]`;
+>   `every locked`/`spiral locked` **hard-error** (Ext #2 not yet wired).
+> - **Designed, NOT built:** `themes{}` header, `pair`, `gate`, `solo`/`idle`, `layer-in`,
+>   `flip`, `pick(...)`, `maybe`, `burst`, `every-lap`, `as word|line|once`, `upload`, hand
+>   `paint{}`, per-stream attrs on text/caption/subtext, `ease in|out|early`, and a continuous
+>   `copy`-handoff crossfade. (A baked `crossfade` keyword was tried and removed — §5.5.)
+
 ---
 
 ## 1. Purpose & the compile-down contract
@@ -96,7 +113,18 @@ whole-pattern motion (the review's "recursing curves to lower levels"). **Implem
 `zoom Z` rides the flash clock, `zoom Z over section` rides the section clock; `over pattern` is
 the natural next extension.
 
-> **Proposed refinement (under consideration — not yet adopted): everything is a (sub)pattern.**
+> **ADOPTED (design review): everything is a (sub)pattern.** The analysis confirmed this is
+> already true at runtime — `render_eval.cpp`'s `resolve_ident` resolves every node (flash leaf,
+> phase, root) through one flat NodeMap + `Cycler::progress()`, and the parser's structural
+> defaults already implement the two rules (named time-sections → `Seq` siblings, content →
+> `Par` siblings). So this is a naming/spec change with **zero runtime change**. Two honesty
+> bounds: `over <ancestor>` beyond `section`/`pattern`/`flash` is new sugar (the generic read
+> already works via `[EXPR]`'s `<node>.progress`); and the atomic flash leaf carries an internal
+> `_imgN` id, so name-addressing holds for author-named ancestors (phases/curves/`-> NAME`
+> streams) but the bare flash is reachable only via the flash-clock default or an explicit
+> `-> NAME`. Original note retained below for rationale.
+>
+> **Refinement detail: everything is a (sub)pattern.**
 > The object model has four time-ish nouns — `pattern`, `phase`, `stream`, and the `flash` (one
 > image's showing). They may collapse into **one recursive concept: a pattern contains subpatterns**,
 > down to the atomic level (a single image shown for N frames is itself just a pattern of one image).
