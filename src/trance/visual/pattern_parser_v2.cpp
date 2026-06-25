@@ -361,7 +361,7 @@ namespace
   class Parser
   {
   public:
-    explicit Parser(const std::string& src) : _c(src) {}
+    explicit Parser(const std::string& src) : _c(src), _src(src) {}
 
     void parse_pattern(patternv2::ParseResult& out)
     {
@@ -395,6 +395,7 @@ namespace
       out.root = group(Node::Type::One, std::move(rootKids));
       out.render_block =
           build_render_block(_layers, _phase_count, _any_word, _any_sub, _any_caption, _any_spiral);
+      out.warnings = std::move(_warnings);
     }
 
   private:
@@ -762,9 +763,13 @@ namespace
         throw ParseError{"'every 0' is not a valid beat", every_at};
       }
       if (phase_length != 0 && phase_length % every != 0) {
-        throw ParseError{"beat " + std::to_string(every) + " does not divide phase length " +
-                             std::to_string(phase_length),
-                         every_at};
+        // Warn, don't reject (spec §5.1 / §9 decision #5): floor division keeps the whole
+        // beats; the stream just ends one partial interval early. Allowing this is what lets
+        // authors write deliberate polyrhythms.
+        _warnings.push_back(_loc(every_at) + ": beat " + std::to_string(every) +
+                            " does not divide phase length " + std::to_string(phase_length) +
+                            " -- the stream ends " + std::to_string(phase_length % every) +
+                            " frames early");
       }
 
       // `stagger K` (phase-offset this stream).
@@ -826,7 +831,22 @@ namespace
       return seq;
     }
 
+    std::string _loc(std::size_t pos) const
+    {
+      std::size_t line = 1, col = 1;
+      for (std::size_t i = 0; i < pos && i < _src.size(); ++i) {
+        if (_src[i] == '\n') {
+          ++line;
+          col = 1;
+        } else {
+          ++col;
+        }
+      }
+      return std::to_string(line) + ":" + std::to_string(col);
+    }
+
     Cursor _c;
+    const std::string& _src;
     std::vector<Layer> _layers;
     std::map<std::string, Curve> _curves;
     uint32_t _node_counter = 0;
@@ -835,6 +855,7 @@ namespace
     bool _any_word = false;
     bool _any_sub = false;
     bool _any_caption = false;
+    std::vector<std::string> _warnings;
   };
 
   std::string locate(const std::string& src, std::size_t pos)
