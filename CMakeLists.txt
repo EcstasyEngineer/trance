@@ -283,16 +283,17 @@ option(TRANCE_BUILD_TESTS "Build headless unit tests" OFF)
 if(TRANCE_BUILD_TESTS)
   enable_testing()
 
-  # Golden schedule-signature test: freezes the cycler-tree shape each of the 8
-  # built-ins compiles to (docs/spec-grammar-v2.md §7 "blocking predecessor"), so a
-  # v2 re-port -- or any accidental parser/compiler change -- is caught structurally.
-  add_executable(golden_signature_test
-    src/trance/visual/builtin_patterns.cpp
+  # v2 grammar sanity + behavioral test. NOT a parity test -- it asserts the shipped v2
+  # built-ins parse, lower to a runnable tree, and paint, plus targeted behavioral checks
+  # (e.g. flash_text genuinely crossfades). We deliberately do not freeze the originals'
+  # compiled-tree shape; the grammar is meant to supersede them, not match byte-for-byte.
+  add_executable(v2_grammar_test
+    src/trance/visual/builtin_patterns_v2.cpp
     src/trance/visual/cyclers.cpp
     src/trance/visual/pattern_compiler.cpp
-    src/trance/visual/pattern_parser.cpp
-    src/trance/visual/golden_signature_test.cpp)
-  target_include_directories(golden_signature_test PRIVATE src/)
-  target_link_libraries(golden_signature_test PRIVATE trance_options)
-  add_test(NAME golden_signature_test COMMAND golden_signature_test)
+    src/trance/visual/pattern_parser_v2.cpp
+    tests/v2_grammar_test.cpp)
+  target_include_directories(v2_grammar_test PRIVATE src/)
+  target_link_libraries(v2_grammar_test PRIVATE trance_options)
+  add_test(NAME v2_grammar_test COMMAND v2_grammar_test)
 endif()
