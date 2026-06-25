@@ -1,6 +1,12 @@
 # Trance v2 Intent Grammar — Authoritative Spec
 
-> **Status: spec.** This is the single, self-contained, decisive specification for the
+> **⚠ SUPERSEDED by [`spec-grammar-v3.md`](spec-grammar-v3.md).** The v2 grammar and its parser
+> have been retired; v3 (a primitive grammar where crossfade/spiral/zoom/fade/warp are composed,
+> not baked) is the shipped path. This document is kept for history and for the still-valid
+> design rationale it records (the clocks, the bi-thematic decision, the run-time-extension
+> discipline). Do not implement against it.
+
+> **Status: spec (historical).** This is the single, self-contained, decisive specification for the
 > v2 visual intent grammar. It supersedes the design notes in `roadmap-grammar-v2.md`
 > and the two competing drafts. The ground-truth floor it compiles to is
 > [`engine-today.md`](engine-today.md); read that first if you have not. Every
