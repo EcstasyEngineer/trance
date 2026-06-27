@@ -309,6 +309,45 @@ namespace
       }
     }
 
+    std::string display_reg(const std::string& qreg) const
+    {
+      const auto p = qreg.find('$');
+      return p == std::string::npos ? qreg : qreg.substr(p + 1);
+    }
+
+    Slot hint_slot(const Effect& e) const
+    {
+      if (!e.slot_reg.empty() || e.slot == Slot::Runtime) {
+        return Slot::Runtime;
+      }
+      return e.slot;
+    }
+
+    void apply_image_hint(Node& n, const std::vector<Effect>& effects) const
+    {
+      Slot hint = Slot::None;
+      std::string label;
+      uint32_t image_effects = 0;
+      for (const auto& e : effects) {
+        if (e.kind != Effect::Kind::Image) {
+          continue;
+        }
+        ++image_effects;
+        const Slot s = hint_slot(e);
+        if (hint == Slot::None) {
+          hint = s;
+          label = display_reg(e.target);
+        } else if (hint != s) {
+          hint = Slot::Runtime;
+          label = "img";
+        }
+      }
+      if (hint != Slot::None) {
+        n.image_slot = hint;
+        n.image_label = image_effects == 1 && !label.empty() ? label : "img";
+      }
+    }
+
     // ---- lengths ----
     uint32_t parse_len()
     {
@@ -714,6 +753,7 @@ namespace
       _clocks.pop_back();
 
       Node leaf = action(len, std::move(leaf_effects));
+      apply_image_hint(leaf, leaf.effects);
       leaf.id = cid;
       Node node = (span != 0 && len != 0) ? repeat(span / len, std::move(leaf)) : std::move(leaf);
       // Fold any nested-pattern subtrees beside the cadence leaf (run in parallel).
@@ -761,6 +801,7 @@ namespace
 
       if (!bare.empty()) {
         Node a = action(len, std::move(bare));
+        apply_image_hint(a, a.effects);
         children.push_back(std::move(a));
       }
       if (children.empty()) {

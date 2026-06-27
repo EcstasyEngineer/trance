@@ -47,15 +47,27 @@ class VisualRender
 public:
   virtual ~VisualRender() = default;
 
+  enum class ThemeSlot {
+    None,
+    Primary,
+    Alternate,
+  };
+  struct DebugLayer {
+    float alpha;
+    ThemeSlot slot;
+  };
+
   enum class Anim {
     NONE,
     ANIM,
     ANIM_ALTERNATE,
   };
   virtual void render_animation_or_image(Anim type, const Image& image, float alpha,
-                                         float zoom_origin, float zoom) const = 0;
+                                         float zoom_origin, float zoom,
+                                         ThemeSlot slot = ThemeSlot::None) const = 0;
   virtual void
-  render_image(const Image& image, float alpha, float zoom_origin, float zoom) const = 0;
+  render_image(const Image& image, float alpha, float zoom_origin, float zoom,
+               ThemeSlot slot = ThemeSlot::None) const = 0;
   virtual void
   render_text(float zoom_origin, float zoom, float shadow_zoom_origin, float shadow_zoom) const = 0;
   virtual void render_subtext(float alpha, float zoom_origin) const = 0;
@@ -90,8 +102,9 @@ public:
   bool change_themes() override;
 
   void render_animation_or_image(Anim type, const Image& image, float alpha, float zoom_origin,
-                                 float zoom) const override;
-  void render_image(const Image& image, float alpha, float zoom_origin, float zoom) const override;
+                                 float zoom, ThemeSlot slot = ThemeSlot::None) const override;
+  void render_image(const Image& image, float alpha, float zoom_origin, float zoom,
+                    ThemeSlot slot = ThemeSlot::None) const override;
   void render_text(float zoom_origin, float zoom, float shadow_zoom_origin,
                    float shadow_zoom) const override;
   void render_subtext(float alpha, float zoom_origin) const override;
@@ -104,7 +117,7 @@ public:
   // it draws, which reveals how many images the current visual overlays (e.g.
   // the 3-image SUPER_PARALLEL fade).
   void debug_begin_frame() const;
-  const std::vector<float>& debug_layers() const;
+  const std::vector<VisualRender::DebugLayer>& debug_layers() const;
   float debug_spiral() const;
   uint32_t debug_spiral_type() const;
   uint32_t debug_spiral_width() const;
@@ -131,8 +144,8 @@ private:
 
   std::vector<std::string> _current_text;
 
-  // Alpha of each image layer drawn during the current frame (debug overlay).
-  mutable std::vector<float> _debug_layers;
+  // Image layers drawn during the current frame (debug overlay): alpha + concrete theme slot.
+  mutable std::vector<VisualRender::DebugLayer> _debug_layers;
 };
 
 #endif

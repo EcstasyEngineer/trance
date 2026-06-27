@@ -1,5 +1,9 @@
 # Authoring visual patterns
 
+> Legacy note: this page describes the older custom-pattern grammar. New patterns should use
+> the v3 guide in [authoring-v3-patterns.md](authoring-v3-patterns.md). Playback tries v3 first
+> for custom `.session` patterns, then falls back to this legacy grammar for older sessions.
+
 You can write your own visual and ship it inside a `.session` as readable text —
 no recompile. A custom pattern is selected for playback alongside the eight
 built-in visuals. This is the user guide; for how the engine compiles and runs a

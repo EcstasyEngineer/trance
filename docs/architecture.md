@@ -101,8 +101,9 @@ play_session frame loop ──► Director ──► Visual (cycler tree + effec
 - **Visual engine** → [visuals.md](visuals.md). Start at `Director::change_visual`
   (`src/trance/director.cpp:384`) for selection, then `compiled_visual.{h,cpp}`
   and `cyclers.{h,cpp}`.
-- **Authoring a custom pattern** → [authoring-visual-patterns.md](authoring-visual-patterns.md);
-  grammar in `src/trance/visual/pattern_parser.h`.
+- **Authoring a custom pattern** → [authoring-v3-patterns.md](authoring-v3-patterns.md);
+  grammar in `src/trance/visual/pattern_parser_v3.cpp` (legacy fallback:
+  `src/trance/visual/pattern_parser.cpp`).
 - **Sessions / playlists / proto schema** →
   [sessions-and-playlists.md](sessions-and-playlists.md); schema in
   `src/common/trance.proto`.

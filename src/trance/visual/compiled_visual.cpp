@@ -13,23 +13,28 @@ namespace
     return it == regs.scalars.end() ? 0 : it->second;
   }
 
-  // Resolve an effect's slot to the get_image / change_* "alternate" bool. A non-empty
+  // Resolve an effect's slot to the concrete ThemeBank side used this firing. A non-empty
   // slot_reg reads the bool from a scalar register (a toggle/flag used as a selector);
-  // otherwise the static slot decides. Runtime (and the DSL's `random`) rolls at fire
-  // time.
-  bool slot_bool(const pattern::Effect& e, const pattern::Registers& regs)
+  // Runtime (and the DSL's `random`) rolls at fire time. Image effects store this beside
+  // the image register so later draws/copies keep exact debug metadata.
+  pattern::Slot resolved_slot(const pattern::Effect& e, const pattern::Registers& regs)
   {
     if (!e.slot_reg.empty()) {
-      return scalar(regs, e.slot_reg) != 0;
+      return scalar(regs, e.slot_reg) != 0 ? pattern::Slot::Alternate : pattern::Slot::Primary;
     }
     switch (e.slot) {
     case pattern::Slot::Alternate:
-      return true;
+      return pattern::Slot::Alternate;
     case pattern::Slot::Runtime:
-      return random_chance();
+      return random_chance() ? pattern::Slot::Alternate : pattern::Slot::Primary;
     default:
-      return false;
+      return pattern::Slot::Primary;
     }
+  }
+
+  bool slot_bool(const pattern::Effect& e, const pattern::Registers& regs)
+  {
+    return resolved_slot(e, regs) == pattern::Slot::Alternate;
   }
 
   // `when` guard: compare a scalar register against a literal (or test truthiness).
@@ -59,9 +64,12 @@ namespace
       return;
     }
     switch (e.kind) {
-    case K::Image:
-      regs.images[e.target] = api.get_image(slot_bool(e, regs));
+    case K::Image: {
+      pattern::Slot slot = resolved_slot(e, regs);
+      regs.images[e.target] = api.get_image(slot == pattern::Slot::Alternate);
+      regs.image_slots[e.target] = slot;
       break;
+    }
     case K::Text:
       api.change_text(static_cast<VisualControl::SplitType>(e.split), slot_bool(e, regs));
       break;
@@ -114,9 +122,16 @@ namespace
       }
       break;
     }
-    case K::Copy:
+    case K::Copy: {
       regs.images[e.target] = regs.images[e.src];
+      auto it = regs.image_slots.find(e.src);
+      if (it == regs.image_slots.end()) {
+        regs.image_slots.erase(e.target);
+      } else {
+        regs.image_slots[e.target] = it->second;
+      }
       break;
+    }
     case K::SpiralSet:
       api.set_spiral(static_cast<uint32_t>(e.ivalue), static_cast<uint32_t>(e.mod_literal));
       break;

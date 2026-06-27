@@ -8,28 +8,30 @@ reference for how that pipeline works. The earlier design narrative (the
 "Framing A vs Framing B" debate and the plan to delete the hardcoded visuals,
 which is now done) lives in [visual-grammar.md](visual-grammar.md) as history.
 
-To *write* a custom pattern, see
-[authoring-visual-patterns.md](authoring-visual-patterns.md).
+To *write* a custom v3 pattern, see
+[authoring-v3-patterns.md](authoring-v3-patterns.md).
 
 ## The pipeline
 
-```
-pattern DSL text                              pattern_parser.{h,cpp}
-  (builtin_patterns.cpp for the 8 built-ins,    │  → line:col diagnostics
-   or .session VisualPatternSource for custom)  ▼
-                                              pattern::Node tree   (pattern_ast.h)
-                                                │  pattern_compiler.{h,cpp}
-                                                ▼
-                                              Cycler tree          (cyclers.{h,cpp})
-                                                │  CompiledVisual   (compiled_visual.{h,cpp})
-                                                ▼
-                                              VisualControl effects + a data-driven render block
-                                                                   (render_eval.{h,cpp})
+```text
+pattern DSL text
+  builtin_patterns_v3.cpp for shipped visuals
+  .session VisualPatternSource for custom patterns
+        |
+        v  pattern_parser_v3.{h,cpp} (legacy fallback: pattern_parser.{h,cpp})
+pattern::Node tree + generated RenderStmt block
+        |
+        v  pattern_compiler.{h,cpp}
+Cycler tree
+        |
+        v  CompiledVisual + render_eval.{h,cpp}
+VisualControl effects + data-driven rendering
 ```
 
-1. **Parse** (`pattern_parser.{h,cpp}`). DSL source text → a normalized
-   `pattern::Node` IR, with `line:col` diagnostics on failure. The authoritative
-   grammar is the header comment in `pattern_parser.h`.
+1. **Parse** (`pattern_parser_v3.{h,cpp}` for v3; `pattern_parser.{h,cpp}` remains as the
+   legacy custom-pattern fallback). DSL source text becomes a normalized `pattern::Node` IR,
+   with `line:col` diagnostics on failure. The authoritative v3 grammar is
+   `docs/spec-grammar-v3.md` plus the parser source.
 2. **AST** (`pattern_ast.h`). `pattern::Node` carries the schedule (node type,
    length, action frame), an ordered `Effect` list per leaf, and the debug
    annotations (`phase` label, `image_slot` hint) the F1 overlay reads.
@@ -99,10 +101,6 @@ visuals (toggles, counters, captured randoms) as data:
 **Guard.** `when REG [== N | >= N]` runs a single effect only when the register
 condition holds. This is the language's *only* conditional.
 
-**Native FSM.** `super_fast_tick` is SUPER_FAST's 4-state FSM, deliberately
-isolated as one native effect (`compiled_visual.cpp`) rather than leaking a
-state-machine language into the DSL.
-
 **Other leaf modifiers.** `divide N` runs a leaf's effects only every Nth time it
 fires; `generate VAR from A to B { … }` is a compile-time bounded expansion; an
 `[expr]` arithmetic evaluator (`+ - * / ^` and the active `generate` var) may
@@ -115,6 +113,7 @@ appear anywhere an int is expected.
 ```cpp
 struct Registers {
   std::unordered_map<std::string, Image>   images;   // named image slots
+  std::unordered_map<std::string, Slot>    image_slots; // concrete source theme per image reg
   std::unordered_map<std::string, int32_t> scalars;  // named bool/int registers
 };
 ```
@@ -150,8 +149,8 @@ mechanism now.
 
 `Program::VisualType` still has its original eight values (`trance.proto:128`);
 the enum is unchanged, so old `.session` files keep working. Each value now maps
-to a DSL source string in `builtin_patterns.cpp`, each carrying its own inline
-`render { }` block:
+to a v3 DSL source string in `builtin_patterns_v3.cpp`, each generating its own
+render block:
 
 | Enum (value) | Pattern source | Note |
 |---|---|---|
@@ -162,7 +161,7 @@ to a DSL source string in `builtin_patterns.cpp`, each carrying its own inline
 | `PARALLEL` (5) | `kSimple` | Single image (the enum name and behaviour don't match — this is one image). |
 | `SUPER_PARALLEL` (6) | `kSuperParallel` | 3-image staggered interleave. |
 | `ANIMATION` (7) | `kAnimation` | Animation + crossfade image with a fade window. |
-| `SUPER_FAST` (8) | `kSuperFast` | Rapid current/next cuts, driven by the isolated `super_fast_tick` FSM. |
+| `SUPER_FAST` (8) | `kSuperFast` | Rapid runtime cuts plus chance-based word/animation accents. |
 
 `Director::build_builtin_patterns()` (`director.cpp:84`) parses all eight at
 startup and throws on a parse failure (built-in sources are compile-time
@@ -184,19 +183,19 @@ formerly-hardcoded classes have been deleted.
 `custom_visual_pattern` entries, then picks one. The current visual "sticks" with
 a length- and speed-scaled probability (roughly 1/2 for a 2048-frame cycle) so
 patterns don't change every cycle. Custom patterns are parsed once per program
-change in `rebuild_custom_patterns()` (`director.cpp:104`); a custom pattern that
-fails to parse is skipped with a warning, never the whole session.
+change in `rebuild_custom_patterns()` (`director.cpp:104`): v3 is tried first, then the
+legacy parser as a fallback for old sessions. A custom pattern that fails both parsers is
+skipped with a warning, never the whole session.
 
 ## The F1 debug overlay
 
-Because a compiled pattern's cycler tree carries the same `phase` / `image_slot`
-annotations a hardcoded visual would, it drives the F1 overlay for free
-(`Director::draw_debug_overlay`, `director.cpp:743`). The overlay reports the
-deepest active labelled cycler as the current "section", which theme slots the
-active image lanes source, the composited image layers, the spiral, the
-entrainment bed, and a minimised live view of the cycler tree. Visuals with no
-labelled section (e.g. SUPER_FAST, whose phases live in its FSM rather than the
-tree) honestly show `section --`.
+The cycler tree carries `phase` / `image_slot` annotations for the live-section and tree
+view (`Director::draw_debug_overlay`, `director.cpp:743`). Theme stars come from render-time
+layer metadata instead: `Image` effects store the concrete source slot next to each image
+register, `Copy` preserves it, and each rendered image layer records alpha + slot. The F1
+theme block shows all four ThemeBank queue slots vertically (`unloaded`, `primary`,
+`secondary`, `loading`) and marks `*` only when a visible image layer from that slot was drawn
+this frame. Visuals with no labelled section honestly show `section --`.
 
 ## Tests
 

@@ -2,7 +2,7 @@
 
 // The 8 built-ins authored in the v3 intent grammar (docs/spec-grammar-v3.md): two nouns
 // (pattern, effect) and one rule (every numeric is a modulator riding the enclosing pattern's
-// clock). Patterns nest; crossfade EMERGES from copy + cur/prev + complementary fades (no baked
+// clock). Patterns nest; crossfade EMERGES from copy + cur/prev + source-over fade-in (no baked
 // keyword); spiral speed / zoom / fade are one curve-drivable class; super_fast uses randomness
 // primitives instead of a hand-rolled FSM. These are faithful-in-feel, not frame-identical, to
 // the originals -- the project's "supersede, not parity" stance.
@@ -41,15 +41,18 @@ pattern sub_text for 1024f {
 })";
 
   // 4 FLASH_TEXT -- a continuous IMAGE crossfade: reward images dissolve one into the next via
-  // the copy handoff (cur -> prev), each fading + zooming over its two-beat life. Word + caption
-  // accents. (A true text-on-text dissolve needs the deferred text-register extension, Ext#4.)
+  // the copy handoff (cur -> prev). Each image zooms across two 64f halves: cur does 0->half,
+  // then after the copy prev does half->full. The old layer is drawn first and the new layer
+  // fades in above it, matching the original source-over blend without a baked crossfade keyword.
+  // Word + caption accents. (A true text-on-text dissolve needs the deferred text-register
+  // extension, Ext#4.)
   const char* kFlashText = R"(
 pattern flash_text for 1024f {
   pattern life for 128f loop 8 {
     every 64f -> beat {
       copy cur -> prev
-      image reward -> cur fade in  zoom (curve 0 -> 0.5 over life)
-      draw prev          fade out zoom (curve 0.5 -> 1.0 over life)
+      draw prev          zoom (curve 0.5 -> 1.0)
+      image reward -> cur fade in zoom (curve 0 -> 0.5)
     }
     every 64f { word reward }
   }

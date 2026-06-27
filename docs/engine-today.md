@@ -1,6 +1,6 @@
 # What the visual engine actually does today (plain-English)
 
-No jargon, no "lanes/voices/cadence." This is the ground truth the v2 intent grammar
+No jargon, no "lanes/voices/cadence." This is the ground truth the v3 intent grammar
 must compile down to. If a proposed intent can't be expressed in the terms below, it
 can't run — so this doc is the contract every later design depends on.
 
@@ -65,12 +65,10 @@ When an Action leaf fires, it runs an ordered list of **effects**. Two kinds:
   variables. A tiny set exists purely to fake the few stateful built-ins: `set`, `inc`,
   `toggle`, a captured random `roll` (e.g. "pick 2, 4, or 8 once"), a `pulse` counter
   ("raise a flag every Nth fire"), `copy` (hand one image to another), and a single
-  guard `when` ("do this only if register == N"). Plus one escape hatch: `super_fast_tick`,
-  a hand-written 4-state machine for the one pattern that genuinely needed it.
+  guard `when` ("do this only if register == N").
 
-This register machinery is the ugliest part of today's system and the thing v2 most
-wants to delete. It exists only because the old grammar had no better way to say "every
-third image" or "this slows down over time."
+This register machinery is deliberately small. It exists because readable visual recipes need
+bounded state such as "every third image" or "copy the last image before pulling the next one."
 
 ## 5. Themes, and the biggest limit
 
@@ -94,9 +92,9 @@ Recently the engine split into two halves:
   0.4 × how-far-through-this-ramp-we-are"). Run by `render_eval.cpp`.
 
 This is the part that's already "data, not code," and it's the natural lowering target
-for v2's render shapes.
+for v3's render shapes.
 
-## 7. The contract for v2 (the compile-down invariant)
+## 7. The contract for v3 (the compile-down invariant)
 
 Whatever the intent grammar looks like, the compiler must turn each pattern into:
 
@@ -106,7 +104,7 @@ Whatever the intent grammar looks like, the compiler must turn each pattern into
 
 …all bottoming out in the §2 painter's palette and the §5 (currently binary) theme model.
 
-That's the whole machine. v2 can be a **friendlier front-end** that lowers to this — and
+That's the whole machine. v3 is a **friendlier front-end** that lowers to this — and
 **must** lower to this (or to a deliberately-chosen extension of it, e.g. theme-index,
 which is a real runtime project, not just parser work). An intent that can't be reduced
 to "a counter tree firing these draw ops, painted by these statements" is, today,
@@ -116,6 +114,6 @@ statements would this become?*
 ---
 
 *Source of truth: `src/trance/visual/api.h` (draw ops), `cyclers.h` (node types),
-`pattern_ast.h` / `pattern_parser.h` (effects + grammar), `render_eval.h` (render block),
-`builtin_patterns.cpp` (the 8 patterns as they exist). For the as-built developer
+`pattern_ast.h` / `pattern_parser_v3.h` (effects + grammar), `render_eval.h` (render block),
+`builtin_patterns_v3.cpp` (the 8 patterns as they exist). For the as-built developer
 reference (with file/line detail) see `visuals.md`; this doc is the conceptual floor.*
