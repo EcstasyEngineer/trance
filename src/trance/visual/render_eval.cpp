@@ -20,6 +20,16 @@ namespace
     return it == regs.images.end() ? Image{} : it->second;
   }
 
+  VisualRender::ThemeSlot image_slot_reg(const pattern::Registers& regs, const std::string& name)
+  {
+    auto it = regs.image_slots.find(name);
+    if (it == regs.image_slots.end()) {
+      return VisualRender::ThemeSlot::None;
+    }
+    return it->second == pattern::Slot::Alternate ? VisualRender::ThemeSlot::Alternate
+                                                  : VisualRender::ThemeSlot::Primary;
+  }
+
   // Resolve a render-time identifier to a number:
   //   "<node-id>.<attr>" -> live cycler state (progress/frame/length/position/index/
   //                         active); node-id "root" is the pattern root.
@@ -304,11 +314,12 @@ namespace pattern
         break;
       case RenderStmt::Op::Image: {
         Image image = image_reg(regs, st.image_reg);
+        VisualRender::ThemeSlot slot = image_slot_reg(regs, st.image_reg);
         float alpha = eval_num(st.alpha, 1.0, regs, nodes, root);
         float origin = eval_num(st.origin, 0.0, regs, nodes, root);
         float zoom = eval_num(st.zoom, 0.0, regs, nodes, root);
         if (!st.has_anim) {
-          api.render_image(image, alpha, origin, zoom);
+          api.render_image(image, alpha, origin, zoom, slot);
           break;
         }
         VisualRender::Anim type;
@@ -319,7 +330,7 @@ namespace pattern
         } else {
           type = VisualRender::Anim::ANIM;
         }
-        api.render_animation_or_image(type, image, alpha, origin, zoom);
+        api.render_animation_or_image(type, image, alpha, origin, zoom, slot);
         break;
       }
       case RenderStmt::Op::Text: {

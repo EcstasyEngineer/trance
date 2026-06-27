@@ -10,6 +10,7 @@
 #include <trance/visual/pattern_compiler.h>
 #include <trance/visual/pattern_parser_v3.h>
 
+#include <cctype>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -41,6 +42,21 @@ namespace
     const auto d = reg.find('$');
     return d == std::string::npos ? reg : reg.substr(0, d);
   }
+  bool suffix(const std::string& s, const std::string& tail)
+  {
+    return s.size() >= tail.size() && s.compare(s.size() - tail.size(), tail.size(), tail) == 0;
+  }
+  std::string progress_clock(const std::string& expr)
+  {
+    const auto p = expr.find(".progress");
+    if (p == std::string::npos) return "";
+    std::size_t start = p;
+    while (start > 0 &&
+           (std::isalnum(static_cast<unsigned char>(expr[start - 1])) || expr[start - 1] == '_')) {
+      --start;
+    }
+    return expr.substr(start, p - start);
+  }
 }
 
 int main()
@@ -58,16 +74,17 @@ int main()
     }
   }
 
-  // 2. Crossfade emerges from primitives: two image draws (cur + prev) with COMPLEMENTARY alpha,
-  //    both in the same pattern's register scope, fed by a copy handoff -- no crossfade keyword.
+  // 2. Crossfade emerges from primitives: a copied previous image drawn under a new image whose
+  //    top layer fades in. Both zoom halves ride the same beat clock so the copied image keeps
+  //    zooming continuously after the handoff -- no crossfade keyword or hidden +0.5 branch.
   {
     auto pr = parse(R"(
 pattern flash_text for 1024f {
   pattern life for 128f loop 8 {
     every 64f -> beat {
       copy cur -> prev
-      image concept -> cur fade in  zoom (curve 0 -> 0.5 over life)
-      draw prev          fade out zoom (curve 0.5 -> 1.0 over life)
+      draw prev          zoom (curve 0.5 -> 1.0)
+      image concept -> cur fade in zoom (curve 0 -> 0.5)
     }
   }
 })");
@@ -76,10 +93,14 @@ pattern flash_text for 1024f {
       auto im = images(pr);
       check(im.size() == 2, "crossfade: exactly two image layers (cur + prev)");
       if (im.size() == 2) {
-        const bool comp = (im[0]->alpha.find("1 - ") != std::string::npos) !=
-                          (im[1]->alpha.find("1 - ") != std::string::npos);
-        check(comp, "crossfade: layers have complementary alpha (one fades in, one out)");
-        check(prefix(im[0]->image_reg) == prefix(im[1]->image_reg),
+        const auto* prev = suffix(im[0]->image_reg, "$prev") ? im[0] : im[1];
+        const auto* cur = suffix(im[0]->image_reg, "$cur") ? im[0] : im[1];
+        check(suffix(im[0]->image_reg, "$prev") && suffix(im[1]->image_reg, "$cur"),
+              "crossfade: previous layer draws before the new fade-in layer");
+        check(!cur->alpha.empty() && progress_clock(cur->alpha) == progress_clock(cur->zoom) &&
+                  progress_clock(cur->zoom) == progress_clock(prev->zoom),
+              "crossfade: fade and both zoom halves ride the same beat clock");
+        check(prefix(cur->image_reg) == prefix(prev->image_reg),
               "crossfade: cur and prev share one register scope (the life pattern)");
       }
       Cycler* root = pattern::compile(pr.root);

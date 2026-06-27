@@ -42,11 +42,11 @@ scales per-second). `drunk <intensity>` becomes sugar for `warp amplitude <inten
 sensible default wavelength/speed. If this proves too costly it can be deferred without
 changing any other primitive.
 
-**0.3 Text CAN crossfade — Extension #4 (resolves the fatal A.1 gap).** Add (a) a **text
-content register** so `copy` can stash text, and (b) an **alpha param on `render_text`**. The
-image shader's `out_colour` is already a `vec4` with alpha (`shaders.h:60-65`), so text drawn
-through it fades with no shader change — only `render_text`'s signature + a text-register map
-in `compiled_visual`. With this, the EX6 `flash_text` text dissolve lowers as written.
+**0.3 Text cannot crossfade yet — Extension #4 remains deferred.** The current text path has
+one live text slot (`VisualApiImpl::_current_text`) and `render_text` has no alpha/content
+register parameter, so `copy`/`draw` crossfade is image-only. A future Extension #4 would add a
+text-content register plus an alpha param on `render_text`; until then `flash_text` is authored
+as an image crossfade with word/caption accents.
 
 **0.4 Spiral: `look{}` grammar selector; SPEED is a curve; COLOR/DIRECTION stay settings.**
 The spiral fragment shader (`shaders.h:82-99`) has **7 types** (`spiral_type` 1–7, correct the
@@ -63,7 +63,7 @@ escape hatch. Accept "same effect, not the same frames." Closes that §12 open q
 **0.6 Register scoping — lexical, pattern-scoped, compile-time qualified (resolves the A.1
 collision).** A register name is **local to its nearest enclosing `pattern`**; cadence blocks
 (`every`/`loop`) do **not** open a new register scope (so a `copy cur -> prev` inside an
-`every` and the `image-reg cur/prev` draws in the same pattern hit the same registers — which
+`every` and the `draw cur` / `draw prev` statements in the same pattern hit the same registers — which
 is exactly what crossfade needs).
 - **Qualification.** The compiler prefixes each bare register name with its pattern's id-path
   before emitting to the flat runtime maps (`regs.images` / `regs.scalars`). Two sibling
@@ -86,8 +86,8 @@ is exactly what crossfade needs).
   handles (a new binding concept = AST over-engineering). Lexical auto-qualification is the best
   compromise of legibility (bare local names), power (qualified cross-refs), and minimal AST.
 
-**Still open after these decisions:** the `every <curve>` un-id'd-segment limit and `warp`
-parameter tuning — implementation-time calls, flagged in Appendix A.
+**Still open after these decisions:** future text-register support and any further tuning of
+the `warp` parameters.
 
 ---
 
@@ -196,18 +196,18 @@ pattern NAME for <len> [seq | loop N] { <body> }
   `0..1` clock. Put a pattern inside a pattern to nest. Children run together unless you
   tag the box `seq`.
 
-### 4.2 `image` / `word` / `caption` / `image-reg` — DRAW effects
+### 4.2 `image` / `word` / `caption` / `draw` — DRAW effects
 
 ```
 image  <content> [-> REG] <param-mod>*
-image-reg REG  <param-mod>*          # draw an existing register without re-pulling
+draw REG  <param-mod>*               # draw an existing image register without re-pulling
 content ::= concept | reward          # the bi-thematic alternate bool — see §8
 ```
 
 - **Lowering.** Two halves: (1) a schedule `Effect{Image, slot}` writes
   `regs.images[REG] = get_image(alternate)` (`concept`→`Slot::Primary`,
   `reward`→`Slot::Alternate`); (2) a `RenderStmt{Op::Image, image_reg=REG}` whose
-  `alpha`/`origin`/`zoom` fields are the lowered modulator strings. `image-reg` emits only
+  `alpha`/`origin`/`zoom` fields are the lowered modulator strings. `draw` emits only
   the draw half (no pull), so any register (e.g. `prev`) is drawable.
 - **Modder note.** Draws a picture. `-> REG` names the layer so `copy`/crossfade can reach
   it; omit it for an auto-named layer. **Bi-thematic is a hard floor:** `concept`/`reward`
@@ -383,41 +383,41 @@ pretending spiral is uniform.
 
 Crossfade is the canonical worked example of "effect param = modulator" plus the exposed
 `copy`/`prev`. The author writes a looping pattern whose body, each beat, stashes the
-current image into `prev`, pulls a fresh `cur`, and draws BOTH with complementary fades.
-**The two clocks are distinct and visible**, which is how the double-zoom trap is avoided:
+current image into `prev`, pulls a fresh `cur`, draws the old layer first, and fades the
+new layer in above it. This matches the renderer's source-over blending: visually the old
+image fades out as the new image fades in, without needing a baked crossfade keyword.
+**The beat clock is visible**, which is how the double-zoom trap is avoided:
 
 ```
 pattern xfade for beats 8 loop 8 {
   pattern life for beats 2 {            # the 2-beat image-life clock (VISIBLE)
     every (beats 1) -> beat {           # per-beat handoff leaf, id = beat
       copy cur -> prev                  # stash last beat's image (Effect::Copy)
-      image concept -> cur              # pull a new image into cur (Effect::Image)
+      draw prev          zoom (curve 0.5 -> 1.0)
+      image concept -> cur fade in zoom (curve 0.0 -> 0.5)
     }
-    image-reg prev fade out  zoom (curve 0.5 -> 1.0 over life)   # alpha = 1 - beat.progress
-    image-reg cur  fade in   zoom (curve 0.0 -> 0.5 over life)   # alpha =     beat.progress
   }
 }
 ```
 
 **Lowering, all to existing primitives:**
 
-- The `every (beats 1) -> beat { copy; image }` body ⇒ a `RepeatCycler` whose leaf (id=`beat`)
-  runs `Effect{Copy, cur->prev}` then `Effect{Image, ->cur}` **in order**
+- The `every (beats 1) -> beat { copy; draw; image }` body lowers to a `RepeatCycler` whose
+  leaf (id=`beat`) runs `Effect{Copy, cur->prev}` then `Effect{Image, ->cur}` **in order**
   (`compiled_visual.cpp:195`).
-- The two `image-reg` draws ⇒ two `RenderStmt{Op::Image}` with `image_reg` `prev`/`cur` and
-  `alpha = "1 - beat.progress"` / `"beat.progress"`. **The fade rides the per-beat `beat`
-  clock** (NOT the whole `xfade` Repeat — this is the bug a critic caught in two proposals).
+- The two draws lower to `RenderStmt{Op::Image}` with `image_reg` `prev`/`cur`. `prev` draws
+  at full alpha underneath; `cur` has `alpha = "beat.progress"`. **The fade rides the
+  per-beat `beat` clock** (NOT the whole `xfade` Repeat - this is the bug a critic caught
+  in two proposals).
 - The dissolve A→B→C falls out because `prev` literally IS last beat's `cur` (Copy
   semantics), reproducing the v2 hand-baked branch with zero baked C++.
 
-**The two-beat double-zoom trap, solved legibly.** An image lives two beats (fading in as
-`cur`, out as `prev`), so its zoom must be ONE continuous `0 -> Z` ramp across both. v3
-anchors that zoom `over life` — a **visible 2-beat sub-pattern the author can see in the
-source** — so a single `curve 0 -> 0.5 over life` spans the image's whole life by
-construction. The hidden `+0.5` offset magic disappears because the clock is the right
-length. (If the author forgets `over life`, the zoom hitches at the beat boundary — a
-legible, compile-checkable mistake, not a silent engine bug; §7.4 warns when a `prev`/`cur`
-zoom pair are anchored to different-length clocks.)
+**The two-beat double-zoom trap, solved legibly.** An image lives in two visible halves:
+first as `cur`, then after `copy cur -> prev` as `prev`. Both halves ride the same per-beat
+clock: `cur` zooms `0.0 -> 0.5`, and on the next beat the copied `prev` continues
+`0.5 -> 1.0`. The hidden `+0.5` offset magic disappears because the split is written in the
+source. Anchoring these zooms to the whole `life` clock is the regression to avoid: the second
+image would enter already halfway zoomed, and the copied image would jump at the handoff.
 
 `crossfade` survives only as an **optional, printable macro** (`--expand`) that expands to
 exactly this text. The expansion IS the lowering path, never a parallel re-implementation.
@@ -585,9 +585,9 @@ generalized `over`-anchor, no runtime change.
 
 ### EX4 — crossfade EMERGES (no keyword)
 
-See §6. The body's per-beat `beat` leaf runs `Copy` then `Image` in order; two
-`RenderStmt{Image}` draw `prev`/`cur` with complementary `alpha` on `beat.progress`; the
-two-beat zoom rides the **visible** `life` sub-pattern. The baked crossfade branch is
+See §6. The body's per-beat `beat` leaf runs `Copy`, draws `prev`, then pulls/draws `cur`
+in order. The new `cur` layer fades in on `beat.progress`; both zoom halves also ride that
+beat clock (`0.0 -> 0.5`, then `0.5 -> 1.0` after the copy). The baked crossfade branch is
 deleted.
 
 ### EX5 — the new DRUNK effect; intensity ramps up
@@ -611,17 +611,16 @@ pattern flash_text for beats 16 loop 16 {
   pattern life for beats 2 {
     every (beats 1) -> beat {
       copy cur -> prev
-      word concept -> cur                # pull a fresh text/image each beat
+      draw prev          zoom (curve 0.5 -> 1.0)
+      image concept -> cur fade in zoom (curve 0.0 -> 0.5)
     }
-    image-reg prev fade out zoom (curve 0.5 -> 1.0 over life)
-    image-reg cur  fade in  zoom (curve 0.0 -> 0.5 over life)
   }
 }
 ```
-`flash_text` built entirely from primitives: per-beat copy+pull handoff, complementary fades,
-continuous two-beat zoom anchored to the visible `life` clock instead of the hidden `+0.5`
-hack. Spiral SPEED is a grammar magnitude; spiral SHAPE/COLOR are settings. No crossfade
-keyword, no super_fast FSM, no baked opacity ladder — every line the modder sees is
+`flash_text` built entirely from primitives: per-beat copy+pull handoff, source-over fade-in,
+and two explicit zoom halves instead of the hidden `+0.5` hack. Spiral SPEED is a grammar
+magnitude; spiral SHAPE/COLOR are settings. No crossfade keyword, no super_fast FSM, no
+baked opacity ladder — every line the modder sees is
 `<effect> <param> <modulator>`.
 
 ---
@@ -643,7 +642,7 @@ cadence        ::= "every" len [ "->" NAME ] "{" body "}"
                  | "every" curve "{" body "}"                       (* ramped: un-id'd segments *)
 
 draw_effect    ::= ("image" | "word" | "caption") content [ "->" REG ] param*
-                 | "image-reg" REG param*
+                 | "draw" REG param*
 content        ::= "concept" | "reward"                            (* the bi-thematic bool *)
 
 drive_effect   ::= "zoom"   modulator
@@ -684,7 +683,92 @@ clock.
 
 ---
 
-## Appendix A — Review findings (UNRESOLVED — must address before implementation)
+## 13. V3 enhancements to consider next
+
+These are intentionally **not** shipped in v3 today. They are the next places where v3 can regain
+more of the old hardcoded patterns' capability without falling back into implementation-shaped
+grammar.
+
+### 13.1 Expose the existing burst/random cycler in v3
+
+The runtime already has `BurstCycler` and the legacy grammar can parse `burst { ... }`
+(`pattern_parser.cpp`). V3 did not surface it; it only exposes lighter randomness:
+
+- `chance P` on draw effects, lowered to a roll + guard.
+- `anim every Nth`, lowered to a pulse gate.
+- `runtime` slots, which pick primary/secondary at fire time.
+
+That means the v3 `super_fast` reauthor keeps the felt rapid-cut intent, but loses the old
+"short random animation burst with cooldown" shape. A v3 surface should expose the existing
+cycler before inventing new randomness machinery. Candidate shape:
+
+```text
+pattern super_fast for 2048f {
+  burst rapid length 2048f period 8f chance 1/256 cooldown 16f duration 128f..256f {
+    base  { image runtime zoom 0.5 }
+    burst { image runtime anim zoom (curve 0 -> 1 over rapid) }
+  }
+  word concept chance 0.25
+  spiral speed 3
+}
+```
+
+The exact syntax can change, but the lowering should stay boring: one `Node::Burst`, base effects,
+burst effects, and `burst.index` available to render expressions.
+
+### 13.2 Parent-clock envelopes are good; live curve lengths are risky
+
+The `ACCELERATE` simplification shows the current v3 weakness: three fixed phases are legible,
+but they no longer express a true accelerating cadence. The right conceptual primitive is a
+shared parent envelope:
+
+```text
+pattern accelerate for 3000f {
+  every ramp 56f -> 12f steps 45 ease late -> cut {
+    image concept zoom (curve 0 -> 0.5)
+  }
+  spiral speed (curve 2 -> 6 over accelerate)
+}
+```
+
+The parent clock (`accelerate.progress`) is the right source for whole-pattern envelopes:
+spiral speed, global intensity, text probability, and maybe palette/warp intensity. It was **not**
+the right fix for `FLASH_TEXT` by itself, because image lifetime there is per-register state:
+`cur` becomes `prev` with an age offset. For handoffs, explicit local halves (`cur` 0.0->0.5,
+copied `prev` 0.5->1.0) are still safer than a global parent clock.
+
+Avoid making `for <curve>` or `every <curve>` a live runtime length. Cycler lengths are structural:
+`ParallelCycler` computes LCMs, `SequenceCycler` sums children, `RepeatCycler` indexes by child
+length, and render expressions read `.length`/`.progress`. If a node's length changes while it is
+running, all of those invariants get messy.
+
+Preferred lowering: **compile-time sampled ramp expansion**.
+
+- Parse `every ramp A -> B steps N [ease ...] -> NAME { body }`.
+- Sample N integer durations from the curve at parse time.
+- Lower to a `SequenceCycler` of fixed `ActionCycler` leaves.
+- Mint stable ids for the active segment, e.g. `cut` for the current segment and optionally
+  `cut_00`, `cut_01`, ... for inspection.
+- Keep render modulators anchored to either the local segment (`cut.progress`) or the parent
+  (`over accelerate`).
+
+This recovers most of hardcoded `ACCELERATE`'s capability without making pattern lengths dynamic
+or adding a general algebra language to `for`.
+
+### 13.3 Keep `[expr]` math as render math, not scheduling algebra
+
+Raw `[expr]` is useful for render-time values because it is side-effect-free and evaluated against
+live registers/node clocks. Extending it into structural lengths (`for [expr]f`) should stay
+compile-time only unless there is a very strong reason. If a future syntax needs math in a length,
+prefer constants and generate-time bindings over live node attributes.
+
+---
+
+## Appendix A — Historical review findings
+
+This appendix is retained as implementation history. The shipped behavior is defined by
+Sections 0-11 above and the parser/runtime source. Some findings below are now resolved or
+intentionally superseded.
 
 This spec is the output of a multi-agent design workflow (18 recon analysts, 5 divergent design proposals, 15 adversarial critiques, synthesis, then a completeness critic). **Note:** 5 recon analysts failed (including the dedicated *spiral* and *drunk-feasibility* readers), so those areas were grounded by the designers/critic reading the code directly rather than a dedicated pass. The completeness critic (confidence **76/100**) found the gaps below. Treat §1–§12 as a strong draft, **not** final, until these are resolved.
 
@@ -697,7 +781,7 @@ This spec is the output of a multi-agent design workflow (18 recon analysts, 5 d
 - §9 Ext#3 (SpiralSet deterministic selector) is required for `look { spiral type=N width=W }` (§8 table, EX6) but NO graceful-degradation path is given for it, unlike Ext#1/#2. change_spiral() re-rolls randomly and no-ops 25% (api.cpp:92,95-96); there is NO existing setter. So until Ext#3 ships, `look { spiral type=N }` cannot lower AT ALL (it can only re-roll). The doc claims (§9 intro) 'each has a graceful-degradation path so the grammar surface never changes' — false for Ext#3. EX6 uses `look { spiral type=3 width=6 }` as if it works.
 - §7.4 compile-time resolution check #3 ('warn when prev/cur zoom pair anchored to different-length clocks') is under-specified: how does the compiler know two draws form a 'dissolve pair'? There is no `prev`/`cur` typing in the runtime — register names are pure convention (recon: 'current/prev/next... are conventions established by the patterns, not types'). The compiler cannot generically detect a dissolve pair without hardcoding the `prev`/`cur` names, which re-introduces the baked-convention coupling the redesign wants to remove. Either the check is hardcoded to those names (a baked convention) or it cannot be implemented as stated.
 - spiral 'direction = magnitude vs sign' (§8 direction note, §5) is asserted but rotate_spiral already flips sign via reverse_spiral_direction (api.cpp:78). The doc says grammar `speed` is magnitude and the setting owns sign — but a curve `0.1 -> 1.0` produces only positive rates today; there is no defined behavior for a NEGATIVE speed curve, and the interaction with the existing sign-flip is documented but not lowered. Minor, but the 'avoid double-control' claim needs the Ext#1 implementation to actually drop the setting's sign or define precedence.
-- The plan's Phase 4 says 'delete the baked crossfade keyword branch from the v2 parser' but the crossfade keyword (pattern_parser_v2.cpp:701-755) carries the +0.5 split-zoom double-zoom fix. The doc's replacement (anchor zoom `over life`, §6) is the correct legible fix, but the plan never validates that the v3 `over life` 2-beat anchor produces the SAME continuous zoom as the baked +0.5 offset before deleting it. Phase 4 'accepting same effect not same frames' applies to super_fast, not to the zoom-continuity invariant — the zoom hitch is a visible regression risk, not a frame-exact one.
+- Resolved: the plan needed a golden around FLASH_TEXT's zoom-continuity invariant before deleting the baked crossfade branch. The shipped version uses explicit per-beat zoom halves (`cur` 0.0->0.5, copied `prev` 0.5->1.0) and `tests/v3_grammar_test.cpp` checks that fade and both zoom halves ride the same beat clock.
 
 ### A.2 Verified-false / unverified claims
 - §4.2 / EX6 / §6: that `word`/`caption` (text) can be drawn from a named register with complementary fades. VERIFIED FALSE — text has one live slot, no register, no alpha (api.cpp:114-129,206-228; render_eval.cpp:313-318). Crossfade-from-primitives is IMAGE-ONLY.
@@ -715,7 +799,7 @@ This spec is the output of a multi-agent design workflow (18 recon analysts, 5 d
 - Re-specify §7.4 check #3 without relying on untyped register-name conventions: either drop it, or make it a general 'two image draws of registers written by the same per-beat leaf, anchored to different-length clocks' structural check, and document that it is name-agnostic.
 - Tighten §4.5 drunk lowering: define fps-normalization for the Walk step (parallel to rotate_spiral's 32*sqrt(width)), define behavior for intensity below the milli-unit resolution (dead zone), and pick BOUND relative to the milli-unit scale and global_fps. Fold fps-dependence into the §12 open question.
 - Correct the §3/§4.1 'parallel-by-default co-run' rationale to distinguish schedule-side effect leaves (which Par/LCM) from flat render statements (which do not). The parallel default is justified by co-running multiple EFFECT leaves, not by co-running a draw with a driver.
-- Before Phase 4 deletes the baked crossfade keyword, add a golden test asserting the v3 `over life` 2-beat zoom is continuous across the beat boundary (no hitch), since that is the exact invariant the +0.5 split-zoom hack protected (pattern_parser_v2.cpp:727-738).
+- Done: add a golden test asserting the v3 FLASH_TEXT zoom halves ride the same beat clock, preventing the copied image from jumping at the handoff.
 
 ### A.4 Plan risks
 - Phase 1 ports EX6's crossfade-from-primitives as a smoke pattern, but EX6 uses `word` (text) which cannot crossfade. Phase 1 will either fail to lower or silently render wrong (render_text ignores the register and alpha). The text-vs-image asymmetry must be resolved BEFORE Phase 1, not discovered in it.
@@ -752,7 +836,7 @@ This spec is the output of a multi-agent design workflow (18 recon analysts, 5 d
 
 ### Phase 1 — Core nouns + the zero-runtime-change subset (pattern nesting, draws, zoom/fade/origin, copy)
 
-**Work:** Implement: `pattern NAME for len [seq|loop N] { body }` lowering to One/Seq/Par/Rep nodes with minted ids (parallel-by-default body); `image/word/caption/image-reg` draws; the curve-drive class (zoom/fade/origin/alpha) lowering to RenderStmt [expr] strings; modulators (literal/curve/beat/rawexpr) with `over NAME` anchor resolution; `every ... -> NAME` cadence minting per-beat leaf ids; `copy/set/inc/roll` state effects. Add the §7.4 compile-time resolution check (every `over NAME` and wired name resolves). Port EX1, EX3, and EX6's crossfade-from-primitives as v3 smoke patterns.
+**Work:** Implement: `pattern NAME for len [seq|loop N] { body }` lowering to One/Seq/Par/Rep nodes with minted ids (parallel-by-default body); `image/word/caption/draw` statements; the curve-drive class (zoom/fade/origin/alpha) lowering to RenderStmt [expr] strings; modulators (literal/curve/beat/rawexpr) with `over NAME` anchor resolution; `every ... -> NAME` cadence minting per-beat leaf ids; `copy/set/inc/roll` state effects. Add the §7.4 compile-time resolution check (every `over NAME` and wired name resolves). Port EX1, EX3, and EX6's crossfade-from-primitives as v3 smoke patterns.
 
 **Stays green:** This entire subset lowers to existing runtime constructs (verified: Copy effect exists, Image RenderStmt has alpha/origin/zoom, resolve_ident reads any minted id). No Effect::Kind or RenderStmt::Op changes. Existing equivalence/golden tests for v2 still pass; new v3 patterns get their own golden tests asserting they lower to the expected Node/RenderStmt shape.
 
@@ -770,7 +854,6 @@ This spec is the output of a multi-agent design workflow (18 recon analysts, 5 d
 
 ### Phase 4 — crossfade/pulse macros, flash_text cutover, and v2 deprecation
 
-**Work:** Implement `crossfade`/`pulse` as printable (--expand) macros whose expansion IS the Phase-1 primitive lowering (copy + complementary-alpha draws + visible `life` 2-beat anchor). Re-author all 8 builtins in v3 (flash_text per EX6). Once v3 goldens match v2 visual behavior (accepting 'same effect, not same frames' for super_fast), flip the director path to v3 builtins and delete the baked `crossfade` keyword branch from the v2 parser.
+**Work:** Implement `crossfade`/`pulse` as printable (--expand) macros whose expansion IS the Phase-1 primitive lowering (copy + `draw prev` + source-over fade-in of `cur`). Re-author all 8 builtins in v3 (flash_text per EX6). Once v3 goldens match v2 visual behavior (accepting 'same effect, not same frames' for super_fast), flip the director path to v3 builtins and delete the baked `crossfade` keyword branch from the v2 parser.
 
 **Stays green:** Macros are sugar over already-tested primitives, so they add no new lowering risk. The v2 parser and its crossfade keyword are removed only AFTER the v3 builtins pass goldens and the director is switched, in a single commit with the old goldens retired; if anything regresses, the flag flips back to v2.
-

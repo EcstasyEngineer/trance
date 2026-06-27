@@ -189,7 +189,8 @@ bool VisualApiImpl::change_themes()
 }
 
 void VisualApiImpl::render_animation_or_image(Anim type, const Image& image, float alpha,
-                                              float zoom_origin, float zoom) const
+                                              float zoom_origin, float zoom,
+                                              ThemeSlot slot) const
 {
   Image anim;
   if (type != Anim::NONE) {
@@ -197,16 +198,17 @@ void VisualApiImpl::render_animation_or_image(Anim type, const Image& image, flo
   }
 
   if (anim) {
-    render_image(anim, alpha, zoom_origin, zoom);
+    ThemeSlot anim_slot = type == Anim::ANIM_ALTERNATE ? ThemeSlot::Alternate : ThemeSlot::Primary;
+    render_image(anim, alpha, zoom_origin, zoom, anim_slot);
   } else {
-    render_image(image, alpha, zoom_origin, zoom);
+    render_image(image, alpha, zoom_origin, zoom, slot);
   }
 }
 
 void VisualApiImpl::render_image(const Image& image, float alpha, float zoom_origin,
-                                 float zoom) const
+                                 float zoom, ThemeSlot slot) const
 {
-  _debug_layers.push_back(alpha);
+  _debug_layers.push_back({alpha, slot});
   _director.render_image(image, alpha, zoom_origin, zoom_intensity(zoom_origin, zoom));
 }
 
@@ -327,7 +329,7 @@ void VisualApiImpl::debug_begin_frame() const
   _debug_layers.clear();
 }
 
-const std::vector<float>& VisualApiImpl::debug_layers() const
+const std::vector<VisualRender::DebugLayer>& VisualApiImpl::debug_layers() const
 {
   return _debug_layers;
 }

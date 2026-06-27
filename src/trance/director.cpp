@@ -27,6 +27,19 @@ extern "C" {
 namespace
 {
   const uint32_t spiral_type_max = 7;
+
+  uint32_t locked_period_frames(const trance_pb::Program& program)
+  {
+    float best_db = -1e30f;
+    float hz = 0.f;
+    for (const auto& l : program.entrainment().layer()) {
+      if (l.pulse_hz() > 0.f && l.amplitude_db() >= best_db) {
+        best_db = l.amplitude_db();
+        hz = l.pulse_hz();
+      }
+    }
+    return hz > 0.f ? uint32_t(double(program.global_fps()) / double(hz) + 0.5) : 0;
+  }
 }
 #include "shaders.h"
 
@@ -88,20 +101,7 @@ void Director::build_builtin_patterns()
   // program's highest-amplitude pulsed layer. 0 when there is no pulsed bed (`locked` then
   // hard-errors). A compile-time snapshot of the program's bed; it does not track a live
   // reconfigure, which is fine -- the bed is static per program.
-  uint32_t locked_frames = 0;
-  {
-    float best_db = -1e30f;
-    float hz = 0.f;
-    for (const auto& l : _program->entrainment().layer()) {
-      if (l.pulse_hz() > 0.f && l.amplitude_db() >= best_db) {
-        best_db = l.amplitude_db();
-        hz = l.pulse_hz();
-      }
-    }
-    if (hz > 0.f) {
-      locked_frames = uint32_t(double(_program->global_fps()) / double(hz) + 0.5);
-    }
-  }
+  uint32_t locked_frames = locked_period_frames(*_program);
   for (uint32_t t = 1; t <= 8; ++t) {
     // Prefer the v3 intent grammar (docs/spec-grammar-v3.md) -- the primitive grammar that
     // supersedes v2's baked constructs. It lowers to the same pattern::Node + RenderStmt IR.
@@ -145,13 +145,30 @@ void Director::rebuild_custom_patterns()
 {
   _custom_patterns.clear();
   _last_custom_index = -1;
+  const uint32_t locked_frames = locked_period_frames(*_program);
   for (const auto& src : _program->custom_visual_pattern()) {
     if (!src.enabled()) {
       continue;
     }
+
+    auto v3 = patternv3::parse(src.source_text(), locked_frames);
+    if (v3.ok) {
+      for (const auto& w : v3.warnings) {
+        std::cerr << "custom v3 pattern '" << src.name() << "' warning: " << w << std::endl;
+      }
+      pattern::Parsed parsed;
+      parsed.name = src.name();
+      parsed.weight = src.random_weight();
+      parsed.root = std::move(v3.root);
+      parsed.render_block = std::move(v3.render_block);
+      _custom_patterns.push_back(std::move(parsed));
+      continue;
+    }
+
     auto result = pattern::parse(src.source_text());
     if (!result.ok) {
-      std::cerr << "skipping custom pattern '" << src.name() << "': " << result.error << std::endl;
+      std::cerr << "skipping custom pattern '" << src.name() << "': v3: " << v3.error
+                << "; legacy: " << result.error << std::endl;
       continue;
     }
     // Carry the proto's name/weight (authoritative) over the in-source ones.
@@ -515,7 +532,7 @@ void Director::change_visual(uint32_t length)
   }
   _last_custom_index = -1;
   _custom_visual_name.clear();
-  // Every built-in VisualType is now a compiled pattern (builtin_patterns.cpp); the enum
+  // Every built-in VisualType is now a compiled v3 pattern (builtin_patterns_v3.cpp); the enum
   // value still identifies it for the overlay. A type with no compiled source (e.g. NONE)
   // leaves the current visual in place.
   auto compiled = _builtin_compiled.find(t);
@@ -600,34 +617,6 @@ namespace
     return best;
   }
 
-  // Accumulate the theme slots sourced by the currently active image lanes. A
-  // literal hint sets its slot; a Runtime hint means an image is live but its slot
-  // is decided by hidden state -- the caller resolves that from the last-pulled
-  // slot. This is "which grammar lane sources images from which theme", not an exact
-  // count of rendered layers (an image can outlive the leaf that loaded it).
-  void collect_onscreen_slots(const Cycler* c, bool& primary, bool& alternate, bool& runtime)
-  {
-    if (!c || !c->active()) {
-      return;
-    }
-    switch (c->image_slot()) {
-    case ImageSlotHint::Primary:
-      primary = true;
-      break;
-    case ImageSlotHint::Alternate:
-      alternate = true;
-      break;
-    case ImageSlotHint::Runtime:
-      runtime = true;
-      break;
-    default:
-      break;
-    }
-    for (const Cycler* kid : c->children()) {
-      collect_onscreen_slots(kid, primary, alternate, runtime);
-    }
-  }
-
   // Short tag for an image-bearing node's theme slot.
   const char* slot_str(ImageSlotHint hint)
   {
@@ -640,6 +629,46 @@ namespace
       return "slot[~]";
     default:
       return "";
+    }
+  }
+
+  int debug_theme_index(VisualRender::ThemeSlot slot)
+  {
+    switch (slot) {
+    case VisualRender::ThemeSlot::Primary:
+      return 1;
+    case VisualRender::ThemeSlot::Alternate:
+      return 2;
+    default:
+      return -1;
+    }
+  }
+
+  const char* debug_theme_slot_name(int slot)
+  {
+    switch (slot) {
+    case 0:
+      return "unloaded ";
+    case 1:
+      return "primary  ";
+    case 2:
+      return "secondary";
+    case 3:
+      return "loading  ";
+    default:
+      return "unknown  ";
+    }
+  }
+
+  const char* layer_slot_str(VisualRender::ThemeSlot slot)
+  {
+    switch (slot) {
+    case VisualRender::ThemeSlot::Primary:
+      return "pri";
+    case VisualRender::ThemeSlot::Alternate:
+      return "sec";
+    default:
+      return "--";
     }
   }
 
@@ -833,30 +862,33 @@ void Director::draw_debug_overlay() const
   }
   out << "\n";
 
-  // Which theme slots the active image lanes source -- shown as '*' in the THEMES
-  // block below (no separate line). Literal lanes mark their slot directly.
-  // (Runtime-lane resolution to the actual last-pulled slot was dropped with the
-  // api debug breadcrumb; a runtime lane won't mark a '*' until the overlay is
-  // rebuilt on the render layer.)
   auto snap = _themes.debug_snapshot();
-  bool on_primary = false;
-  bool on_alternate = false;
-  bool on_runtime = false;
-  collect_onscreen_slots(visual ? visual->cycler() : nullptr, on_primary, on_alternate, on_runtime);
-
-  // The two active themes; '*' = currently sourced on screen by an active image lane.
-  const auto& pri = snap.slots[1];
-  const auto& alt = snap.slots[2];
-  out << "themes : " << (on_primary ? "*" : " ") << "pri '" << (pri.valid ? pri.name : "(empty)")
-      << "'   " << (on_alternate ? "*" : " ") << "alt '" << (alt.valid ? alt.name : "(empty)")
-      << "'\n";
 
   // Image layers composited this frame -- this is the on-screen overlay depth.
   const auto& layers = _visual_api->debug_layers();
+  bool theme_on_screen[4] = {false, false, false, false};
+  for (const auto& layer : layers) {
+    const int slot = debug_theme_index(layer.slot);
+    if (slot >= 0 && slot < 4 && layer.alpha > 0.001f) {
+      theme_on_screen[slot] = true;
+    }
+  }
+
+  // ThemeBank's four queue slots, vertically. '*' means at least one image layer from
+  // that concrete slot was drawn this frame (alpha > 0), not merely that a cycler lane
+  // could source it.
+  out << "-- THEMES (*=image drawn this frame) --\n";
+  for (int i = 0; i < 4; ++i) {
+    const auto& slot = snap.slots[std::size_t(i)];
+    out << "  " << (theme_on_screen[i] ? "*" : " ") << debug_theme_slot_name(i) << " : '"
+        << (slot.valid ? slot.name : "(empty)") << "'  " << slot.loaded << "/" << slot.total
+        << "\n";
+  }
+
   out << "layers : " << layers.size() << " image(s) drawn  alpha=";
-  for (float a : layers) {
-    std::snprintf(buf, sizeof(buf), "%.2f ", a);
-    out << buf;
+  for (const auto& layer : layers) {
+    std::snprintf(buf, sizeof(buf), "%.2f", layer.alpha);
+    out << buf << "[" << layer_slot_str(layer.slot) << "] ";
   }
   out << "\n";
 

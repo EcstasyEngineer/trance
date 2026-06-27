@@ -65,9 +65,10 @@ v3 intent grammar  ──parse──▶  pattern::Node AST  ──compile──�
 - **v3 intent grammar** (`pattern_parser_v3.{h,cpp}`, spec `docs/spec-grammar-v3.md`): the
   shipped authoring front-end. Two nouns (pattern, effect) + one rule (every numeric is a
   modulator riding the enclosing pattern's clock, redirectable with `over NAME`). Patterns nest;
-  crossfade emerges from `copy` + cur/prev + complementary fades (no keyword); zoom/fade/spiral
+  crossfade emerges from `copy` + cur/prev + source-over fade-in (no keyword); zoom/fade/spiral
   speed/warp are one curve-drivable class. Built-ins live in `builtin_patterns_v3.cpp`;
-  `director.cpp` prefers the v3 source, falling back to the v1 grammar (`pattern_parser.cpp`).
+  `director.cpp` prefers v3 for built-ins and custom pattern sources, falling back to the v1
+  grammar (`pattern_parser.cpp`) for legacy custom patterns.
   (The intermediate v2 grammar and the `super_fast` FSM have been retired.)
 - **Director** (`src/trance/director.cpp`): owns the program, picks/compiles visuals, threads the
   entrainment beat period into the grammar, surfaces parse warnings.
