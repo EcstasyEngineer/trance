@@ -11,11 +11,15 @@
 #include <trance/theme_bank.h>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <set>
 #include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 #pragma warning(push, 0)
 #include <common/trance.pb.h>
@@ -102,7 +106,8 @@ void print_info(double elapsed_seconds, uint64_t frames, uint64_t total_frames)
 void play_session(const std::string& root_path, const trance_pb::Session& session,
                   const trance_pb::System& system,
                   const std::map<std::string, std::string> variables,
-                  const exporter_settings& settings)
+                  const exporter_settings& settings,
+                  const std::function<void(Director&)>& visual_override = {})
 {
   struct PlayStackEntry {
     const trance_pb::PlaylistItem* item;
@@ -144,6 +149,9 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
   }
 
   Director director{session, system, *theme_bank, program(), *renderer};
+  if (visual_override) {
+    visual_override(director);
+  }
 
   std::thread async_thread;
   std::atomic<bool> running = true;
@@ -270,6 +278,8 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
         }
       }
       if (theme_bank->swaps_to_match_theme()) {
+        // Fire-and-forget by design: a swap that isn't ready simply doesn't happen this
+        // frame; the next matching call retries. Nothing needs the success bool (#25).
         theme_bank->change_themes();
       }
 
@@ -434,6 +444,64 @@ DEFINE_uint64(export_fps, 60, "export video frames per second");
 DEFINE_uint64(export_length, 300, "export video length in seconds");
 DEFINE_uint64(export_quality, 2, "export video quality (0 to 4, 0 is best)");
 DEFINE_uint64(export_threads, 4, "export video threads");
+DEFINE_string(visual, "",
+              "force every visual selection to this one built-in (by its v3 name: accelerate, "
+              "slow_flash, sub_text, flash_text, simple, super_parallel, animation, super_fast). "
+              "Replaces the old workflow of zeroing out every other weight in default.session.");
+DEFINE_string(pattern, "",
+              "force every visual selection to a single v3 pattern loaded from this source file "
+              "(parsed the same way as a program's custom_visual_pattern). Themes still come from "
+              "the session/program as normal -- only the visual schedule is overridden. Mutually "
+              "exclusive with --visual.");
+
+namespace
+{
+  // Program::VisualType enum values (trance.proto) keyed by their v3 built-in name
+  // (builtin_patterns_v3.cpp's `pattern NAME for ...` declarations). Kept local to
+  // main.cpp: this is the CLI-facing name table for --visual, not a runtime concept
+  // the rest of the program needs.
+  const std::vector<std::pair<std::string, uint32_t>>& visual_name_table()
+  {
+    static const std::vector<std::pair<std::string, uint32_t>> table = {
+        {"accelerate", 1},
+        {"slow_flash", 2},
+        {"sub_text", 3},
+        {"flash_text", 4},
+        {"simple", 5},
+        {"super_parallel", 6},
+        {"animation", 7},
+        {"super_fast", 8},
+    };
+    return table;
+  }
+
+  // Fatal, startup-time error for a bad --visual name: lists every valid name so the
+  // failure is immediately actionable instead of a runtime surprise later.
+  [[noreturn]] void fatal_bad_visual_name(const std::string& name)
+  {
+    std::cerr << "error: --visual '" << name << "' is not a known built-in visual. Valid names: ";
+    bool first = true;
+    for (const auto& pair : visual_name_table()) {
+      if (!first) {
+        std::cerr << ", ";
+      }
+      std::cerr << pair.first;
+      first = false;
+    }
+    std::cerr << std::endl;
+    std::exit(1);
+  }
+
+  std::string read_file(const std::string& path)
+  {
+    std::ifstream f{path};
+    if (!f) {
+      std::cerr << "error: --pattern '" << path << "' could not be opened" << std::endl;
+      std::exit(1);
+    }
+    return std::string{std::istreambuf_iterator<char>{f}, std::istreambuf_iterator<char>{}};
+  }
+}
 
 int main(int argc, char** argv)
 {
@@ -442,6 +510,32 @@ int main(int argc, char** argv)
     std::cerr << "usage: " << argv[0] << " [session.cfg [system.cfg]]" << std::endl;
     return 1;
   }
+  if (!FLAGS_visual.empty() && !FLAGS_pattern.empty()) {
+    std::cerr << "error: --visual and --pattern are mutually exclusive" << std::endl;
+    return 1;
+  }
+  // --visual: resolved (and fatal-errors on an unknown name) here at startup, not at
+  // first selection -- a typo should never surface as a runtime surprise.
+  uint32_t forced_visual_type = 0;
+  if (!FLAGS_visual.empty()) {
+    for (const auto& pair : visual_name_table()) {
+      if (pair.first == FLAGS_visual) {
+        forced_visual_type = pair.second;
+        break;
+      }
+    }
+    if (!forced_visual_type) {
+      fatal_bad_visual_name(FLAGS_visual);
+    }
+  }
+  // --pattern: the file is read eagerly (a missing file is also a startup-time fatal
+  // error); the actual v3 parse happens once the Director exists, since it needs the
+  // program's locked entrainment period the same way a custom_visual_pattern does.
+  std::string forced_pattern_source;
+  if (!FLAGS_pattern.empty()) {
+    forced_pattern_source = read_file(FLAGS_pattern);
+  }
+
   auto variables = parse_variables(FLAGS_variables);
   for (const auto& pair : variables) {
     std::cout << "variable " << pair.first << " = " << pair.second << std::endl;
@@ -483,6 +577,23 @@ int main(int argc, char** argv)
   if (!FLAGS_export_archive.empty()) {
     return export_archive(root_path, session, FLAGS_export_archive);
   }
-  play_session(root_path, session, system, variables, settings);
+
+  std::function<void(Director&)> visual_override;
+  if (forced_visual_type) {
+    std::cout << "-> forcing every visual to built-in '" << FLAGS_visual << "'" << std::endl;
+    visual_override = [forced_visual_type](Director& director) {
+      director.force_builtin_visual(forced_visual_type);
+    };
+  } else if (!FLAGS_pattern.empty()) {
+    std::cout << "-> forcing every visual to --pattern '" << FLAGS_pattern << "'" << std::endl;
+    visual_override = [&forced_pattern_source](Director& director) {
+      auto error = director.force_pattern_from_source(forced_pattern_source, FLAGS_pattern);
+      if (!error.empty()) {
+        std::cerr << "error: --pattern '" << FLAGS_pattern << "' " << error << std::endl;
+        std::exit(1);
+      }
+    };
+  }
+  play_session(root_path, session, system, variables, settings, visual_override);
   return 0;
 }

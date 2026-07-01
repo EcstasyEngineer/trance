@@ -6,8 +6,9 @@
 > compiled pattern and the seven hardcoded `*Visual` classes have been deleted
 > (see §7–8 below for the landed state). For how the system works *today*, read
 > **[visuals.md](visuals.md)** (the as-built reference) and
-> **[authoring-visual-patterns.md](authoring-visual-patterns.md)** (the user
-> guide). The §2 grammars below describe the visuals' behaviour as they were
+> **[authoring-v3-patterns.md](authoring-v3-patterns.md)** (the user
+> guide; the v1 grammar and its authoring doc were deleted when v3 became the
+> only parser). The §2 grammars below describe the visuals' behaviour as they were
 > originally hand-built in C++; they remain accurate as a behavioural description
 > but reference deleted classes and `visual.cpp:NNN` line numbers that no longer
 > exist. Kept for the rationale and the entropy/primitive audit (§3–5).

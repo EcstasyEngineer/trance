@@ -22,6 +22,31 @@ randomly-generated patterns designed to aid induction and deepening.
    from whatever media it finds.
 3. Press **Escape** to exit fullscreen.
 
+## Usage
+
+```sh
+# play a session normally
+trance.exe some.session
+
+# force every visual selection to one built-in, by its v3 name -- for testing a single
+# visual without hand-editing weights in the session:
+trance.exe --visual=slow_flash some.session
+# valid names: accelerate, slow_flash, sub_text, flash_text, simple, super_parallel,
+# animation, super_fast. An unknown name is a fatal error at startup listing the valid
+# ones -- it never falls through to "picked something else".
+
+# force every visual selection to a single custom v3 pattern source file -- themes,
+# entrainment, and playlist still come from the session/program as normal, only the
+# visual schedule is overridden. A parse error prints the parser's line:col diagnostic
+# and exits instead of falling back to a built-in.
+trance.exe --pattern=my_pattern.v3 some.session
+
+# --visual and --pattern are mutually exclusive.
+
+# video export instead of a window:
+trance.exe --export_path out.webm --export_length 60 some.session
+```
+
 ## Data model
 
 | Concept | Description |

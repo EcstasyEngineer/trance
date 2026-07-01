@@ -120,8 +120,7 @@ void VisualApiImpl::change_font(bool force)
 
 void VisualApiImpl::change_text(SplitType split_type, bool alternate)
 {
-  bool gaps = split_type == SPLIT_LINE_GAPS || split_type == SPLIT_WORD_GAPS;
-  bool split_word = split_type == SPLIT_WORD || split_type == SPLIT_WORD_GAPS;
+  bool split_word = split_type == SPLIT_WORD;
   bool once_only = split_type == SPLIT_ONCE_ONLY;
 
   if (_current_text.empty() && once_only) {
@@ -129,7 +128,7 @@ void VisualApiImpl::change_text(SplitType split_type, bool alternate)
   }
   if (!_current_text.empty()) {
     _current_text.erase(_current_text.begin());
-    if (!_current_text.empty() || gaps || once_only) {
+    if (!_current_text.empty() || once_only) {
       return;
     }
   }
@@ -140,7 +139,7 @@ void VisualApiImpl::change_subtext(bool alternate)
 {
   static const uint32_t count = 16;
   _subtext.clear();
-  for (uint32_t i = 0; i < 16; ++i) {
+  for (uint32_t i = 0; i < count; ++i) {
     auto s = _themes.get_text(alternate, false);
     for (auto& c : s) {
       if (c == '\n') {
@@ -219,7 +218,6 @@ void VisualApiImpl::render_text(float zoom_origin, float zoom, float shadow_zoom
     return;
   }
   const auto& text = _current_text.front();
-  const auto& program = _director.program();
   const auto& font = _font_cache.get_font(_current_font);
 
   auto size = _director.text_size(font, text, true);
@@ -243,7 +241,6 @@ void VisualApiImpl::render_subtext(float alpha, float zoom_origin) const
   if (_current_subfont.empty() || _subtext.empty()) {
     return;
   }
-  const auto& program = _director.program();
   const auto& font = _font_cache.get_font(_current_subfont);
   auto target_y = _director.vr_enabled() ? 1.f / 32.f : 1.f / 16.f;
 
@@ -292,7 +289,6 @@ void VisualApiImpl::render_small_subtext(float alpha, float zoom_origin) const
   if (_current_subfont.empty() || _small_subtext.empty()) {
     return;
   }
-  const auto& program = _director.program();
   const auto& font = _font_cache.get_font(_current_subfont);
 
   auto size = _director.text_size(font, _small_subtext, false);

@@ -1,7 +1,7 @@
 #ifndef TRANCE_SRC_TRANCE_DIRECTOR_H
 #define TRANCE_SRC_TRANCE_DIRECTOR_H
 #include <trance/render/render.h>
-#include <trance/visual/pattern_parser.h>
+#include <trance/visual/pattern_ast.h>
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -47,6 +47,20 @@ public:
   const trance_pb::Program& program() const;
   bool vr_enabled() const;
 
+  // Testing/authoring overrides (--visual / --pattern in main.cpp): pin every visual
+  // selection to a single built-in type or a single externally-supplied pattern, instead
+  // of the program's weighted shuffle. Call before the first change_visual() runs (i.e.
+  // right after construction) so the initial visual is already the forced one.
+  // `visual_type` must be a key already in _builtin_compiled (checked by the caller,
+  // which knows the valid v3 names); an unknown value here would silently no-op.
+  void force_builtin_visual(uint32_t visual_type);
+  // Parses `source` with the same v3 path + locked-beat-period as a program's
+  // custom_visual_pattern (rebuild_custom_patterns) and pins the result as the only
+  // visual ever selected. Returns "" on success; on a parse failure returns the
+  // parser's "line:col: message" diagnostic and leaves the current visual untouched.
+  // `name` is used only for the debug overlay's "visual:" line.
+  std::string force_pattern_from_source(const std::string& source, const std::string& name);
+
   void render_spiral(float spiral, uint32_t spiral_width, uint32_t spiral_type) const;
   void render_image(const Image& image, float alpha, float zoom_origin, float zoom) const;
   // v3 wave warp: set the per-frame sinusoidal image-displacement state (amp 0 = no warp).
@@ -89,6 +103,13 @@ private:
 
   std::uint32_t _last_visual_selection;
   std::unique_ptr<Visual> _visual;
+
+  // Set by force_builtin_visual / force_pattern_from_source (--visual / --pattern in
+  // main.cpp). When set, change_visual() skips the weighted shuffle entirely and always
+  // (re)selects this one. _forced_pattern set means "forced custom pattern"; otherwise
+  // _forced_builtin_type (if nonzero) means "forced built-in".
+  uint32_t _forced_builtin_type = 0;
+  std::unique_ptr<pattern::Parsed> _forced_pattern;
 
   // Authorable custom patterns (Framing B), parsed from the program. Selected in the
   // same weighted shuffle as the built-in visual types. _last_custom_index is the

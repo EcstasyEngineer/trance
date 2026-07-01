@@ -1,5 +1,6 @@
 #include <trance/media/font.h>
 #include <common/util.h>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <unordered_set>
@@ -163,7 +164,11 @@ FontCache::FontCache(const std::string& root_path, const trance_pb::Session& ses
 
 const Font& FontCache::get_font(const std::string& font_path) const
 {
-  auto full_path = _root_path + "/" + font_path;
+  // Absolute paths (e.g. a resolved system-font fallback from ThemeBank) must
+  // not be prefixed with the session's root path.
+  auto full_path = std::filesystem::path(font_path).is_absolute()
+      ? font_path
+      : _root_path + "/" + font_path;
 
   auto it = _map.find(full_path);
   if (it != _map.end()) {
