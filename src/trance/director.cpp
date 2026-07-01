@@ -103,41 +103,28 @@ void Director::build_builtin_patterns()
   // reconfigure, which is fine -- the bed is static per program.
   uint32_t locked_frames = locked_period_frames(*_program);
   for (uint32_t t = 1; t <= 8; ++t) {
-    // Prefer the v3 intent grammar (docs/spec-grammar-v3.md) -- the primitive grammar that
-    // supersedes v2's baked constructs. It lowers to the same pattern::Node + RenderStmt IR.
+    // v3 (docs/spec-grammar-v3.md) is the only grammar: two nouns (pattern, effect) and one
+    // rule, lowering to the same pattern::Node + RenderStmt IR the compiler always ran.
     std::string v3_source = builtin::pattern_source_v3(t);
-    if (!v3_source.empty()) {
-      auto v3 = patternv3::parse(v3_source, locked_frames);
-      if (!v3.ok) {
-        throw std::runtime_error("built-in v3 pattern " + std::to_string(t) +
-                                 " failed to parse: " + v3.error);
-      }
-      for (const auto& w : v3.warnings) {
-        std::cerr << "v3 built-in " << t << " warning: " << w << std::endl;
-      }
-      pattern::Parsed parsed;
-      parsed.name = std::move(v3.name);
-      parsed.weight = 1;
-      parsed.root = std::move(v3.root);
-      parsed.render_block = std::move(v3.render_block);
-      _builtin_compiled.emplace(t, std::move(parsed));
+    if (v3_source.empty()) {
       continue;
     }
-
-    // Final fallback: the original v1 grammar source.
-    std::string source = builtin::pattern_source(t);
-    if (source.empty()) {
-      continue;
+    auto v3 = patternv3::parse(v3_source, locked_frames);
+    if (!v3.ok) {
+      // Built-in sources are compile-time constants, so a parse failure is a build bug --
+      // fail fast and loud rather than risk a null visual at selection time.
+      throw std::runtime_error("built-in v3 pattern " + std::to_string(t) +
+                               " failed to parse: " + v3.error);
     }
-    auto result = pattern::parse(source);
-    if (!result.ok) {
-      // Built-in sources are compile-time constants with no hardcoded fallback left,
-      // so a parse failure is a build bug -- fail fast and loud rather than risk a
-      // null visual at selection time.
-      throw std::runtime_error("built-in pattern " + std::to_string(t) + " failed to parse: "
-                               + result.error);
+    for (const auto& w : v3.warnings) {
+      std::cerr << "v3 built-in " << t << " warning: " << w << std::endl;
     }
-    _builtin_compiled.emplace(t, std::move(result.pattern));
+    pattern::Parsed parsed;
+    parsed.name = std::move(v3.name);
+    parsed.weight = 1;
+    parsed.root = std::move(v3.root);
+    parsed.render_block = std::move(v3.render_block);
+    _builtin_compiled.emplace(t, std::move(parsed));
   }
 }
 
@@ -152,29 +139,22 @@ void Director::rebuild_custom_patterns()
     }
 
     auto v3 = patternv3::parse(src.source_text(), locked_frames);
-    if (v3.ok) {
-      for (const auto& w : v3.warnings) {
-        std::cerr << "custom v3 pattern '" << src.name() << "' warning: " << w << std::endl;
-      }
-      pattern::Parsed parsed;
-      parsed.name = src.name();
-      parsed.weight = src.random_weight();
-      parsed.root = std::move(v3.root);
-      parsed.render_block = std::move(v3.render_block);
-      _custom_patterns.push_back(std::move(parsed));
+    if (!v3.ok) {
+      // A custom pattern that fails to parse is surfaced and skipped -- not a crash, and
+      // not a silent black screen: the rest of the program's visuals still play.
+      std::cerr << "skipping custom pattern '" << src.name() << "': " << v3.error << std::endl;
       continue;
     }
-
-    auto result = pattern::parse(src.source_text());
-    if (!result.ok) {
-      std::cerr << "skipping custom pattern '" << src.name() << "': v3: " << v3.error
-                << "; legacy: " << result.error << std::endl;
-      continue;
+    for (const auto& w : v3.warnings) {
+      std::cerr << "custom v3 pattern '" << src.name() << "' warning: " << w << std::endl;
     }
+    pattern::Parsed parsed;
     // Carry the proto's name/weight (authoritative) over the in-source ones.
-    result.pattern.name = src.name();
-    result.pattern.weight = src.random_weight();
-    _custom_patterns.push_back(std::move(result.pattern));
+    parsed.name = src.name();
+    parsed.weight = src.random_weight();
+    parsed.root = std::move(v3.root);
+    parsed.render_block = std::move(v3.render_block);
+    _custom_patterns.push_back(std::move(parsed));
   }
 }
 
@@ -220,6 +200,36 @@ const trance_pb::Program& Director::program() const
 bool Director::vr_enabled() const
 {
   return _renderer.vr_enabled();
+}
+
+void Director::force_builtin_visual(uint32_t visual_type)
+{
+  _forced_builtin_type = visual_type;
+  _forced_pattern.reset();
+  change_visual(0);
+}
+
+std::string Director::force_pattern_from_source(const std::string& source, const std::string& name)
+{
+  // Same parse path + locked-beat-period source as rebuild_custom_patterns(): themes and
+  // entrainment still come from the session/program, only the visual schedule is forced.
+  const uint32_t locked_frames = locked_period_frames(*_program);
+  auto v3 = patternv3::parse(source, locked_frames);
+  if (!v3.ok) {
+    return v3.error;
+  }
+  for (const auto& w : v3.warnings) {
+    std::cerr << "--pattern '" << name << "' warning: " << w << std::endl;
+  }
+  pattern::Parsed parsed;
+  parsed.name = name;
+  parsed.weight = 1;
+  parsed.root = std::move(v3.root);
+  parsed.render_block = std::move(v3.render_block);
+  _forced_pattern.reset(new pattern::Parsed{std::move(parsed)});
+  _forced_builtin_type = 0;
+  change_visual(0);
+  return {};
 }
 
 void Director::set_warp(float amp, float wavelength, float speed)
@@ -455,6 +465,41 @@ void Director::render_text(const Font& font, const std::string& text, bool large
 
 void Director::change_visual(uint32_t length)
 {
+  // --visual / --pattern override (main.cpp): every selection returns the forced
+  // built-in or custom pattern, bypassing the weighted shuffle below entirely. Still
+  // goes through reset()-vs-rebuild the same way an unforced repeat pick would, so the
+  // cycler restarts cleanly each time the forced visual "completes".
+  if (_forced_pattern) {
+    if (_visual && _last_custom_index == 0) {
+      _visual->reset();
+      return;
+    }
+    _visual.reset(
+        new CompiledVisual{*_visual_api, _forced_pattern->root, _forced_pattern->render_block});
+    _last_custom_index = 0;
+    _custom_visual_name = _forced_pattern->name;
+    _last_visual_selection = trance_pb::Program_VisualType_NONE;
+    return;
+  }
+  if (_forced_builtin_type) {
+    auto compiled = _builtin_compiled.find(_forced_builtin_type);
+    if (compiled == _builtin_compiled.end()) {
+      // Caller (main.cpp) validates the name against the same table before calling
+      // force_builtin_visual(), so this should be unreachable; no-op rather than crash.
+      return;
+    }
+    if (_visual && _last_custom_index < 0 && _last_visual_selection == _forced_builtin_type) {
+      _visual->reset();
+      return;
+    }
+    _last_custom_index = -1;
+    _custom_visual_name.clear();
+    _visual.reset(
+        new CompiledVisual{*_visual_api, compiled->second.root, compiled->second.render_block});
+    _last_visual_selection = _forced_builtin_type;
+    return;
+  }
+
   // 64-bit totals so a program with many large weights can't overflow the sum.
   uint64_t builtin_total = 0;
   for (const auto& type : _program->visual_type()) {

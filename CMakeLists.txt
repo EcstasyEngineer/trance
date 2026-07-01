@@ -195,12 +195,10 @@ add_executable(trance
   src/trance/render/video_export.cpp
   src/trance/theme_bank.cpp
   src/trance/visual/api.cpp
-  src/trance/visual/builtin_patterns.cpp
   src/trance/visual/builtin_patterns_v3.cpp
   src/trance/visual/compiled_visual.cpp
   src/trance/visual/cyclers.cpp
   src/trance/visual/pattern_compiler.cpp
-  src/trance/visual/pattern_parser.cpp
   src/trance/visual/pattern_parser_v3.cpp
   src/trance/visual/render_eval.cpp
   src/trance/visual/visual.cpp)
@@ -284,7 +282,13 @@ if(TRANCE_BUILD_TESTS)
   enable_testing()
 
   # v3 grammar test: the primitive grammar (nesting, crossfade-from-primitives, lexical
-  # register scoping, all 8 built-ins). Headless -- parser + compiler + cyclers only.
+  # register scoping, all 8 built-ins), PLUS evaluating (not just string-matching) every
+  # lowered render [expr] against live cycler state -- closes the gap where parse-time name
+  # resolution can't catch a malformed expr the lowering code itself emits. The evaluator
+  # (pattern::eval_expr / eval_cond_expr) lives inline in render_eval.h precisely so this stays
+  # headless: render_eval.cpp's eval_render() needs the full VisualRender type from api.h, which
+  # includes trance/media/font.h -> SFML/Graphics.hpp and would drag the vcpkg media deps into
+  # this "bare C++17 compiler" target. render_eval.cpp is deliberately NOT a source here.
   add_executable(v3_grammar_test
     src/trance/visual/builtin_patterns_v3.cpp
     src/trance/visual/cyclers.cpp

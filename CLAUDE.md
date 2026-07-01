@@ -63,13 +63,15 @@ v3 intent grammar  ──parse──▶  pattern::Node AST  ──compile──�
   (draw ops: Image/Text/Anim/Spiral/Subtext/Warp + scalar-register ops set/inc/toggle/roll/pulse/
   copy/spiral-set/when). Image registers live in a per-visual map, lexically pattern-scoped.
 - **v3 intent grammar** (`pattern_parser_v3.{h,cpp}`, spec `docs/spec-grammar-v3.md`): the
-  shipped authoring front-end. Two nouns (pattern, effect) + one rule (every numeric is a
-  modulator riding the enclosing pattern's clock, redirectable with `over NAME`). Patterns nest;
-  crossfade emerges from `copy` + cur/prev + source-over fade-in (no keyword); zoom/fade/spiral
-  speed/warp are one curve-drivable class. Built-ins live in `builtin_patterns_v3.cpp`;
-  `director.cpp` prefers v3 for built-ins and custom pattern sources, falling back to the v1
-  grammar (`pattern_parser.cpp`) for legacy custom patterns.
-  (The intermediate v2 grammar and the `super_fast` FSM have been retired.)
+  ONLY grammar -- v1 (`pattern_parser.{h,cpp}`) and the intermediate v2 have both been retired
+  and deleted; there is no fallback parser. Two nouns (pattern, effect) + one rule (every
+  numeric is a modulator riding the enclosing pattern's clock, redirectable with `over NAME`).
+  Patterns nest; crossfade emerges from `copy` + cur/prev + source-over fade-in (no keyword);
+  zoom/fade/spiral speed/warp are one curve-drivable class. Built-ins live in
+  `builtin_patterns_v3.cpp`. `director.cpp` parses every built-in and custom pattern source
+  with v3; a custom pattern that fails to parse is skipped with a surfaced warning (not a
+  crash, not a silent black screen) -- the rest of the program's visuals still play.
+  (The `super_fast` FSM has also been retired.)
 - **Director** (`src/trance/director.cpp`): owns the program, picks/compiles visuals, threads the
   entrainment beat period into the grammar, surfaces parse warnings.
 - **ThemeBank** (`src/trance/theme_bank.{h,cpp}`): the async image/theme loader. **Bi-thematic

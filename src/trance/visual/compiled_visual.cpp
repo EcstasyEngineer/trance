@@ -77,6 +77,8 @@ namespace
       api.change_animation(slot_bool(e, regs));
       break;
     case K::Themes:
+      // Fire-and-forget by design: patterns request a swap, they don't depend on it
+      // landing (the bank may still be loading). Nothing branches on the bool (#25).
       api.change_themes();
       break;
     case K::Font:

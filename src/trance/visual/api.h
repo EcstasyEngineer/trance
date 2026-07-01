@@ -18,11 +18,12 @@ class VisualControl
 public:
   virtual ~VisualControl() = default;
 
+  // 2/3 were SPLIT_WORD_GAPS/SPLIT_LINE_GAPS, reachable only from the retired v1 grammar
+  // (no v3 authoring surface, never serialized to a .session). Values kept stable rather
+  // than renumbered; the gap is intentional.
   enum SplitType {
     SPLIT_WORD = 0,
     SPLIT_LINE = 1,
-    SPLIT_WORD_GAPS = 2,
-    SPLIT_LINE_GAPS = 3,
     SPLIT_ONCE_ONLY = 4,
   };
 

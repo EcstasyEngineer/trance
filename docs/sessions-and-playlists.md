@@ -30,9 +30,9 @@ Key sub-messages:
 
 - **`VisualType`** enum (`:128`) — the eight built-in visuals (`ACCELERATE` …
   `SUPER_FAST`); `VisualTypeConfig` pairs a type with its selection weight.
-- **`VisualPatternSource`** (`:115`) — an authorable custom pattern stored as DSL
+- **`VisualPatternSource`** (`:115`) — an authorable custom pattern stored as v3
   `source_text` with a `name`, `random_weight`, and `enabled` flag. See
-  [authoring-visual-patterns.md](authoring-visual-patterns.md).
+  [authoring-v3-patterns.md](authoring-v3-patterns.md).
 - **`Entrainment`** / **`EntrainmentLayer`** (`:88`, `:105`) — the synthesised
   audio bed. See [audio.md](audio.md).
 - **`AudioEvent`** (`:193`) — a music-channel cue attached to a playlist item.

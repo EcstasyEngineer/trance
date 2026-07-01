@@ -1,5 +1,6 @@
 #include <trance/theme_bank.h>
 #include <common/util.h>
+#include <filesystem>
 #include <iostream>
 
 #pragma warning(push, 0)
@@ -7,6 +8,62 @@
 #include <SFML/Graphics.hpp>
 #include <SFML/OpenGL.hpp>
 #pragma warning(pop)
+
+namespace
+{
+  // Finds a usable system font so that text can still render when a theme
+  // defines none. Checked once (function-local static) and then reused
+  // lock-free; returns an absolute path, or empty if nothing was found.
+  const std::string& find_system_font()
+  {
+    static const std::string result = [] {
+#ifdef _WIN32
+      static const char* names[] = {"arial.ttf", "segoeui.ttf", "calibri.ttf"};
+      static const char* dirs[] = {"C:/Windows/Fonts"};
+#else
+      static const char* names[] = {"DejaVuSans.ttf", "LiberationSans-Regular.ttf", "Ubuntu-R.ttf",
+                                    "FreeSans.ttf"};
+      static const char* dirs[] = {"/usr/share/fonts", "/usr/share/fonts/truetype/dejavu",
+                                   "/usr/share/fonts/truetype/liberation",
+                                   "/usr/share/fonts/truetype/ubuntu",
+                                   "/usr/share/fonts/truetype/freefont",
+                                   "/usr/local/share/fonts"};
+#endif
+      for (const char* dir : dirs) {
+        if (!std::filesystem::is_directory(dir)) {
+          continue;
+        }
+        for (const char* name : names) {
+          std::filesystem::path candidate = std::filesystem::path(dir) / name;
+          if (std::filesystem::exists(candidate)) {
+            std::cerr << "no font in theme; falling back to system font: " << candidate.string()
+                      << std::endl;
+            return candidate.string();
+          }
+        }
+        // Also search one level of subdirectories (e.g. /usr/share/fonts/truetype/*).
+        std::error_code ec;
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(
+                 dir, std::filesystem::directory_options::skip_permission_denied, ec)) {
+          if (!entry.is_regular_file()) {
+            continue;
+          }
+          for (const char* name : names) {
+            if (entry.path().filename() == name) {
+              std::cerr << "no font in theme; falling back to system font: "
+                        << entry.path().string() << std::endl;
+              return entry.path().string();
+            }
+          }
+        }
+      }
+      std::cerr << "no font in theme and no system font found; text will not render"
+                << std::endl;
+      return std::string{};
+    }();
+    return result;
+  }
+}
 
 ThemeBank::ThemeBank(const std::string& root_path, const trance_pb::Session& session,
                      const trance_pb::System& system, const trance_pb::Program& program)
@@ -247,8 +304,7 @@ const std::string& ThemeBank::get_font(bool alternate)
 {
   auto& theme = *_active_themes[alternate ? 2 : 1].load();
   if (theme.font_paths.empty()) {
-    const static std::string none;
-    return none;
+    return find_system_font();
   }
   auto r = random(theme.font_paths.size());
   return theme.font_paths[r];
