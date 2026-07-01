@@ -3,15 +3,27 @@
 // crossfade EMERGES from primitives (copy + cur/prev + complementary alpha, no keyword); and
 // registers are lexically pattern-scoped so two sibling crossfades never collide.
 //
+// Also evaluates (not just string-matches) every lowered render [expr]: parse-time name
+// resolution can catch an `over unknown-clock` typo, but it can't catch a malformed expr the
+// LOWERING code itself emits (e.g. a bad literal, an unbalanced paren from a template). Running
+// the actual expression evaluator (render_eval.h) against live cycler state at several frames
+// closes that gap. Only render_eval.h's pure evaluator is used here (eval_expr/eval_cond_expr,
+// inline, no VisualRender dependency) -- render_eval.cpp's eval_render() needs the full
+// VisualRender type from api.h, which drags SFML and can't build in this headless target; see
+// the CMakeLists comment above the v3_grammar_test target for the exact seam.
+//
 // Headless: parser + compiler + cyclers, no SFML/protobuf. Run via ctest.
 #include <trance/visual/builtin_patterns.h>
 #include <trance/visual/cyclers.h>
 #include <trance/visual/pattern_ast.h>
 #include <trance/visual/pattern_compiler.h>
 #include <trance/visual/pattern_parser_v3.h>
+#include <trance/visual/render_eval.h>
 
 #include <cctype>
+#include <cmath>
 #include <iostream>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -56,6 +68,92 @@ namespace
       --start;
     }
     return expr.substr(start, p - start);
+  }
+
+  // Find the ramp cadence's lowered Seq node: a Node::Type::Seq whose children are all
+  // Action leaves with a non-empty id (the shape parse_ramp_cadence produces; distinct from
+  // the top-level `One{init, body}` wrapper or any Par/Rep the rest of the grammar builds).
+  const pattern::Node* find_ramp_seq(const pattern::Node& n)
+  {
+    if (n.type == pattern::Node::Type::Seq && n.children.size() >= 2) {
+      bool all_action_ids = true;
+      for (const auto& c : n.children) {
+        if (c.type != pattern::Node::Type::Action || c.id.empty()) { all_action_ids = false; break; }
+      }
+      if (all_action_ids) return &n;
+    }
+    for (const auto& c : n.children) {
+      if (const auto* r = find_ramp_seq(c)) return r;
+    }
+    return nullptr;
+  }
+
+  // Evaluate every [expr] field of one RenderStmt against live cycler state, asserting each
+  // numeric result is finite and within a sane tripwire bound (a malformed lowered expr -- e.g.
+  // `resolve_ident` hitting a dangling/renamed node id -- silently resolves to 0.0 rather than
+  // erroring, so this can't rely on non-zero; it catches NaN/Inf and wildly-out-of-range results
+  // like an unterminated paren dragging in the rest of the expr as a bogus product). `where`
+  // labels a failing check with the pattern/frame under test.
+  void check_stmt_finite(const pattern::RenderStmt& st, const pattern::Registers& regs,
+                         const pattern::NodeMap& nodes, const Cycler* root,
+                         const std::string& where)
+  {
+    auto num = [&](const std::string& expr, double dflt, const char* field) {
+      double v = pattern::eval_expr(expr, dflt, regs, nodes, root);
+      check(std::isfinite(v), where + " " + field + ": evaluates to a finite number");
+      check(std::fabs(v) <= 16.0, where + " " + field + ": within sane bounds (|v| <= 16)");
+    };
+    num(st.alpha, 1.0, "alpha");
+    num(st.origin, 0.0, "origin");
+    num(st.zoom, 0.0, "zoom");
+    num(st.shadow_origin, 0.0, "shadow_origin");
+    num(st.shadow_zoom, 0.0, "shadow_zoom");
+    num(st.speed, 0.0, "speed");
+    // Boolean guards: just confirm they evaluate without any assumption on the result --
+    // `when`/anim_gate/anim_alt are conditions, not bounded numerics.
+    (void)pattern::eval_cond_expr(st.when, regs, nodes, root);
+    (void)pattern::eval_cond_expr(st.anim_gate, regs, nodes, root);
+    (void)pattern::eval_cond_expr(st.anim_alt, regs, nodes, root);
+  }
+
+  // Compile `root`, drive its cycler tree exactly like Director::update() does (one advance()
+  // per frame; see director.cpp), and evaluate every render_block RenderStmt's [expr] fields at
+  // frames {0, mid, end-1} -- catching a malformed expr the LOWERING code itself emits, which
+  // parse-time name resolution can't see. A fresh compile per call, so each of the three sampled
+  // frames starts from the same clean tree rather than compounding advances across samples.
+  void eval_render_block_at_frames(const pattern::Node& root,
+                                   const std::vector<pattern::RenderStmt>& render_block,
+                                   const std::string& label)
+  {
+    uint32_t length = 0;
+    {
+      Cycler* probe = pattern::compile(root);
+      length = probe ? probe->length() : 0;
+      delete probe;
+    }
+    if (length == 0 || render_block.empty()) {
+      return;
+    }
+    std::vector<uint32_t> frames = {0, length / 2, length - 1};
+    for (uint32_t target : frames) {
+      pattern::NodeMap node_map;
+      Cycler* compiled = pattern::compile(root, pattern::MakeAction{}, node_map);
+      check(compiled != nullptr, label + ": compiles for frame-driven eval");
+      if (!compiled) {
+        continue;
+      }
+      pattern::Registers regs;
+      // advance() N+1 times => frame() == N (frame() is position()-1 mod length()), matching
+      // Director::update()'s one-advance-per-frame loop.
+      for (uint32_t i = 0; i <= target; ++i) {
+        compiled->advance();
+      }
+      std::string where = label + " frame " + std::to_string(target);
+      for (const auto& st : render_block) {
+        check_stmt_finite(st, regs, node_map, compiled, where);
+      }
+      delete compiled;
+    }
   }
 }
 
@@ -177,7 +275,255 @@ pattern w for 240f {
           "resolution: `over nope` is a hard parse error");
   }
 
-  // 5. Every shipped v3 built-in parses and lowers to a runnable tree.
+  // 4b. Sampled ramp cadence (13.2 / Extension #3, issue #26): parses, lowers to a Seq of N
+  // fixed-length Action segments whose lengths are non-increasing (respecting `ease late` on a
+  // shrinking A->B) and sum EXACTLY to the enclosing pattern's span -- no silent truncation.
+  {
+    auto pr = parse(R"(
+pattern ramped for 300f {
+  every ramp 40f -> 10f steps 10 ease late -> cut {
+    image concept zoom 0.5
+  }
+})");
+    check(pr.ok, std::string("ramp: parses") + (pr.ok ? "" : (" -- " + pr.error)));
+    if (pr.ok) {
+      const auto* seq = find_ramp_seq(pr.root);
+      check(seq != nullptr, "ramp: lowers to a Seq of fixed-length segments");
+      if (seq) {
+        check(seq->children.size() == 10, "ramp: segment count matches `steps 10`");
+        uint32_t sum = 0;
+        bool monotonic = true;
+        bool all_ids_distinct = true;
+        std::set<std::string> ids;
+        for (std::size_t i = 0; i < seq->children.size(); ++i) {
+          const auto& c = seq->children[i];
+          sum += c.length;
+          if (c.length < 1) monotonic = false;  // (also used below as a >=1f floor check)
+          if (i > 0 && c.length > seq->children[i - 1].length) monotonic = false;
+          if (!ids.insert(c.id).second) all_ids_distinct = false;
+        }
+        check(sum == 300, "ramp: sampled segment lengths sum exactly to the 300f span");
+        check(monotonic, "ramp: segment lengths are non-increasing (ease late, A > B)");
+        check(all_ids_distinct, "ramp: every segment gets its own stable node id");
+      }
+      Cycler* root = pattern::compile(pr.root);
+      check(root && root->length() == 300, "ramp: compiled tree length matches the 300f span");
+      delete root;
+    }
+  }
+
+  // 4c. `over PARENT` from inside a ramp body still resolves through the existing scope stack
+  // (the enclosing pattern, named, stays addressable even though segments are anonymous ids).
+  {
+    auto pr = parse(R"(
+pattern ramped2 for 200f {
+  every ramp 20f -> 10f steps 5 -> cut {
+    image concept zoom (curve 0 -> 1 over ramped2)
+  }
+})");
+    check(pr.ok, std::string("ramp over-parent: parses") + (pr.ok ? "" : (" -- " + pr.error)));
+    if (pr.ok) {
+      // `parse()` wraps the pattern body as root.children[1] (root.children[0] is the init
+      // Action); that child's minted id is what `over ramped2` should resolve to -- compare
+      // against the compiled id itself (like the existing crossfade test does), not the
+      // surface-syntax name, since names never survive into the render [expr] strings.
+      const std::string pat_id =
+          pr.root.children.size() > 1 ? pr.root.children[1].id : std::string();
+      auto im = images(pr);
+      bool found = !pat_id.empty();
+      for (const auto* i : im) {
+        if (progress_clock(i->zoom) != pat_id) found = false;
+      }
+      check(found && !im.empty(),
+            "ramp over-parent: body modulator anchors to the named enclosing pattern");
+    }
+  }
+
+  // 4d. `this` (bare, no `over`) inside a ramp body anchors to the segment's OWN clock, and each
+  // segment's draws are gated by that segment's own `.active` (not the parent's), which is what
+  // makes an un-anchored modulator behave as "the active segment's clock" per 13.2.
+  {
+    auto pr = parse(R"(
+pattern ramped3 for 200f {
+  every ramp 20f -> 10f steps 5 -> cut {
+    image concept zoom (curve 0 -> 1)
+  }
+})");
+    check(pr.ok, std::string("ramp this-anchor: parses") + (pr.ok ? "" : (" -- " + pr.error)));
+    if (pr.ok) {
+      const auto* seq = find_ramp_seq(pr.root);
+      auto im = images(pr);
+      check(seq && im.size() == seq->children.size(),
+            "ramp this-anchor: one image RenderStmt is emitted PER segment");
+      if (seq) {
+        bool each_own_clock = im.size() == seq->children.size();
+        bool each_own_gate = true;
+        for (std::size_t i = 0; i < im.size() && i < seq->children.size(); ++i) {
+          if (progress_clock(im[i]->zoom) != seq->children[i].id) each_own_clock = false;
+          if (im[i]->when.find(seq->children[i].id + ".active") == std::string::npos)
+            each_own_gate = false;
+        }
+        check(each_own_clock, "ramp this-anchor: each segment's bare modulator rides ITS OWN id");
+        check(each_own_gate, "ramp this-anchor: each segment's draw is gated by its OWN .active");
+      }
+    }
+  }
+
+  // 4e. Error cases: steps < 2, unknown ease word, and a span too small to fit `steps` segments
+  // of >=1f each are all hard parse errors -- no silent truncation/clamping.
+  {
+    auto steps1 = parse("pattern r for 100f { every ramp 10f -> 5f steps 1 { image concept } }");
+    check(!steps1.ok, "ramp error: `steps 1` (< 2) is a hard parse error");
+
+    auto badease = parse(
+        "pattern r for 100f { every ramp 10f -> 5f steps 4 ease bogus { image concept } }");
+    check(!badease.ok && badease.error.find("bogus") != std::string::npos,
+          "ramp error: unknown ease word is a hard parse error naming the bad word");
+
+    auto toosmall = parse("pattern r for 3f { every ramp 10f -> 5f steps 10 { image concept } }");
+    check(!toosmall.ok, "ramp error: span too small for `steps` segments of >=1f is a parse error");
+  }
+
+  // 4f. Burst surface (13.1, issue #26): parses, lowers to exactly one Node::Burst carrying the
+  // parsed params, base/burst effects land in the right lists, and `NAME.index` (1 during a
+  // burst, else 0) is reachable from a render expr through the same NodeMap/resolve_ident path
+  // every other named clock uses -- no bespoke plumbing for burst.
+  {
+    // `over rapid` and the raw `[this.index]` are used INSIDE the burst's own base/burst
+    // blocks, matching how every other named clock (`every ... -> beat`, `every ramp ... ->
+    // cut`) is documented and tested: the name is only in scope within its own body, not from
+    // sibling statements after the block closes. A raw `[expr]` only substitutes bare
+    // `this`/`self` (subst_this), same as everywhere else in the grammar -- `over NAME` is the
+    // one path that resolves a name other than `this`, so that's what exercises the id lookup;
+    // `[this.index]` exercises `burst.index` being reachable via the bracket-expr path too.
+    auto pr = parse(R"(
+pattern burster for 512f {
+  burst -> rapid period 8f chance 1/24 cooldown 32f duration 32f..96f {
+    base  { image runtime zoom 0.5 }
+    burst { image runtime zoom (curve 1 -> 2 over rapid) alpha [this.index] }
+  }
+})");
+    check(pr.ok, std::string("burst: parses") + (pr.ok ? "" : (" -- " + pr.error)));
+    if (pr.ok) {
+      // Find the single Burst node in the lowered tree.
+      const pattern::Node* burst_node = nullptr;
+      std::vector<const pattern::Node*> stack{&pr.root};
+      while (!stack.empty()) {
+        const pattern::Node* n = stack.back();
+        stack.pop_back();
+        if (n->type == pattern::Node::Type::Burst) burst_node = n;
+        for (const auto& c : n->children) stack.push_back(&c);
+      }
+      check(burst_node != nullptr, "burst: lowers to a Node::Burst");
+      if (burst_node) {
+        check(burst_node->length == 512, "burst: length takes the enclosing pattern's span");
+        check(burst_node->burst_period == 8, "burst: period param");
+        check(burst_node->burst_chance_den == 24, "burst: chance 1/24 -> chance_den 24");
+        check(burst_node->burst_cooldown == 32, "burst: cooldown param");
+        check(burst_node->burst_dur_min == 32 && burst_node->burst_dur_max == 96,
+              "burst: duration min..max params");
+        check(burst_node->effects.size() == 1 && burst_node->burst_effects.size() == 1,
+              "burst: base block -> effects, burst block -> burst_effects (one each)");
+        check(!burst_node->id.empty(), "burst: `-> rapid` mints a stable node id");
+      }
+      // `over rapid` resolves the named burst clock; render_eval's resolve_ident reads
+      // burst.index the same generic way it reads any other node's .index.
+      bool zoom_over_burst = false, index_expr_reachable = false;
+      for (const auto& st : pr.render_block) {
+        if (st.op != pattern::RenderStmt::Op::Image || !burst_node) continue;
+        if (st.zoom.find(burst_node->id + ".progress") != std::string::npos) zoom_over_burst = true;
+        if (st.alpha.find(burst_node->id + ".index") != std::string::npos)
+          index_expr_reachable = true;
+      }
+      check(zoom_over_burst, "burst: `over rapid` resolves to the minted burst node id");
+      check(index_expr_reachable,
+            "burst: `[this.index]` resolves to the minted node id (readable by resolve_ident)");
+      Cycler* root = pattern::compile(pr.root);
+      check(root && root->length() == 512, "burst: compiled tree length matches the 512f span");
+      delete root;
+
+      // Compile through the NodeMap-producing overload and confirm the minted id resolves to
+      // an actual live BurstCycler -- the exact seam render_eval's resolve_ident walks at
+      // runtime for "<id>.index". This is what would have caught the collapse-clobber bug
+      // (pattern_pattern's single-child collapse overwriting the burst node's own id) that a
+      // string-level id comparison alone cannot: it proves the id in the render expr and the
+      // id actually registered in NodeMap are the SAME live node, not just equal-looking strings.
+      pattern::NodeMap node_map;
+      Cycler* root2 = pattern::compile(pr.root, pattern::MakeAction{}, node_map);
+      bool found_in_map = burst_node && node_map.count(burst_node->id) &&
+          std::string(node_map.at(burst_node->id)->type_name()) == "Burst";
+      check(found_in_map, "burst: the minted id resolves in NodeMap to a live BurstCycler");
+      delete root2;
+    }
+  }
+
+  // 4g. Burst error cases: missing `period` and a malformed `chance` denominator are hard
+  // parse errors (no silent zero/never-fires default).
+  {
+    auto noperiod = parse(
+        "pattern b for 100f { burst chance 1/8 { base { image concept } } }");
+    check(!noperiod.ok, "burst error: missing `period` is a hard parse error");
+
+    auto badchance = parse(
+        "pattern b for 100f { burst period 4f chance 2/8 { base { image concept } } }");
+    check(!badchance.ok, "burst error: `chance` numerator must be literal `1`");
+  }
+
+  // 4h. `beats N` phase-locks a length to the entrainment bed's pulse period: with locked=32
+  // (the value director.cpp derives from the program's pulse_hz -- see locked_period_frames()),
+  // `beats 8` must lower to exactly 8*32 = 256 frames, both for a pattern's own `for beats N`
+  // span and for an `every beats 1` cadence nested inside it. `locked` (no count) is the same
+  // mechanism at N=1. Bed-less (locked=0) is a hard parse error for both keywords -- this is WHY
+  // the shipped built-ins stay frame-based: they must parse with no bed present (see director.cpp
+  // build_builtin_patterns() using whatever locked_period_frames() returns for the live program,
+  // which is 0 when it has no pulsed layer).
+  {
+    auto pr = parse(R"(
+pattern beat_locked for beats 8 {
+  every beats 1 { image concept zoom (curve 0 -> 0.5) }
+})",
+                     /*locked=*/32);
+    check(pr.ok, std::string("beats: parses with a 32f-locked bed") +
+                     (pr.ok ? "" : (" -- " + pr.error)));
+    if (pr.ok) {
+      Cycler* root = pattern::compile(pr.root);
+      check(root && root->length() == 8 * 32,
+            "beats: `for beats 8` lowers to 8*locked = 256 frames");
+      delete root;
+      auto im = images(pr);
+      check(im.size() == 1, "beats: one image draw inside the beats-cadenced pattern");
+    }
+
+    // `locked` (bare, no count) is `beats 1`.
+    auto pr_locked = parse("pattern one_beat for locked { image concept zoom 0.5 }",
+                            /*locked=*/32);
+    check(pr_locked.ok, std::string("beats: `locked` (bare) parses with a bed") +
+                             (pr_locked.ok ? "" : (" -- " + pr_locked.error)));
+    if (pr_locked.ok) {
+      Cycler* root = pattern::compile(pr_locked.root);
+      check(root && root->length() == 32, "beats: bare `locked` == locked_period_frames (32)");
+      delete root;
+    }
+
+    // Bed-less program (locked=0, the default when a session has no pulsed entrainment layer):
+    // both `beats N` and bare `locked` hard-error rather than silently picking a frame count.
+    auto no_bed_beats = parse("pattern p for beats 8 { image concept }");
+    check(!no_bed_beats.ok,
+          "beats error: `beats N` with locked=0 (no pulsed bed) is a hard parse error");
+    check(no_bed_beats.error.find("bed") != std::string::npos ||
+              no_bed_beats.error.find("pulsed") != std::string::npos,
+          "beats error: the message names the missing pulsed bed, not a generic parse failure");
+
+    auto no_bed_locked = parse("pattern p for locked { image concept }");
+    check(!no_bed_locked.ok,
+          "beats error: bare `locked` with locked=0 (no pulsed bed) is also a hard parse error");
+  }
+
+  // 5. Every shipped v3 built-in parses and lowers to a runnable tree, and every RenderStmt in
+  // its render_block evaluates to finite, sane-bounded numbers at frames {0, mid, end-1} with
+  // the cycler tree actually advanced -- not just string-matched. This is the gap parse-time
+  // `over` resolution can't close: a malformed expr the LOWERING code itself emits (not the
+  // author's source text) would silently resolve to 0.0/skip rather than fail to parse.
   {
     const char* names[] = {"", "accelerate", "slow_flash", "sub_text",     "flash_text",
                            "simple",         "super_parallel", "animation", "super_fast"};
@@ -191,6 +537,86 @@ pattern w for 240f {
               std::string("builtin ") + names[t] + ": lowers to a runnable tree (len=" +
                   std::to_string(root ? root->length() : 0) + ")");
         delete root;
+        eval_render_block_at_frames(pr.root, pr.render_block,
+                                    std::string("builtin ") + names[t]);
+      }
+    }
+  }
+
+  // 6. Every render_block produced by the test patterns above (sections 1-4f) also evaluates to
+  // finite, sane-bounded numbers -- the same tripwire, but against the custom patterns this file
+  // exercises (crossfade, sibling scoping, spiral/warp params, ramp cadence, burst), not just the
+  // 8 built-ins.
+  {
+    struct Case { const char* label; const char* src; };
+    const Case cases[] = {
+        {"simplest", "pattern hello for 240f { image concept zoom (curve 0 -> 0.5) }"},
+        {"crossfade", R"(
+pattern flash_text for 1024f {
+  pattern life for 128f loop 8 {
+    every 64f -> beat {
+      copy cur -> prev
+      draw prev          zoom (curve 0.5 -> 1.0)
+      image concept -> cur fade in zoom (curve 0 -> 0.5)
+    }
+  }
+})"},
+        {"siblings", R"(
+pattern twin for 512f {
+  pattern a for 128f loop 4 { every 64f -> b { copy cur -> prev  image reward  -> cur fade in } draw prev fade out }
+  pattern c for 128f loop 4 { every 64f -> d { copy cur -> prev  image concept -> cur fade in } draw prev fade out }
+})"},
+        {"spiral speed", R"(
+pattern s for 240f {
+  look { spiral type=3 width=6 }
+  image concept zoom 0.5
+  spiral speed (curve 1 -> 3)
+})"},
+        {"warp", R"(
+pattern w for 240f {
+  warp amplitude (curve 0 -> 0.3) wavelength 0.2 speed 2
+  image concept zoom 0.5
+})"},
+        {"drunk", "pattern d for 240f { drunk (curve 0 -> 0.3) image concept zoom 0.5 }"},
+        {"ramp cadence", R"(
+pattern ramped for 300f {
+  every ramp 40f -> 10f steps 10 ease late -> cut {
+    image concept zoom 0.5
+  }
+})"},
+        {"ramp over-parent", R"(
+pattern ramped2 for 200f {
+  every ramp 20f -> 10f steps 5 -> cut {
+    image concept zoom (curve 0 -> 1 over ramped2)
+  }
+})"},
+        {"ramp this-anchor", R"(
+pattern ramped3 for 200f {
+  every ramp 20f -> 10f steps 5 -> cut {
+    image concept zoom (curve 0 -> 1)
+  }
+})"},
+        {"burst", R"(
+pattern burster for 512f {
+  burst -> rapid period 8f chance 1/24 cooldown 32f duration 32f..96f {
+    base  { image runtime zoom 0.5 }
+    burst { image runtime zoom (curve 1 -> 2 over rapid) alpha [this.index] }
+  }
+})"},
+        {"beats", R"(
+pattern beat_locked for beats 8 {
+  every beats 1 { image concept zoom (curve 0 -> 0.5) }
+})"},
+    };
+    for (const auto& c : cases) {
+      // `beats`/`locked` lengths need a non-zero locked period to parse at all (see 4h); every
+      // other case here is frame-based and indifferent to it, so one shared locked value covers
+      // both without a per-case knob.
+      auto pr = parse(c.src, /*locked=*/32);
+      check(pr.ok, std::string("expr-eval ") + c.label + ": parses" +
+                       (pr.ok ? "" : (" -- " + pr.error)));
+      if (pr.ok) {
+        eval_render_block_at_frames(pr.root, pr.render_block, std::string("expr-eval ") + c.label);
       }
     }
   }

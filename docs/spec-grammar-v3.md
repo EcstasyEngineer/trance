@@ -1,14 +1,19 @@
 # Trance Visual Grammar v3 — Design Specification
 
-> Status: **SHIPPED** (Phases 1–4 implemented; `pattern_parser_v3.{h,cpp}` +
-> `builtin_patterns_v3.cpp`, the director's preferred built-in path). This document defines the
-> v3 surface and its exact lowering to the cycler + effect + render-block runtime. The runtime
-> extensions it needed are built: curve-driven spiral speed, the `SpiralSet` selector, and the
-> wave warp shader. The **one deferred** piece is a text-content register so text can crossfade
-> like images (Ext#4) — the text path is a single live slot, not a register. The v2 grammar and
-> the `super_fast` FSM have been retired. Where this spec and any older prose disagree, **the
-> parser and runtime enums are the source of truth** (`pattern_ast.h`, `compiled_visual.cpp`,
-> `render_eval.cpp`, `api.cpp`). §0 (locked decisions) governs the rest.
+> Status: **SHIPPED, v3-only.** `pattern_parser_v3.{h,cpp}` + `builtin_patterns_v3.cpp` is now
+> the ONLY grammar/parser — the v1 legacy parser (`pattern_parser.{h,cpp}`) has been retired and
+> deleted this sprint, and the intermediate v2 was retired before it. There is no fallback
+> parser; playback is v3-only. This document defines the v3 surface and its exact lowering to
+> the cycler + effect + render-block runtime. The runtime extensions it needed are built:
+> curve-driven spiral speed, the `SpiralSet` selector, the wave warp shader, and (landed after
+> the original §9 estimate) the sampled ramp cadence and the `burst` surface (§13 is no longer
+> speculative — both shipped; see §4.10/§4.11). The **one deferred** piece is a text-content
+> register so text can crossfade like images (Ext#4) — the text path is a single live slot, not
+> a register. Where this spec and any older prose disagree, **the parser and runtime enums are
+> the source of truth** (`pattern_ast.h`, `pattern_parser_v3.cpp`, `render_eval.cpp`, `api.cpp`).
+> §0 (locked decisions) governs the rest; §11's EBNF is regenerated directly from the parser and
+> is the current normative grammar. Honest-limits tone is kept throughout; §12 and Appendix A/B
+> remain as implementation history, not a live task list.
 
 ---
 
@@ -53,8 +58,10 @@ The spiral fragment shader (`shaders.h:82-99`) has **7 types** (`spiral_type` 1�
 draft's "5"), `width` = arm count, `acolour`/`bcolour`, and a `time` uniform that spins it.
 - `look { spiral type=N width=W }` → a deterministic `SpiralSet` effect (Extension #3) pinning
   type/width (replacing `change_spiral`'s random roll). Hard-errors until Ext#3 lands (no
-  silent fallback — corrects the A.1 note).
+  silent fallback — corrects the A.1 note). **[Ext#3 has since shipped — see §9/§4.12;
+  `look { spiral type=N }` lowers today, it no longer hard-errors.]**
 - `spiral speed <curve>` → drives the `time` uniform's per-frame rate (Extension #1).
+  **[Ext#1 has since shipped — see §4.4/§9; fully live, no stairstep.]**
 - `acolour`/`bcolour`/direction remain Program-proto settings, walled off from the grammar.
 
 **0.5 `super_fast`: commit to randomness primitives; delete `SuperFastTick`.** No `raw {}`
@@ -97,11 +104,14 @@ the `warp` parameters.
    - **PATTERN** — a named span that owns a length and therefore a normalized `0..1`
      clock (`.progress`). A pattern's body is a list of effects and nested patterns.
    - **EFFECT** — a verb placed inside a pattern: a *draw* (`image`/`word`/`spiral`),
-     a *driver* (`zoom`/`fade`/`spiral speed`/`drunk`), or a *state* op (`copy`/`set`/`roll`).
+     a *driver* (`zoom`/`fade`/`spiral speed`/`warp`/`drunk`), or a *state* op (`copy` —
+     the only one that shipped; `set`/`roll` as author-facing keywords never did, see §4.7).
    - **THE RULE** — every numeric an effect takes is a **MODULATOR**: a literal, a
-     `curve`, a `drunk` wander, a `beat`, or a raw `[expr]`. Every modulator implicitly
-     reads `this.progress` — the clock of the enclosing pattern — unless redirected with
-     `over NAME` to an ancestor pattern's clock.
+     `curve`, or a raw `[expr]`. Every modulator implicitly reads `this.progress` — the
+     clock of the enclosing pattern — unless redirected with `over NAME` to an ancestor
+     pattern's clock. (`drunk`/`warp` and `beat` are NOT modulator kinds that plug into
+     another param — `drunk`/`warp` are standalone driver statements and a bare `beat`
+     modulator was never built; see §4.13.)
 
 2. **The grammar conveys intent.** You read a pattern top-down; every line is
    `<effect> <param> <modulator>`. The clock a curve rides is "the pattern I am written
@@ -115,10 +125,11 @@ the `warp` parameters.
    params are evaluated each frame by `render_eval.cpp`. Anything that genuinely cannot
    lower is named as a required runtime extension (§9), never smuggled.
 
-4. **Name what cannot lower.** Two things require a runtime extension: a *continuous*
-   curve-driven spiral speed, and the new `drunk` wander. Both degrade gracefully to an
-   existing lowering until the extension ships, and the grammar surface is identical either
-   way.
+4. **Name what cannot lower.** Two things required a runtime extension: a *continuous*
+   curve-driven spiral speed, and the new `warp`/`drunk` wave shader. Both have SHIPPED
+   (§9) — there is no remaining degraded/stairstep path for either. The one construct that
+   still cannot lower today is text crossfade (Ext#4, §0.3) — text has one live slot, not a
+   register.
 
 5. **Grammar owns time-varying scalars; settings own static identity/palette.** A value a
    curve can move per frame belongs in the grammar; a look chosen once and constant for the
@@ -158,13 +169,18 @@ the three verified bugs fixed:
 The Cycler tree nests arbitrarily by owning pointers; every node exposes a uniform
 interface and a `progress()` = `frame()/length()` clock. `compile_impl` recurses
 `Node.children` 1:1 onto `SequenceCycler` / `ParallelCycler` / `OneShotCycler` /
-`RepeatCycler` / `OffsetCycler`. Every author-named node gets an `id` minted into a flat
-`NodeMap`; `render_eval`'s `resolve_ident` reads any node by id and exposes six attributes
-(`progress/frame/length/position/index/active`). Effects WRITE registers
-(`images` + int32 `scalars`) on cycler ticks; the flat render block READS registers + node
-clocks every frame and calls one of five `RenderStmt::Op`s. `Copy` (`images[dst]=images[src]`)
-already exists; `Effect::Kind` has **16** members and no random-walk; `RenderStmt::Op::Spiral`
-carries **no** numeric fields and `render_spiral()` takes no params.
+`RepeatCycler` / `OffsetCycler` / `BurstCycler` (the last added post-ship for §4.11). Every
+author-named node gets an `id` minted into a flat `NodeMap`; `render_eval`'s `resolve_ident`
+reads any node by id and exposes six attributes (`progress/frame/length/position/index/
+active`). Effects WRITE registers (`images` + int32 `scalars`) on cycler ticks; the flat
+render block READS registers + node clocks every frame and calls one of **six**
+`RenderStmt::Op`s (`Image, Text, Subtext, SmallText, Spiral, Warp` — `Warp` added post-ship
+for §4.6). `Copy` (`images[dst]=images[src]`) already exists; `Effect::Kind` has **17**
+members (`SpiralSet` added post-ship for §4.12) and no random-walk (the `Walk` kind in §4.5
+never shipped); `RenderStmt::Op::Spiral` now carries a live `speed` `[expr]` field and
+`render_spiral()` is called after `rotate_spiral(speed)` advances the phase — both were
+"carries no numeric fields" / "takes no params" at the time this paragraph was first written,
+before Extension #1 shipped (§9).
 
 **Structural defaults (resolves the v2 open par-vs-seq question):** a pattern body is
 **parallel** — its draws and drivers co-run over the box clock (this is what makes a driver
@@ -199,34 +215,43 @@ pattern NAME for <len> [seq | loop N] { <body> }
 ### 4.2 `image` / `word` / `caption` / `draw` — DRAW effects
 
 ```
-image  <content> [-> REG] <param-mod>*
+(image | word | caption | subtext)  <content> [-> REG]  <param-mod>*   # -> REG: image only
 draw REG  <param-mod>*               # draw an existing image register without re-pulling
-content ::= concept | reward          # the bi-thematic alternate bool — see §8
+content ::= concept | reward | runtime   # the bi-thematic alternate bool, + runtime — see §8
 ```
 
 - **Lowering.** Two halves: (1) a schedule `Effect{Image, slot}` writes
   `regs.images[REG] = get_image(alternate)` (`concept`→`Slot::Primary`,
-  `reward`→`Slot::Alternate`); (2) a `RenderStmt{Op::Image, image_reg=REG}` whose
+  `reward`→`Slot::Alternate`, `runtime`→`Slot::Runtime`, resolved to primary/alternate at
+  FIRE time rather than parse time); (2) a `RenderStmt{Op::Image, image_reg=REG}` whose
   `alpha`/`origin`/`zoom` fields are the lowered modulator strings. `draw` emits only
-  the draw half (no pull), so any register (e.g. `prev`) is drawable.
+  the draw half (no pull), so any register (e.g. `prev`) is drawable. `word`/`caption`/
+  `subtext` take the same `content` vocabulary but have no `-> REG` (text has one live slot,
+  §0.3) — see §4.13/EBNF §11 for the full draw-statement shape across all four verbs.
 - **Modder note.** Draws a picture. `-> REG` names the layer so `copy`/crossfade can reach
   it; omit it for an auto-named layer. **Bi-thematic is a hard floor:** `concept`/`reward`
-  are the entire content vocabulary; a third theme does not lower (§8).
+  (plus `runtime`, which randomly rolls concept-vs-reward at each firing, `resolved_slot` in
+  `compiled_visual.cpp`) are the entire content vocabulary; a third theme does not lower (§8).
 
-### 4.3 `zoom` / `fade` / `origin` / `alpha` — CURVE-DRIVE effects (the unified class)
+### 4.3 `zoom` / `fade` / `origin` / `alpha`/`brightness` — CURVE-DRIVE PARAMS (the unified class)
 
 ```
-zoom   <mod>
-origin <mod>
-alpha  <mod>
-fade   (in | out | inout | <mod>)
+param ::= ("zoom" | "origin" | "alpha" | "brightness") modulator
+        | "fade" ("in" | "out" | "inout" | modulator)
 ```
+
+**These are trailing params on a draw statement, not statements of their own** — `zoom`/
+`origin`/`alpha`/`brightness`/`fade` only parse where `parse_params` is called, i.e. after
+`image`/`draw`/`word`/`caption`/`subtext`. A bare `zoom (curve 0 -> 0.5)` on its own line
+inside a pattern body is a parse error (`unknown statement 'zoom'`) — this corrects earlier
+draft prose that implied a standalone drive-effect statement.
 
 - **Lowering — pure `RenderStmt` param strings, NO runtime change.** Written on a draw
   (e.g. `image concept zoom (curve 0 -> 0.5) fade in`):
   - `zoom M`  ⇒ `RenderStmt.zoom  = lower(M)`
   - `origin M`⇒ `RenderStmt.origin= lower(M)`
-  - `alpha M` ⇒ `RenderStmt.alpha = lower(M)`
+  - `alpha M` / `brightness M` ⇒ `RenderStmt.alpha = lower(M)` (`brightness` is a literal
+    alias for `alpha` in the parser — same field)
   - `fade in`    ⇒ `alpha = "this.progress"`
   - `fade out`   ⇒ `alpha = "1 - this.progress"`
   - `fade inout` ⇒ `alpha = "1 - abs(2*this.progress - 1)"`
@@ -238,23 +263,33 @@ fade   (in | out | inout | <mod>)
   the pattern's life. `fade in/out/inout` are named curve shapes; write a raw curve for
   anything else.
 
-### 4.4 `spiral` — DRAW + the spiral SPEED axis only
+### 4.4 `spiral` — DRAW + the spiral SPEED axis (standalone statement)
 
 ```
 spiral [speed <mod>]
 ```
 
 - **Lowering — DRAW half:** `RenderStmt{Op::Spiral}` (parameterless `render_spiral()`,
-  unchanged). **SPEED half:** see §9 Extension #1. Until that lands, `spiral speed M` lowers
-  to the **stairstep**: a `Seq` of `spiral` Action leaves each firing
-  `Effect{SpiralRot, rate=literal_k}` sampled from `M` at segment boundaries. With Extension
-  #1, `spiral speed M` lowers to `RenderStmt{Op::Spiral, speed=lower(M)}` read live, exactly
-  like zoom.
-- **Shape/width/color are NOT modulators** — they are settings (§8).
+  unchanged). **SPEED half — Extension #1, SHIPPED, fully live (no stairstep):**
+  `spiral speed M` ⇒ `RenderStmt{Op::Spiral, speed=lower(M)}`. Every frame `eval_render`
+  calls `api.rotate_spiral(eval_num(speed))` immediately before `api.render_spiral()`
+  (`render_eval.cpp`), so a curve reads exactly like zoom/fade/origin — no stairstep unroll,
+  no `Effect::Kind::SpiralRot` leaf. (`SpiralRot` remains in the `Effect::Kind` enum for the
+  legacy runtime shape but the v3 parser never emits it.) `spiral speed M over NAME` works
+  like any other modulator's `over` — it is a live per-frame read, so the stairstep-vs-`over`
+  incompatibility called out in earlier drafts no longer applies.
+- **Shape/width/color are NOT modulators** — they are settings (§8), set via
+  `look { spiral type=N width=W }` (§4.7).
 - **Modder note.** Spiral SPEED is a curve just like zoom. Spiral SHAPE/COLOR are picked in
   the `look {}` settings header, not animated — the grammar only spins it.
 
-### 4.5 `drunk` — CURVE-DRIVE effect: a random wander with an intensity knob
+### 4.5 [SUPERSEDED by §0.2 / §4.6] `drunk` as a random-walk register wander
+
+> **SUPERSEDED.** This subsection describes the pre-ship design: `drunk` as an
+> `Effect::Kind::Walk` register random-walk feeding an `origin`/`zoom` param modulator. That
+> design was replaced before shipping by **§0.2: `drunk` is wave-warp sugar**, a `RenderStmt`
+> shader param with no register/RNG/`Walk` effect at all. See §4.6 for what actually shipped.
+> Kept below as implementation history (do not implement against this text).
 
 ```
 drunk <intensity-mod> [on origin | zoom]     # used as a driver line, OR
@@ -282,7 +317,43 @@ image concept origin (drunk <intensity-mod>) # used as a param modulator
 - **Modder note.** Makes a picture stagger/breathe randomly. `intensity` = how drunk
   (step size). It is spiral-speed's chaotic cousin.
 
-### 4.6 `copy` / `set` / `inc` / `roll` — STATE effects (crossfade handoff, author-visible)
+### 4.6 `warp` / `drunk` — the wave-warp SHIPPED design (supersedes §4.5)
+
+```
+warp [amplitude <mod>] [wavelength <mod>] [speed <mod>]   # standalone statement
+drunk <mod>                                                # sugar for `warp amplitude <mod>`
+```
+
+- **What it is.** A sinusoidal displacement of the sampled texture coordinate in the image
+  fragment shader (`shaders.h`) — an "under-water" ripple, not a positional/origin jitter and
+  not a register-driven random walk. `drunk` is pure sugar: `drunk M` ⇒ `warp amplitude M`
+  with default `wavelength=0.15`, `speed=2` (the parser's literal defaults). There is no
+  `drunk ... on origin|zoom` form and no `image ... origin (drunk ...)` param form — both
+  belonged to the superseded §4.5 design and never shipped; `warp`/`drunk` are standalone
+  pattern-body statements, not draw params.
+- **Lowering — zero register, zero RNG, all three fields are live `[expr]` reads, exactly
+  like zoom/fade/origin.** `warp`/`drunk` ⇒ `RenderStmt{Op::Warp, zoom=lower(amplitude),
+  origin=lower(wavelength), speed=lower(speed)}` (the RenderStmt field names are reused —
+  `zoom` carries amplitude, `origin` carries wavelength, `speed` carries speed; there is no
+  separate `RenderStmt::Op::Warp`-specific field set). Each frame, `eval_render` calls
+  `api.set_warp(amplitude, wavelength, speed)` once before any `Image` draws in the same
+  block, so later `image`/`draw` statements in the pattern pick up the warp uniforms.
+  Amplitude 0 (the default when `warp`/`drunk` is never written) ⇒ no displacement.
+- **Modder note.** Makes the picture ripple like it's underwater. `amplitude` = how far it
+  displaces; `wavelength` = ripple tightness; `speed` = ripple speed. `drunk <amount>` is the
+  one-knob shorthand for "just make it wobble."
+
+### 4.7 [SUPERSEDED / never shipped] `set` / `inc` / `roll` as user-facing statements
+
+> **SUPERSEDED / never shipped.** No `set`, `inc`, or `roll` keyword exists in the parser's
+> statement grammar (`parse_statement` recognizes `pattern`, `every`, `burst`, `look`,
+> `warp`/`drunk`, `spiral`, `copy`, and the draw verbs only — see §11). What actually exists:
+> **`copy`** (§4.8, the only user-visible state effect) and an **internal chance roll** — a
+> `chance P` param on a draw (§4.9's `parse_chance`) compiles to an `Effect::Kind::Roll` the
+> AUTHOR NEVER WRITES; the parser synthesizes it from `chance P` and prepends it before the
+> gated draw. `Effect::Kind::Set`/`Inc`/`Toggle`/`Roll` remain real runtime ops (used
+> internally by `chance` and `anim every Nth`'s pulse counter) but there is no grammar surface
+> that lets an author write `set`/`inc`/`roll` directly. Kept below as implementation history.
 
 ```
 copy SRC -> DST
@@ -298,7 +369,21 @@ roll REG ( N, N, ... )
 - **Modder note.** `copy cur -> prev` stashes a layer so the next image can dissolve INTO it.
   This is the missing piece that lets crossfade be written by hand.
 
-### 4.7 `every` / `loop` — CADENCE inside a pattern body (drives WHEN, not WHAT)
+### 4.8 `copy` — the one shipped STATE effect (crossfade handoff, author-visible)
+
+```
+copy SRC -> DST
+```
+
+- **Lowering.** `copy` ⇒ `Effect{Kind::Copy, target=DST, src=SRC}`
+  (`regs.images[DST]=regs.images[SRC]`), both sides register names qualified per §0.6.
+  Effects run in leaf order, so `copy` written before a draw's pull is the A→B→C handoff.
+  No runtime change. This is the ONLY state-effect statement in the grammar — see §4.7 for
+  what `set`/`inc`/`roll` would have been and why they never shipped.
+- **Modder note.** `copy cur -> prev` stashes a layer so the next image can dissolve INTO it.
+  This is the missing piece that lets crossfade be written by hand.
+
+### 4.9 `every` / `loop` — CADENCE inside a pattern body (drives WHEN, not WHAT)
 
 ```
 every <len> { <body> }
@@ -310,30 +395,143 @@ loop N { <body> }
   `-> NAME` mints the leaf's id into the `NodeMap` (closing the "atomic flash leaf is
   unnamed" gap — every per-beat clock is now name-addressable). `loop N` ⇒
   `RepeatCycler(count=N)`.
-- **Honest limit.** `every <curve>` (ramped cadence) still unrolls into **un-id'd**
-  per-segment leaves (`build_ramp`); a curve over a ramped cadence reads whole-ramp progress,
-  not the active segment (Extension #3, §9). Per-flash wobble inside a ramp is unauthorable
-  until per-segment ids are minted.
+- **`every <curve>` (a bare curve modulator as the cadence length) was never shipped and is
+  not what "ramped cadence" means today.** The shipped ramped cadence is the dedicated
+  `every ramp A -> B steps N ...` form (§4.10) — a distinct piece of grammar with its own
+  compile-time sampling, not a `curve` value plugged into `every`'s `<len>` slot. `<len>`
+  only ever accepts `Nf | beats N | locked` (§4.1); `every <curve> { }` is a parse error
+  (`expected a length`).
 - **Modder note.** Repeats its body on a beat. Name it with `-> beat` so a zoom can ride
-  that per-beat clock.
+  that per-beat clock. For an accelerating/decelerating cadence, reach for `every ramp`
+  (§4.10) instead of trying to feed a curve into `every`'s length.
 
-### 4.8 Modulators — the values that fill any param
+### 4.10 `every ramp A -> B steps N [ease] [-> NAME]` — SHIPPED sampled ramp cadence
 
 ```
-modulator ::= literal | curve | wander | beat | rawexpr   [ over NAME ]
+every ramp <N>f -> <N>f steps <N> [ease (linear | late)] [-> NAME] { <body> }
+```
+
+- **What it's for.** A cadence whose per-flash length itself accelerates/decelerates —
+  e.g. cuts starting at 56f and rushing down to 12f over the pattern's life — without making
+  cycler lengths dynamic at runtime (§13.3's non-goal). This is the real, shipped answer to
+  the honest limit named in older drafts of §4.9 ("`every <curve>` reads whole-ramp progress,
+  not the active segment") — it was resolved by sampling at PARSE time, not by adding a live
+  ramped clock.
+- **Lowering — compile-time sampled, then a plain `Seq` of fixed `Action` leaves (zero
+  cycler/compiler change).**
+  1. Sample `steps` integer segment durations from `A -> B` along the ease curve
+     (`sample_ramp`), at segment midpoints `(i+0.5)/steps`, using the SAME ease formulas as
+     the `curve` modulator (`linear` / `late` = progress³) so the shape matches what a
+     continuous `curve A -> B` would render.
+  2. Scale the raw samples so they sum to exactly the enclosing pattern's span before
+     rounding, then fold the residual rounding error into the tail segments one frame at a
+     time (walking backward) so no segment ever drops below 1f.
+  3. Re-parse the body span once per sampled segment (seeking the cursor back to the body's
+     opening `{`), each time pushing a fresh clock+register scope — this is what lets a bare
+     (no-`over`) modulator inside the body ride "the currently active segment's clock" even
+     though each segment is a distinct minted id.
+  4. Each segment gets its own id: `-> NAME` mints `NAME_00`, `NAME_01`, ... (zero-padded
+     2-digit suffix); with no `-> NAME` the segments are anonymous internal ids. This closes
+     the older "ramped segments stay un-id'd" gap — every sampled segment IS individually
+     addressable, and a body modulator's bare `this`/no-`over` correctly anchors to the
+     ACTIVE segment (not whole-ramp progress) because each re-parse pushes that segment's own
+     clock scope.
+  5. Lowers to a `Seq` of `steps` `Action` leaves; a whole-pattern envelope (e.g. spiral speed
+     accelerating smoothly across the ramp) still reads `over <enclosingPattern>` exactly like
+     any other modulator — see EX-ACCELERATE below and §10.
+- **Requires a bounded enclosing span** (`for <N>f`/`beats N`/`locked`, not `0`) and
+  `span >= steps` (each segment needs at least 1f) — both are parse errors otherwise.
+- **Modder note.** Use this when the FEEL should accelerate (or decelerate) smoothly across a
+  pattern's life — the cut length itself is the thing sliding along a curve. Name the segment
+  clock with `-> cut` (or similar) if you want per-cut modulators; otherwise it's fire-and-
+  forget shape.
+
+### 4.11 `burst [-> NAME] period Nf chance 1/K cooldown Nf duration Amin..Amax { base {} burst {} }` — SHIPPED
+
+```
+burst [-> NAME] period <N>f chance 1/<N> cooldown <N>f duration <N>f[..<N>f] {
+  base  { <body> }
+  burst { <body> }
+}
+```
+
+- **What it's for.** Surfaces the existing `BurstCycler`: a base loop, randomly interrupted
+  (roughly every `period` frames, `1/chance_den` odds per roll) by a bounded burst lasting
+  `duration_min..duration_max` frames, then a `cooldown` before the next roll is eligible.
+  This is the real, shipped answer to §13.1's "expose the existing burst/random cycler" —
+  the felt "rapid-cut base, then it suddenly plays an animation for a bit, then settles back
+  down" shape, built from the primitive instead of a baked FSM (`super_fast`'s
+  `SuperFastTick` is retired; see §0.5).
+  - `-> NAME` mints a stable node id so `NAME.index` (1 while the burst is active, else 0) is
+    readable from any render `[expr]` in scope, via the existing `NodeMap`/`resolve_ident`
+    path — no new plumbing.
+  - There is **no separate `length` keyword** — unlike the illustrative §13.1 sketch, the
+    burst's total length is the ENCLOSING pattern's span (like `every`'s implicit length; the
+    author never restates it).
+  - `chance 1/K` is written literally as `1/K` (the parser expects the `1` and the `/`
+    verbatim, then a denominator — `chance 1/24`, not `chance 0.04` or `chance 1 / 24`
+    with a bare fraction elsewhere).
+  - `duration Af` (a single fixed duration) or `duration Af..Bf` (a min..max range) are both
+    valid; `A..B` uses a literal `..` (two dots, no space required between them).
+- **Lowering.** One `Node::Burst` (`n.burst_period/_chance_den/_cooldown/_dur_min/_dur_max`),
+  `base { }`'s statements ⇒ `Node.effects`, `burst { }`'s statements ⇹ `Node.burst_effects`.
+  Both blocks share the SAME enclosing pattern's clock scope — no separate clock/register
+  scope of their own, so a bare modulator inside either block still rides `this` untouched.
+  `base`/`burst` accept the same statement grammar as any cadence body (draws, `copy`, nested
+  `pattern`/`every`). `pattern_compiler.cpp` compiles `Node::Burst` by synthesizing two tiny
+  `Node`s (one per effect list) through the same `MakeAction` seam every other leaf uses, then
+  wraps them in a `BurstCycler`.
+- **Modder note.** Use this for "usually calm, occasionally spikes" — a rapid-cut or animated
+  burst dropped into an otherwise steady loop, with a cooldown so it doesn't spike back-to-
+  back. Name it `-> rapid` (or similar) if you want a render expr to know whether the burst is
+  currently firing.
+
+### 4.12 `look { }` / `chance` / `anim` — the other SETTINGS + lighter-randomness surfaces
+
+```
+look           ::= "look" "{" "spiral" ( "type" "=" <N> | "width" "=" <N> )* "}"
+chance-param   ::= "chance" ( <FLOAT> | "(" <FLOAT> ")" )
+anim-param     ::= "anim" [ "every" <N> ("st"|"nd"|"rd"|"th") ]
+```
+
+- **`look { spiral type=N width=W }`** — SETTINGS, fires once (not per-frame): a deterministic
+  `Effect::Kind::SpiralSet` pinning spiral type (1 of 7) / arm-count width (Extension #3,
+  §0.4, §9). This is the ONLY `look` property today — no other settings keys exist in the
+  parser (`unknown look property` is a hard parse error for anything else).
+- **`chance P`** — a trailing param on a draw statement (image/word/caption/subtext), NOT a
+  standalone statement. Lowered to a synthesized `Effect::Kind::Roll` over a 100-bucket table
+  (`P` clamped to 1..99 buckets) that the parser prepends before the gated draw's effect,
+  plus a `Guard::Ge` on the draw itself — this is the "internal chance roll" referenced by
+  §4.7's banner: the author never writes `roll` directly, `chance P` IS the surface.
+- **`anim` / `anim every Nth`** — a trailing param on an `image` draw only. Bare `anim` always
+  animates (`RenderStmt.has_anim = true`, plus an `Effect::Kind::Anim` load). `anim every
+  Nth` additionally gates the animation behind a `Pulse` effect + counter, so the image only
+  animates on every Nth firing (`anim_gate` on the `RenderStmt`); the ordinal suffix
+  (`st`/`nd`/`rd`/`th`) is accepted but not checked against `N`.
+- **Modder note.** These three are how the grammar answers "pin a static setting once"
+  (`look`), "sometimes, not always" (`chance`), and "animate occasionally" (`anim every
+  Nth`) without inventing a general conditional/probability language.
+
+### 4.13 Modulators — the values that fill any param
+
+```
+modulator ::= literal | curve | rawexpr   [ over NAME ]
 literal   ::= NUMBER
 curve     ::= curve NUMBER -> NUMBER [ ease (linear | late) ]
-wander    ::= drunk <intensity-mod>
-beat      ::= beat
 rawexpr   ::= [ EXPR ]                  # this/self substituted
 ```
 
 - **Lowering.** All compile to a render `[expr]` string read each frame:
   - `curve A -> B` ⇒ `"(A + (B-A) * <clock>.progress)"`
   - `<literal>`    ⇒ `"V"`
-  - `beat`         ⇒ `"<beatclock>.progress"` (a `Repeat(length=locked_frames)` node)
   - `[expr]`       ⇒ passthrough with `this`/`self` substituted
   - `over NAME`    ⇒ swaps `<clock>` from `this` (enclosing pattern id) to ancestor `NAME`'s id
+- **`drunk` and bare `beat` are NOT modulator kinds** — `parse_modulator` accepts exactly
+  three forms: `[expr]`, `curve A -> B [ease ...]`, and a numeric literal. `drunk` is a
+  standalone statement (§4.6), not a value usable inside another param's parens; a bare
+  `beat` modulator (an implicit `Repeat(length=locked_frames)` clock) was never built — ride
+  the beat's own clock instead by naming a cadence leaf (`every beats 1 -> beat { ... }`,
+  §4.9) and writing `over beat`, or use `beats N` in a `for`/`every` length (§4.1).
 - **Only `linear` and `late` eases are implemented.** Any other ease word is a hard parse
   error (do not silently fall back to linear).
 - **No runtime curve object** — curves are compile-time string sugar (recon-confirmed).
@@ -342,40 +540,42 @@ rawexpr   ::= [ EXPR ]                  # this/self substituted
 
 ## 5. The unified curve-drivable effect class (and the spiral split)
 
-zoom, fade, spiral-SPEED, and drunk-intensity are **one class**: *a number driven by a
-modulator over a pattern's clock*, written `<param> <modulator> [over NAME]`. The class is
-defined by lowering to `value · shape(clock.progress)` (or a register read for `drunk`).
+zoom, fade, origin, spiral-SPEED, and warp's amplitude/wavelength/speed are **one class**: *a
+number driven by a modulator over a pattern's clock*, written `<param> <modulator> [over
+NAME]`. The class is defined by lowering to `value · shape(clock.progress)` — all as live
+`[expr]` reads, no register/RNG anywhere in this class (`drunk`'s pre-ship register-walk
+design, §4.5, never shipped).
 
 | Effect | Where it writes | Lowers today? |
 |---|---|---|
 | `zoom` | `RenderStmt.zoom` | **Yes**, live `[expr]`. |
-| `fade`/`alpha` | `RenderStmt.alpha` | **Yes**, identical machinery. |
+| `fade`/`alpha`/`brightness` | `RenderStmt.alpha` | **Yes**, identical machinery. |
 | `origin` | `RenderStmt.origin` | **Yes**, live `[expr]`. |
-| `spiral speed` | SpiralRot rate / new speed field | **Stairstep today**; continuous needs Extension #1. |
-| `drunk` | scalar register → origin/zoom `[expr]` | Needs Extension #2 (`Walk`). |
+| `spiral speed` | `RenderStmt.speed` (`Op::Spiral`) | **Yes**, live `[expr]` — Extension #1 shipped, no stairstep. |
+| `warp`/`drunk` amplitude/wavelength/speed | `RenderStmt.zoom`/`origin`/`speed` (`Op::Warp`) | **Yes**, live `[expr]`, all three params. |
 
-**Honesty about the asymmetry.** zoom/fade/origin are *already* one class at the runtime
-floor (interchangeable `[expr]` fields on `RenderStmt`). Spiral speed cannot reach the draw
-call today because `render_spiral()` takes no params and rotation lives in a stateful
-accumulator advanced only by `SpiralRot`. So spiral speed **joins** the class at the grammar
-surface, and is **second-class at runtime** (visibly stepped) until Extension #1 lands. v3
-does not claim spiral is fully first-class without that extension.
+**The asymmetry that remains is shape/width and color, not speed.** zoom/fade/origin/spiral
+speed/warp are ALL live `[expr]` fields on `RenderStmt`, evaluated every frame — spiral speed
+is no longer second-class; the stairstep-unroll design in earlier drafts of this section was
+superseded once Extension #1 shipped (`spiral speed <curve> over NAME` is a normal live read,
+not a static-sampling problem).
 
 **The spiral types/color split (the named tension), resolved three ways:**
 
-- **SPEED → GRAMMAR curve.** The only per-frame continuous spiral axis.
-- **TYPE (1 of 7) / WIDTH → SETTINGS selector** (`look { spiral type=N width=W }`). These are
-  discrete identity chosen once; today they are *random-only* via `change_spiral` (which
-  no-ops 25% of the time). v3 adds a deterministic setter (§9, Extension #3) so the author
-  can *select* a shape — but never *curve* it, because a shape is not a continuum.
+- **SPEED → GRAMMAR curve.** The only per-frame continuous spiral axis. Fully live (above).
+- **TYPE (1 of 7) / WIDTH → SETTINGS selector** (`look { spiral type=N width=W }`,
+  §4.12). These are discrete identity chosen once; the pre-v3 runtime is *random-only* via
+  `change_spiral` (which no-ops 25% of the time). v3 ships a deterministic `SpiralSet` setter
+  (`compiled_visual.cpp`, §0.4) so the author can *select* a shape — but never *curve* it,
+  because a shape is not a continuum.
 - **COLOR / DIRECTION → SETTINGS** (per-Program proto: `spiral_colour_a/b`,
   `reverse_spiral_direction`). Unreachable from grammar and kept that way; grammar-driven
   color would require per-frame color uniforms (a real extension) and crosses the
   pattern/session boundary. Explicitly declined.
 
-So "make spiral first-class like zoom" is **TRUE for speed, PARTLY-true for shape/width
-(selector, not curve), FALSE for color.** The grammar reflects this asymmetry instead of
-pretending spiral is uniform.
+So "make spiral first-class like zoom" is **TRUE for speed (fully live), PARTLY-true for
+shape/width (selector, not curve), FALSE for color.** The grammar reflects this asymmetry
+instead of pretending spiral is uniform.
 
 ---
 
@@ -391,7 +591,7 @@ image fades out as the new image fades in, without needing a baked crossfade key
 ```
 pattern xfade for beats 8 loop 8 {
   pattern life for beats 2 {            # the 2-beat image-life clock (VISIBLE)
-    every (beats 1) -> beat {           # per-beat handoff leaf, id = beat
+    every beats 1 -> beat {             # per-beat handoff leaf, id = beat (`every LEN`, no parens)
       copy cur -> prev                  # stash last beat's image (Effect::Copy)
       draw prev          zoom (curve 0.5 -> 1.0)
       image concept -> cur fade in zoom (curve 0.0 -> 0.5)
@@ -402,7 +602,7 @@ pattern xfade for beats 8 loop 8 {
 
 **Lowering, all to existing primitives:**
 
-- The `every (beats 1) -> beat { copy; draw; image }` body lowers to a `RepeatCycler` whose
+- The `every beats 1 -> beat { copy; draw; image }` body lowers to a `RepeatCycler` whose
   leaf (id=`beat`) runs `Effect{Copy, cur->prev}` then `Effect{Image, ->cur}` **in order**
   (`compiled_visual.cpp:195`).
 - The two draws lower to `RenderStmt{Op::Image}` with `image_reg` `prev`/`cur`. `prev` draws
@@ -419,8 +619,14 @@ clock: `cur` zooms `0.0 -> 0.5`, and on the next beat the copied `prev` continue
 source. Anchoring these zooms to the whole `life` clock is the regression to avoid: the second
 image would enter already halfway zoomed, and the copied image would jump at the handoff.
 
-`crossfade` survives only as an **optional, printable macro** (`--expand`) that expands to
-exactly this text. The expansion IS the lowering path, never a parallel re-implementation.
+**No `crossfade` keyword and no `--expand` macro shipped.** This subsection's closing line in
+earlier drafts described a planned `crossfade`/`pulse` macro system (Appendix B Phase 4)
+whose `--expand` output would print exactly the primitives above. That macro layer was never
+built — grep confirms no `crossfade`/`expand` token anywhere in `pattern_parser_v3.cpp`.
+Every v3 built-in (including the shipped `flash_text`, §10 EX6) writes the copy/draw/image
+primitives out longhand each time it needs a crossfade; there is no shorthand. If a macro
+layer is ever added, its expansion should still BE the lowering path (never a parallel
+re-implementation) — that design constraint remains sound even though nothing implements it.
 
 ---
 
@@ -460,14 +666,28 @@ Authors never write bare `par`/`seq` statements — they tag the box.
 ### 7.4 Compile-time resolution check (mandatory)
 
 Because `render_eval` silently resolves unknown identifiers to `0.0`, the compiler — which
-holds the full pattern-id and register declaration list — MUST verify, at parse time, that:
+holds the full pattern-id and register declaration list — verifies, at parse time:
 
-1. every `over NAME` names a real enclosing pattern id;
-2. every wired modulator name resolves to a declared register/pattern;
-3. (warning) a `prev`/`cur` zoom pair in a dissolve is anchored to the same-length clock.
+1. **Every `over NAME` names a real enclosing pattern/clock id** — `resolve_clock` walks the
+   live clock-scope stack and throws a `ParseError` (hard failure) if `NAME` isn't found.
+2. **Every register reference resolves.** `qualify_reg` hard-errors immediately (`ParseError`)
+   on a bare name with no enclosing pattern, or a qualified `Other.reg` naming a pattern not
+   in scope. Separately, `check_register_resolution` (run once at the end of `parse()`) walks
+   every register READ (`copy`'s src, `draw REG`) against the set of registers ever WRITTEN
+   (`image ... -> REG`, `copy`'s dst) and emits a **warning** (not a hard parse error) for a
+   read with no matching write — that register would draw as an empty image.
+3. **Not implemented: a dissolve-pair anchoring check.** An earlier draft of this section
+   described a compile-time warning for "a `prev`/`cur` zoom pair anchored to different-length
+   clocks." That check does not exist in the shipped parser — there is no dissolve-pair
+   detection of any kind (register names like `cur`/`prev` are pure author convention, never
+   typed by the compiler). Getting the two zoom halves' clocks right (§6's worked example) is
+   on the author.
 
-A failure is a parse error (or warning for #3), never a silent dark screen. This is the
-single most important safety property for non-programmer authors.
+A resolution failure (#1/#2's hard-error path) is a parse error, never a silent dark screen.
+This is the single most important safety property for non-programmer authors; #2's
+never-written-register case is a warning rather than a hard error because a register that is
+merely unused-so-far is a common, harmless authoring stage (e.g. a `draw prev` on the very
+first loop iteration, before any `copy` has run).
 
 ### 7.5 Honest carry-forward limits
 
@@ -475,8 +695,14 @@ single most important safety property for non-programmer authors.
   its clock; any `over` read of an offset ancestor inherits this shift.
 - `ParallelCycler` length = LCM of children; co-prime-length parallel children blow up the
   parent clock and make `over PARENT` sweep a surprising period.
-- Ramped-cadence per-segment leaves stay un-id'd (Extension #3) — per-flash wobble inside an
-  accelerate is unauthorable.
+- **Resolved (was an open gap in earlier drafts): ramped-cadence per-segment leaves ARE
+  id'd.** `every ramp A -> B steps N -> NAME` (§4.10) mints a per-segment id (`NAME_00`,
+  `NAME_01`, ...) for every sampled segment, so per-flash wobble inside an accelerate IS
+  authorable via that segment's own bare-modulator clock. The remaining honest limit is
+  narrower: an UNNAMED ramp segment (no `-> NAME`) still gets an anonymous internal id that
+  isn't author-addressable by name, and a modulator that wants to read a SPECIFIC OTHER
+  segment's clock (not "the currently active one") has no syntax to name one out of the
+  zero-padded `NAME_00.. NAME_(N-1)` set without already knowing `N`.
 - Bi-thematic is a hard floor (§8); nested patterns cannot each carry their own theme.
 
 ---
@@ -484,8 +710,13 @@ single most important safety property for non-programmer authors.
 ## 8. Grammar-vs-settings decision table
 
 **Rule:** GRAMMAR owns time-varying scalars (a curve can move them per frame); SETTINGS own
-static identity/palette (chosen once, constant for the run). Settings live in a per-(sub)pattern
-`look { ... }` header that writes proto fields, never per-frame `[expr]`s.
+static identity/palette (chosen once, constant for the run). The grammar's ONE settings
+surface is the per-(sub)pattern `look { ... }` header (§4.12) — it fires once (not a
+per-frame `[expr]`) and lowers to a deterministic runtime setter (`api.set_spiral`, a member
+field on `VisualApiImpl`, NOT a `.session` proto field). The genuinely proto-backed settings
+below (`zoom_intensity`, `spiral_colour_a/b`, `reverse_spiral_direction`, `global_fps`, ...)
+are session/program identity, unreachable from any grammar surface — `look {}` only reaches
+spiral type/width.
 
 | Knob | Tier | Where | Why |
 |---|---|---|---|
@@ -493,13 +724,12 @@ static identity/palette (chosen once, constant for the run). Settings live in a 
 | `zoom` amount | GRAMMAR curve | `RenderStmt.zoom` | per-frame `[expr]` |
 | `origin` (zoom pivot) | GRAMMAR curve | `RenderStmt.origin` | per-frame `[expr]` |
 | `zoom_intensity` ceiling | SETTING | Program proto | master multiplier, constant for run |
-| spiral **SPEED** | GRAMMAR curve | SpiralRot rate / Ext #1 | continuous per-frame scalar |
-| spiral **TYPE** (1 of 7) | SETTING selector | `look { spiral type=N }` (Ext #3) | discrete identity, no continuum |
-| spiral **WIDTH** | SETTING selector | `look { spiral width=W }` (Ext #3) | discrete identity |
+| spiral **SPEED** | GRAMMAR curve | `RenderStmt.speed` (`Op::Spiral`), live | continuous per-frame scalar |
+| spiral **TYPE** (1 of 7) | SETTING selector | `look { spiral type=N }` (shipped, `SpiralSet`) | discrete identity, no continuum |
+| spiral **WIDTH** | SETTING selector | `look { spiral width=W }` (shipped, `SpiralSet`) | discrete identity |
 | spiral **COLOR** a/b | SETTING | Program proto | blended shader uniforms; session concern |
 | spiral **DIRECTION** | SETTING | Program proto | global sign; grammar `speed` is magnitude |
-| `drunk` intensity | GRAMMAR curve | scalar reg → `[expr]` (Ext #2) | per-frame scalar |
-| `drunk` target | fixed (origin/zoom) | — | no new warp draw op in v3 |
+| `warp`/`drunk` amplitude/wavelength/speed | GRAMMAR curve | `RenderStmt.zoom/origin/speed` (`Op::Warp`), live | per-frame scalar, shipped (§4.6, supersedes §4.5's register-walk design) |
 | content theme (concept/reward) | GRAMMAR selector | the alternate bool | only content axis; 3+ themes do NOT lower |
 | `global_fps`, font, theme weights | SETTING | Program/Theme proto | session/program identity |
 
@@ -509,35 +739,41 @@ double-control.
 
 ---
 
-## 9. Required runtime extensions (named, ranked by cost)
+## 9. Required runtime extensions (named, ranked by cost) — ALL THREE SHIPPED
 
-Everything in §4–§8 lowers with **zero runtime change** EXCEPT the three below. Each has a
-graceful-degradation path so the grammar surface never changes.
+Everything in §4–§8 lowers with **zero runtime change** except the three extensions below,
+all of which have now shipped (this section is retained to name what each one cost and where
+it landed, not as an open TODO list).
 
-1. **Continuous spiral speed (~10 lines).** Add a `speed` `[expr]` field to
-   `RenderStmt::Op::Spiral` and change `render_spiral()` → `render_spiral(float speed)` with a
-   `_spiral_speed` read each frame. Touch points: `render_eval.cpp:290`, `api.cpp:303`,
-   `api.h:60`. **Until then:** `spiral speed <curve>` lowers to the stairstep unroll (visibly
-   stepped, but correct).
-   - *1b (declined for v3):* a true positional/rotation/warp `drunk` would need a new
-     `RenderStmt` offset/rotation param + vertex-shader uniform. Out of scope; `drunk warp`
-     hard-errors until added (the way `spiral locked` errors today).
+1. **Continuous spiral speed — SHIPPED.** `RenderStmt::Op::Spiral` carries a `speed` `[expr]`
+   field; `eval_render` calls `api.rotate_spiral(speed)` each frame before `render_spiral()`
+   (`render_eval.cpp`). No stairstep path exists in the v3 parser — `spiral speed <curve>`
+   (with or without `over NAME`) is always a live per-frame read (§4.4, §5).
+   - *1b (still declined for v3):* a true positional/rotation warp distinct from the shipped
+     wave-warp (§4.6) — an offset/rotation `RenderStmt` param + vertex-shader uniform — remains
+     out of scope. `warp`/`drunk` is the sinusoidal-displacement shape only.
 
-2. **`Effect::Kind::Walk` for drunk (one enum + one `run_effect` case + one register
-   convention).** A bounded zero-centered random walk on an `int32` milli-unit scalar register,
-   using the existing RNG. It does NOT lower to `Roll` (a one-shot re-roll) or `Inc` (a fixed
-   step). This is the smallest honest extension, in the spirit of `Burst`/`SuperFastTick` being
-   "the one concession to state."
+2. **The warp shader (shipped as `warp`/`drunk`, §4.6) — NOT the `Effect::Kind::Walk`
+   register-walk this section originally specced (§4.5, superseded).** The shipped design
+   needed zero new `Effect::Kind` and zero new register: `RenderStmt::Op::Warp` carries three
+   live `[expr]` fields (amplitude/wavelength/speed, reusing the `zoom`/`origin`/`speed`
+   field names) read by `eval_render`'s `api.set_warp(...)` each frame, plus shader-side
+   uniform plumbing (`shaders.h`, `api.cpp`/`render.cpp`) and a per-frame `warp_time`. This
+   extension turned out cheaper than originally scoped BECAUSE the design changed (§0.2), not
+   because the original `Walk`-register design got optimized down — that design was dropped
+   entirely.
 
-3. **Deterministic spiral selector (`SpiralSet`).** A setter beside `change_spiral` so
-   `look { spiral type=N width=W }` pins type/width instead of re-rolling. Without it the
-   grammar can only RE-ROLL, not select. (Promoting type/width to a per-Program proto field is
-   the alternative.)
+3. **Deterministic spiral selector (`SpiralSet`) — SHIPPED.** `compiled_visual.cpp` runs
+   `Effect::Kind::SpiralSet` as `api.set_spiral(type, width)`, so `look { spiral type=N
+   width=W }` (§4.12) pins type/width instead of re-rolling via `change_spiral`. No
+   degradation path was needed in the end — it shipped alongside the grammar surface that
+   uses it.
 
-**Out of scope / hard non-goals:** grammar-driven spiral color (per-frame color uniform);
-3+ simultaneous themes (two live theme slots, VRAM budget); live phase-accurate beat
-(`every locked` uses a compile-time period, not a live audio clock); per-segment ramp ids
-(Extension #3, a separate unroller change).
+**Out of scope / hard non-goals (still true):** grammar-driven spiral color (per-frame color
+uniform); 3+ simultaneous themes (two live theme slots, VRAM budget); live phase-accurate beat
+(`every locked`/`beats N` use a compile-time period, not a live audio clock; see
+`docs/authoring-v3-patterns.md`); a text-content crossfade register (Ext#4, §0.3, still
+deferred — the only genuinely open extension left).
 
 ---
 
@@ -563,9 +799,9 @@ pattern unified for 240f {
 }
 ```
 `zoom` ⇒ `"(0+0.5*unified.progress)"`; `fade inout` ⇒ `alpha="1-abs(2*unified.progress-1)"`;
-`spiral speed` ⇒ (with Ext #1) `RenderStmt{Spiral, speed="(0.1+0.9*unified.progress)"}`, else
-the stairstep `Seq` of `SpiralRot` literals. All three are the same shape: a modulator over
-`unified.progress`. The body is parallel, so all three co-run.
+`spiral speed` ⇒ `RenderStmt{Op::Spiral, speed="(0.1+0.9*unified.progress)"}`, read live every
+frame (Extension #1 is shipped — no stairstep path exists). All three are the same shape: a
+modulator over `unified.progress`. The body is parallel, so all three co-run.
 
 ### EX3 — NESTED pattern; inner clock vs outer clock via `over`
 
@@ -590,17 +826,21 @@ in order. The new `cur` layer fades in on `beat.progress`; both zoom halves also
 beat clock (`0.0 -> 0.5`, then `0.5 -> 1.0` after the copy). The baked crossfade branch is
 deleted.
 
-### EX5 — the new DRUNK effect; intensity ramps up
+### EX5 — `drunk` (warp-sugar); amplitude ramps up
 
 ```
 pattern stagger for 300f {
-  image concept origin (drunk (curve 0 -> 0.3))
+  image concept zoom 0.5
+  drunk (curve 0 -> 0.3)
 }
 ```
-Lowers to a length-1 `Walk` leaf inside `stagger` firing `Effect{Kind::Walk, target=W_cur,
-rate=intensity}` each frame (a milli-unit zero-centered clamped walk via the existing RNG);
-`RenderStmt{Image, origin="0.5 + 0.001*W_cur"}`. Intensity (itself a curve) scales the step,
-so the picture starts still and wanders harder over 300f. Requires Ext #2.
+`drunk` is a standalone statement — sugar for `warp amplitude (curve 0 -> 0.3)` with the
+default wavelength/speed (§4.6). It is NOT a param modulator nested inside `origin`/`zoom`
+(that §4.5-era shape never shipped — see §4.5's banner). Lowers to
+`RenderStmt{Op::Warp, zoom="(0 + 0.3*stagger.progress)", origin="0.15", speed="2"}`: the
+image fragment shader displaces the sampled texture coordinate by a sinusoid whose amplitude
+ramps from 0 to 0.3 over the pattern's 300f life. No register, no `Effect::Kind::Walk` — see
+§0.2.
 
 ### EX6 — re-authored `flash_text` (replaces the v1/v2 baked preset)
 
@@ -609,7 +849,7 @@ pattern flash_text for beats 16 loop 16 {
   look { spiral type=3 width=6 }        # SHAPE/COLOR are settings, pinned once
   spiral speed 0.4                       # constant spin (grammar magnitude)
   pattern life for beats 2 {
-    every (beats 1) -> beat {
+    every beats 1 -> beat {
       copy cur -> prev
       draw prev          zoom (curve 0.5 -> 1.0)
       image concept -> cur fade in zoom (curve 0.0 -> 0.5)
@@ -623,137 +863,196 @@ magnitude; spiral SHAPE/COLOR are settings. No crossfade keyword, no super_fast 
 baked opacity ladder — every line the modder sees is
 `<effect> <param> <modulator>`.
 
+### EX7 — `every ramp` accelerating cadence (the shipped `accelerate` built-in, §4.10)
+
+```
+pattern accelerate for 2772f {
+  every ramp 56f -> 12f steps 46 ease late -> cut {
+    image concept zoom 0.5
+  }
+  spiral speed (curve 2 -> 6 over accelerate)
+}
+```
+46 steps is the exact count that makes the sampled segment durations sum to 2772f with zero
+rounding remainder to fold. Each cut is its own minted id (`cut_00`..`cut_45`); a bare
+modulator inside the ramp body (none here) would ride the ACTIVE cut's own clock. `spiral
+speed` reads `over accelerate` — the WHOLE pattern's parent clock, not any one segment — so
+the spin accelerates smoothly across the entire span independent of the ramp's per-segment
+granularity. This is the real, shipped version of the pre-ship §13.2 sketch.
+
+### EX8 — `burst` random-interrupt cadence (the shipped `super_fast` built-in, §4.11)
+
+```
+pattern super_fast for 2048f {
+  burst -> rapid period 8f chance 1/24 cooldown 32f duration 32f..96f {
+    base  { image runtime zoom 0.5 anim every 4th }
+    burst { image runtime zoom 0.5 anim }
+  }
+  every 8f { word concept chance 0.25 }
+  spiral speed 3
+}
+```
+`base` cuts rapidly (every-4th-fire animates); roughly every 8f there's a 1-in-24 roll to
+enter a 32f..96f burst where every fire animates, then a 32f cooldown before the next roll is
+eligible. `-> rapid` mints an id so a render expr could read `rapid.index` (1 during the
+burst) if needed. This is the real, shipped version of the pre-ship §13.1 sketch — note the
+shipped syntax drops the sketch's `length 2048f` (redundant with the enclosing pattern's
+span) and moves `-> rapid` to right after `burst` (matching `every`'s `-> NAME` placement).
+
 ---
 
 ## 11. Full EBNF
 
+Regenerated directly from `pattern_parser_v3.cpp` (read end to end for this pass — every
+production below traces to a specific `parse_*` function). This is the CURRENT normative
+grammar; where any prose in §0–§10 or §13 disagrees with this section, this section (backed
+by the parser) wins.
+
 ```
-pattern        ::= "pattern" NAME "for" len [arrangement] "{" body "}"
+(* ---- top level (Parser::parse / parse_pattern) ---- *)
+pattern        ::= "pattern" NAME "for" len [ arrangement ]* "{" body "}"
 arrangement    ::= "seq" | "loop" NUMBER
-len            ::= NUMBER "f" | "beats" NUMBER | "locked"
-body           ::= ( stmt )*
-stmt           ::= look | pattern | cadence | draw_effect | drive_effect | state_effect
+len            ::= UINT "f" | "beats" UINT | "locked"    (* beats/locked hard-error if the
+                                                              program has no pulsed bed *)
+body           ::= stmt*
+stmt           ::= pattern | cadence | burst | look
+                 | warp_stmt | spiral_stmt | copy_stmt | draw_stmt
 
-look           ::= "look" "{" look_prop* "}"                       (* SETTINGS, not per-frame *)
-look_prop      ::= "spiral" ( "type" "=" NUMBER | "width" "=" NUMBER )
+(* ---- look{} settings header (parse_look) — the ONLY settings surface ---- *)
+look           ::= "look" "{" look_prop* "}"
+look_prop      ::= "spiral" ( "type" "=" UINT )? ( "width" "=" UINT )?   (* either/both, any order *)
 
+(* ---- cadence (parse_cadence / parse_ramp_cadence) ---- *)
 cadence        ::= "every" len [ "->" NAME ] "{" body "}"
-                 | "loop" NUMBER "{" body "}"
-                 | "every" curve "{" body "}"                       (* ramped: un-id'd segments *)
+                 | "every" ramp_len "{" body "}"
 
-draw_effect    ::= ("image" | "word" | "caption") content [ "->" REG ] param*
-                 | "draw" REG param*
-content        ::= "concept" | "reward"                            (* the bi-thematic bool *)
+ramp_len       ::= "ramp" FLOAT "f" "-" ">" FLOAT "f"
+                    "steps" UINT [ "ease" easeword ] [ "-" ">" NAME ]
+                    (* SHIPPED, §4.10. Requires a bounded enclosing span, span >= steps.
+                       Compile-time sampled: lowers to a Seq of `steps` fixed-length Action
+                       leaves, NOT a live/dynamic cycler length. `-> NAME` mints per-segment
+                       ids NAME_00 .. NAME_(steps-1). *)
 
-drive_effect   ::= "zoom"   modulator
-                 | "origin" modulator
-                 | "alpha"  modulator
-                 | "fade"   ( "in" | "out" | "inout" | modulator )
-                 | "spiral" ( "speed" modulator )?
-                 | "drunk"  modulator [ "on" ("origin" | "zoom") ]
+(* ---- burst (parse_burst) — SHIPPED, §4.11 ---- *)
+burst          ::= "burst" [ "->" NAME ]
+                    "period" UINT "f"
+                    [ "chance" "1" "/" UINT ]
+                    [ "cooldown" UINT "f" ]
+                    [ "duration" UINT "f" [ ".." UINT "f" ] ]
+                    "{" burst_block* "}"
+                    (* `period` is mandatory; the other three are optional and may appear in
+                       any order (a for(;;) loop over peeked keywords). No `length` keyword —
+                       length is always the enclosing pattern's span. *)
+burst_block    ::= ( "base" | "burst" ) "{" body "}"   (* same statement grammar as any body;
+                                                            both blocks share the enclosing
+                                                            pattern's clock/register scope *)
 
-state_effect   ::= "copy" REG "->" REG
-                 | "set"  REG NUMBER
-                 | "inc"  REG NUMBER
-                 | "roll" REG "(" NUMBER ("," NUMBER)* ")"
+(* ---- warp/drunk (parse_statement, kw=="warp"||"drunk") — SHIPPED, §4.6, supersedes §4.5 ---- *)
+warp_stmt      ::= "warp" ( "amplitude" modulator | "wavelength" modulator
+                           | "speed" modulator )*
+                 | "drunk" modulator                (* sugar: == warp amplitude <mod>, with
+                                                          default wavelength=0.15 speed=2 *)
 
-param          ::= ("zoom" | "origin" | "alpha") modulator
-                 | "fade" ("in" | "out" | "inout" | modulator)
-                 | "drunk" modulator [ "on" ("origin" | "zoom") ]
+(* ---- spiral (parse_statement, kw=="spiral") ---- *)
+spiral_stmt    ::= "spiral" [ "speed" modulator ]    (* live [expr], no stairstep *)
 
-modulator      ::= ( literal | curve | wander | beat | rawexpr ) [ "over" NAME ]
-literal        ::= NUMBER
-curve          ::= "curve" NUMBER "->" NUMBER [ "ease" easeword ]
-wander         ::= "drunk" modulator                               (* intensity is itself a mod *)
-beat           ::= "beat"
-rawexpr        ::= "[" EXPR "]"                                     (* this/self substituted *)
-easeword       ::= "linear" | "late"                               (* only these implemented *)
-EXPR           ::= (* render_eval grammar: ?: and/or compare +-*/%^ min/max/abs,
-                      <node>.(progress|frame|length|position|index|active), <scalar> *)
+(* ---- copy (parse_statement, kw=="copy") — the only state_effect ---- *)
+copy_stmt      ::= "copy" REG "-" ">" REG
+
+(* ---- draws (parse_draw) ---- *)
+draw_stmt      ::= "image" content [ "-" ">" REG ] draw_param* anim_param? chance_param?
+                 | ( "word" | "caption" | "subtext" ) content draw_param* chance_param?
+                 | "draw" REG draw_param*
+content        ::= "concept" | "reward" | "runtime"   (* Slot::Primary / Alternate / Runtime;
+                                                            "runtime" resolves the theme at
+                                                            fire time, not parse time *)
+
+draw_param     ::= ( "zoom" | "origin" | "alpha" | "brightness" ) modulator
+                 | "fade" ( "in" | "out" | "inout" | modulator )
+                    (* NOTE: draw_param is parsed in a loop (parse_params) so any number of
+                       these may repeat/mix in one statement; last writer for a given
+                       zoom/origin/alpha field wins. `brightness` is a literal alias for
+                       `alpha` — same RenderStmt field. *)
+anim_param     ::= "anim" [ "every" UINT ( "st" | "nd" | "rd" | "th" ) ]
+                    (* "image" draws ONLY — word/caption/subtext/draw do not accept `anim`. *)
+chance_param   ::= "chance" ( FLOAT | "(" FLOAT ")" )
+                    (* synthesizes an internal Roll effect (100-bucket table, clamped 1..99)
+                       + a Guard::Ge on the draw; the author never writes `roll` directly. *)
+
+(* ---- modulators (parse_modulator / parse_over) ---- *)
+modulator      ::= [ "(" ] ( literal | curve | rawexpr ) [ "over" NAME ] [ ")" ]
+literal        ::= FLOAT                              (* a bare number: a CONSTANT, no clock *)
+curve          ::= "curve" FLOAT "-" ">" FLOAT [ "ease" easeword ]
+rawexpr        ::= "[" EXPR "]"                        (* this/self substituted with the
+                                                            resolved clock id *)
+easeword       ::= "linear" | "late"                   (* any other word is a hard parse error *)
+EXPR           ::= (* render_eval grammar, evaluated live each frame: ternary ?:, and/or,
+                      compare (== != < > <= >=), arithmetic (+ - * / % ^, unary - and !),
+                      min/max/abs, identifiers as <node-id>.(progress|frame|length|position|
+                      index|active) or a bare scalar register name *)
+
+REG            ::= NAME [ "." NAME ]     (* bare = qualified to the nearest enclosing pattern's
+                                             register scope; "Other.name" reads another
+                                             pattern's register by its declared name *)
 ```
+
+**Surfaces this EBNF intentionally does NOT include (never shipped — see the relevant §4.x
+banner for why):** `set REG N`, `inc REG N`, `roll REG (N, N, ...)` as user-writable statements
+(§4.7) — `Roll` exists only as the parser-internal effect `chance P` synthesizes, never an
+author-facing keyword; a bare `beat` modulator kind (§4.13); `drunk <mod> on origin|zoom` and
+`image ... origin (drunk <mod>)` (§4.5, superseded by §4.6's `warp`/`drunk`); `every <curve>`
+as a bare-curve cadence length (§4.9) — the shipped ramped cadence is the dedicated `every
+ramp A -> B steps N` form above, not a `curve` value in `<len>`'s slot; standalone
+`zoom`/`origin`/`alpha`/`fade` statements outside a draw (§4.3) — these are `draw_param`
+only, never top-level `stmt`s.
 
 ---
 
 ## 12. Open questions
 
-See `open_questions` in the accompanying plan; the load-bearing ones are the drunk
-clamp-bias behavior, whether spiral type/width should be a `look {}` selector or promoted to a
-proto field, and whether `beat` should remain a compile-time period or wait for a live audio
-clock.
+See `open_questions` in the accompanying plan (historical); most of these have since been
+settled by shipping: the drunk clamp-bias question is moot (drunk shipped as warp-sugar, §4.6
+— no register/clamp/RNG at all, §4.5's design was dropped rather than tuned), and spiral
+type/width stayed a `look {}` selector (§4.12) rather than being promoted to a proto field.
+Genuinely still open: whether `beats`/`locked` should remain a compile-time period or wait
+for a live audio clock (§9's non-goals; see `docs/authoring-v3-patterns.md` for the current
+compile-time semantics).
 
 ---
 
 ## 13. V3 enhancements to consider next
 
-These are intentionally **not** shipped in v3 today. They are the next places where v3 can regain
-more of the old hardcoded patterns' capability without falling back into implementation-shaped
-grammar.
+13.1 and 13.2 below were originally written as **not-yet-shipped** proposals. Both have since
+**SHIPPED** — the normative syntax/lowering now lives in §4.11 (burst) and §4.10 (ramp
+cadence) respectively; this section is kept as two short stubs pointing there (history: what
+motivated each feature) rather than duplicating the spec. 13.3 remains a live, unshipped
+design constraint.
 
-### 13.1 Expose the existing burst/random cycler in v3
+### 13.1 [SHIPPED — see §4.11] Expose the existing burst/random cycler in v3
 
-The runtime already has `BurstCycler` and the legacy grammar can parse `burst { ... }`
-(`pattern_parser.cpp`). V3 did not surface it; it only exposes lighter randomness:
+The runtime already had `BurstCycler` and the legacy (now-deleted) v1 grammar could parse
+`burst { ... }`; v3 originally only exposed lighter randomness (`chance P`, `anim every Nth`,
+`runtime` slots — all three still true and still documented at §4.12) and left the
+short-random-burst-with-cooldown shape unreachable. That gap is now closed: `burst [->
+NAME] period ... chance ... cooldown ... duration ... { base {} burst {} }` lowers to exactly
+one `Node::Burst`, and the shipped `super_fast` built-in uses it (§4.11, EX8). The exact
+syntax that shipped differs slightly from this subsection's original illustrative sketch (no
+`length` keyword, `-> NAME` placement) — §4.11 is the accurate one.
 
-- `chance P` on draw effects, lowered to a roll + guard.
-- `anim every Nth`, lowered to a pulse gate.
-- `runtime` slots, which pick primary/secondary at fire time.
+### 13.2 [SHIPPED — see §4.10] Parent-clock envelopes for accelerating cadence
 
-That means the v3 `super_fast` reauthor keeps the felt rapid-cut intent, but loses the old
-"short random animation burst with cooldown" shape. A v3 surface should expose the existing
-cycler before inventing new randomness machinery. Candidate shape:
-
-```text
-pattern super_fast for 2048f {
-  burst rapid length 2048f period 8f chance 1/256 cooldown 16f duration 128f..256f {
-    base  { image runtime zoom 0.5 }
-    burst { image runtime anim zoom (curve 0 -> 1 over rapid) }
-  }
-  word concept chance 0.25
-  spiral speed 3
-}
-```
-
-The exact syntax can change, but the lowering should stay boring: one `Node::Burst`, base effects,
-burst effects, and `burst.index` available to render expressions.
-
-### 13.2 Parent-clock envelopes are good; live curve lengths are risky
-
-The `ACCELERATE` simplification shows the current v3 weakness: three fixed phases are legible,
-but they no longer express a true accelerating cadence. The right conceptual primitive is a
-shared parent envelope:
-
-```text
-pattern accelerate for 3000f {
-  every ramp 56f -> 12f steps 45 ease late -> cut {
-    image concept zoom (curve 0 -> 0.5)
-  }
-  spiral speed (curve 2 -> 6 over accelerate)
-}
-```
-
-The parent clock (`accelerate.progress`) is the right source for whole-pattern envelopes:
-spiral speed, global intensity, text probability, and maybe palette/warp intensity. It was **not**
-the right fix for `FLASH_TEXT` by itself, because image lifetime there is per-register state:
-`cur` becomes `prev` with an age offset. For handoffs, explicit local halves (`cur` 0.0->0.5,
-copied `prev` 0.5->1.0) are still safer than a global parent clock.
-
-Avoid making `for <curve>` or `every <curve>` a live runtime length. Cycler lengths are structural:
-`ParallelCycler` computes LCMs, `SequenceCycler` sums children, `RepeatCycler` indexes by child
-length, and render expressions read `.length`/`.progress`. If a node's length changes while it is
-running, all of those invariants get messy.
-
-Preferred lowering: **compile-time sampled ramp expansion**.
-
-- Parse `every ramp A -> B steps N [ease ...] -> NAME { body }`.
-- Sample N integer durations from the curve at parse time.
-- Lower to a `SequenceCycler` of fixed `ActionCycler` leaves.
-- Mint stable ids for the active segment, e.g. `cut` for the current segment and optionally
-  `cut_00`, `cut_01`, ... for inspection.
-- Keep render modulators anchored to either the local segment (`cut.progress`) or the parent
-  (`over accelerate`).
-
-This recovers most of hardcoded `ACCELERATE`'s capability without making pattern lengths dynamic
-or adding a general algebra language to `for`.
+The pre-ship `ACCELERATE` reauthor (three fixed phases) lost the true accelerating-cadence
+feel of the original hardcoded pattern. The fix that shipped is exactly the "compile-time
+sampled ramp expansion" this subsection proposed: `every ramp A -> B steps N [ease ...] ->
+NAME { body }` samples `N` integer segment durations from the curve at PARSE time (not a live
+runtime length — cycler lengths stay structural, per this subsection's original caution about
+`ParallelCycler` LCMs / `SequenceCycler` sums / `RepeatCycler` indexing), lowers to a `Seq` of
+fixed `Action` leaves, and mints a per-segment id (`NAME_00`, `NAME_01`, ...) rather than one
+shared `cut` id — a refinement on the original sketch that gives every segment (not just "the
+current one") a stable address. Whole-pattern envelopes still ride `over <pattern>` exactly as
+proposed (§4.10, EX7's `spiral speed (curve 2 -> 6 over accelerate)`). This recovered
+hardcoded `ACCELERATE`'s capability without making pattern lengths dynamic or adding a general
+algebra language to `for` — the shipped design honors this subsection's original caution.
 
 ### 13.3 Keep `[expr]` math as render math, not scheduling algebra
 

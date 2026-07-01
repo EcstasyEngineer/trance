@@ -8,13 +8,19 @@
 // the originals -- the project's "supersede, not parity" stance.
 namespace
 {
-  // 1 ACCELERATE -- cuts accelerate (56 -> 28 -> 14) across three sequenced sub-patterns; the
-  // image zooms per flash and the spiral spins faster each stage.
+  // 1 ACCELERATE -- a true accelerating cadence: one continuous ramp cutting from a 56f flash
+  // down to a 12f flash over 46 sampled steps (13.2/Extension #3), eased `late` so the cuts stay
+  // slow for a while before rushing to the fast end. Spiral speed rides the WHOLE pattern's
+  // parent clock (`over accelerate`), not any one segment, so it accelerates smoothly across the
+  // entire 2772f span independent of the ramp's per-segment/un-id'd-elsewhere honest limit.
+  // 46 steps (not the spec's illustrative ~45) is the exact step count that makes the sampled
+  // segment durations sum to 2772f with zero rounding remainder to fold -- see sample_ramp.
   const char* kAccelerate = R"(
-pattern accelerate for 2772f seq {
-  pattern a1 for 896f { every 56f { image concept zoom 0.5 } spiral speed 3 }
-  pattern a2 for 896f { every 28f { image concept zoom 0.5 } spiral speed 4 }
-  pattern a3 for 980f { every 14f { image concept zoom 0.5 } spiral speed 5 }
+pattern accelerate for 2772f {
+  every ramp 56f -> 12f steps 46 ease late -> cut {
+    image concept zoom 0.5
+  }
+  spiral speed (curve 2 -> 6 over accelerate)
 })";
 
   // 2 SLOW_FLASH -- a slow concept phase then a fast reward phase (sequenced).
@@ -86,11 +92,18 @@ pattern animation for 1024f {
   spiral speed 3
 })";
 
-  // 8 SUPER_FAST -- rapid runtime cuts (every fourth animates) with a chance word; randomness
-  // primitives replace SUPER_FAST's hand-rolled FSM (same effect, not the same frames).
+  // 8 SUPER_FAST -- rapid runtime cuts, occasionally interrupted by a short random ANIMATED
+  // burst with a cooldown (13.1, issue #26): the felt "rapid-cut base, then it suddenly plays
+  // an animation for a bit, then settles back down" shape the old hand-rolled FSM gave, now
+  // built from the burst/random primitive instead of a baked C++ state machine (same effect,
+  // not the same frames). The accent word rides its own independent chance cadence, same as
+  // before the burst reauthor.
   const char* kSuperFast = R"(
 pattern super_fast for 2048f {
-  every 8f { image runtime zoom 0.5 anim every 4th }
+  burst -> rapid period 8f chance 1/24 cooldown 32f duration 32f..96f {
+    base  { image runtime zoom 0.5 anim every 4th }
+    burst { image runtime zoom 0.5 anim }
+  }
   every 8f { word concept chance 0.25 }
   spiral speed 3
 })";
