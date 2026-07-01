@@ -1,8 +1,7 @@
 # Authoring v3 visual patterns
 
-V3 patterns are the shipped grammar for built-in visuals and are now accepted for custom
-`.session` patterns. Playback tries v3 first, then falls back to the legacy parser for older
-custom sources.
+V3 patterns are the shipped grammar for built-in visuals and custom `.session` patterns alike.
+It is the only grammar -- there is no legacy fallback parser.
 
 ## The Shape
 
@@ -58,6 +57,74 @@ pattern xfade for 512f {
 Each image has two halves. While it is `cur`, it zooms `0 -> 0.5`; after `copy cur -> prev`,
 it continues `0.5 -> 1.0`. The old layer draws first, and the new layer fades in above it.
 That matches the renderer's source-over blending without a special `crossfade` keyword.
+
+## Beats: phase-locking to the entrainment bed
+
+Most patterns are timed in frames (`for 512f`, `every 64f`) -- an arbitrary clock with no
+relationship to the audio. If the session has a pulsed entrainment bed (a binaural or
+isochronic layer with `pulse_hz > 0`, synthesized in `entrainment.cpp`: the gate that fades
+each ear in and out, 180 degrees out of phase for binaural), a pattern can instead lock its
+cadence to that bed's pulse period, so a flash or a handoff lands exactly on the beat instead
+of drifting against it.
+
+`director.cpp` resolves one beat period per program before parsing: it looks at the program's
+entrainment layers, picks the pulsed layer with the highest amplitude, and converts its
+`pulse_hz` to a frame count (`round(global_fps / pulse_hz)`). That frame count is threaded into
+the parser as `locked_period_frames`; the grammar exposes it through two length keywords:
+
+- **`locked`** -- exactly one beat period.
+- **`beats N`** -- `N` beat periods (`N * locked_period_frames`).
+
+Both are valid anywhere a `<len>` is expected: a pattern's `for` span, or a cadence's `every`
+length.
+
+```text
+pattern pulse_flash for beats 8 {
+  every beats 1 { image concept zoom (curve 0 -> 0.5) }
+}
+```
+
+With an 8 Hz isochronic layer at 60 fps, `locked_period_frames` resolves to 8 (60/8, rounded),
+so this pattern runs for 64 frames total and flashes once per beat -- 8 flashes, one per pulse.
+
+The same substitution works inside the crossfade shape shown above; swap the inner clock's
+frame length for a beat length and the handoff itself locks to the bed instead of running on
+an arbitrary cadence:
+
+```text
+pattern xfade_on_beat for beats 8 {
+  pattern life for beats 2 loop 4 {
+    every beats 1 -> beat {
+      copy cur -> prev
+      draw prev          zoom (curve 0.5 -> 1.0)
+      image reward -> cur fade in zoom (curve 0 -> 0.5)
+    }
+  }
+}
+```
+
+Each image now lives for exactly 2 beats before the next one cuts in, and the cut itself
+always lands on a pulse.
+
+**Prefer `beats`/`locked` when the pattern's whole point is to feel synced to the bed** --
+a flash cadence, a crossfade handoff, anything meant to read as "on the beat." **Prefer plain
+frame lengths (`Nf`) everywhere else**, including anything that must also work in a program
+with no pulsed bed at all.
+
+That last clause is load-bearing, not stylistic: **`beats N` and `locked` hard-error at parse
+time when `locked_period_frames` is 0** -- i.e. when the program has no pulsed entrainment
+layer (`` `beats` needs a pulsed entrainment bed (none in this program) ``, same for `locked`).
+There is no silent fallback to a frame count. This is exactly why the eight shipped built-ins
+(`builtin_patterns_v3.cpp`) are written entirely in frames: they are parsed once at startup
+against whatever program is loaded (`Director::build_builtin_patterns()`), including sessions
+with no entrainment bed configured at all, so they cannot use a length keyword that hard-errors
+in that case. A custom pattern authored for a specific session that is known to always ship a
+pulsed bed does not have that constraint.
+
+**FUTURE (not shipped):** issue #23 proposes a v3 `audio` effect for theme-driven mantra audio.
+Once that lands, `every beats N { audio mantra }` will let a spoken line trigger phase-locked
+to the entrainment bed, the same way `image`/`word` do today for visuals. Nothing described in
+this paragraph exists yet.
 
 ## Common Effects
 

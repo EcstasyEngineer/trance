@@ -141,6 +141,19 @@ namespace pattern
     // Seq / Par / One children; Rep / Off use children[0].
     std::vector<Node> children;
   };
+
+  // A fully compiled pattern, ready for pattern::compile(): the lowered AST plus the
+  // render block and the selection metadata (name / weight) director.cpp needs to pick
+  // and label it. Filled in by patternv3::parse's ParseResult (pattern_parser_v3.h);
+  // kept here rather than there since both director's built-in table and its custom-pattern
+  // list store it independent of any one parser.
+  struct Parsed
+  {
+    std::string name;
+    uint32_t weight = 1;
+    std::vector<RenderStmt> render_block;
+    Node root;
+  };
 }
 
 #endif
