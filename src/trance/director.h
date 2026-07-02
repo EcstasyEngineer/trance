@@ -40,6 +40,12 @@ public:
 
   // Toggle the on-screen debug overlay (bound to F1 in main.cpp).
   void toggle_debug_overlay();
+  // `status` verb accessors (#21, docs/spec-mcp-ambient-daemon.md sec 4/5): reports exactly
+  // what the F1 debug overlay already knows -- same visual-name logic as
+  // draw_debug_overlay()'s "visual :" line, and whether the active program has any
+  // entrainment bed layers configured (not muted/playing state; just "is there a bed").
+  std::string status_visual_name() const;
+  bool status_bed_active() const;
   // Optional audio handle: used by the debug overlay to report the live
   // entrainment bed and mute state, and bridged to VisualApiImpl for the
   // grammar-driven theme-audio verbs (issue #23). Null in export mode (no
