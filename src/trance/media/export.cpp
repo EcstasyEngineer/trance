@@ -34,8 +34,10 @@ void FrameExporter::encode_frame(const uint8_t* data)
       counter_str + _settings.path.substr(index);
 
   sf::Image image;
-  image.create(_settings.width, _settings.height, data);
-  image.saveToFile(frame_path);
+  image.resize({_settings.width, _settings.height}, data);
+  if (!image.saveToFile(frame_path)) {
+    std::cerr << "couldn't save " << frame_path << std::endl;
+  }
   ++_frame;
 }
 

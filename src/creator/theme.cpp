@@ -1025,14 +1025,15 @@ void ThemePage::GenerateFontPreview()
   // Render in another thread to avoid interfering with OpenGL contexts.
   std::thread worker([&] {
     sf::Font font;
-    font.loadFromFile(_current_font);
-    sf::Text text_obj{text, font, font_size};
+    static_cast<void>(font.openFromFile(_current_font));
+    sf::Text text_obj{font, text, font_size};
     auto bounds = text_obj.getLocalBounds();
 
     sf::RenderTexture texture;
-    texture.create(border + (unsigned) bounds.width, border + (unsigned) bounds.height);
+    static_cast<void>(texture.resize(
+        {border + (unsigned) bounds.size.x, border + (unsigned) bounds.size.y}));
     sf::Transform transform;
-    transform.translate(border / 2 - bounds.left, border / 2 - bounds.top);
+    transform.translate({border / 2.f - bounds.position.x, border / 2.f - bounds.position.y});
     texture.draw(text_obj, transform);
     texture.display();
     _image_panel->SetImage(texture.getTexture().copyToImage());

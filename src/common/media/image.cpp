@@ -19,7 +19,7 @@ Image::Image() : _width{0}, _height{0}, _texture{0}
 Image::Image(uint32_t width, uint32_t height, unsigned char* data)
 : _width{width}, _height{height}, _texture{0}, _sf_image{new sf::Image}
 {
-  _sf_image->create(width, height, data);
+  _sf_image->resize({width, height}, data);
 }
 
 Image::Image(const sf::Image& image)

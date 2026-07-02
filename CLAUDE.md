@@ -4,10 +4,13 @@ Guidance for working in this repo. Read it before making changes.
 
 ## What trance is
 
-A fullscreen visual hypnosis / media player (C++17, SFML 2). It plays **sessions** (protobuf
-`.session` files) that drive a stream of timed visuals — flashing images/text, spirals,
-animations — over audio with optional binaural/isochronic entrainment beds. There is also a
-wxWidgets **creator** (session editor) and a video **export** path.
+A fullscreen visual hypnosis / media player (C++17, SFML 3). It plays **sessions**
+(`*.session.json`, spec in `docs/session-json-format.md`; legacy protobuf `.session` files
+convert via `trance_convert`) that drive a stream of timed visuals — flashing images/text,
+spirals, animations — over audio with optional binaural/isochronic entrainment beds and
+theme audio. Also: a video **export** path, an X11 click-through `--overlay` mode, an
+ImGui F2 in-app UI, and a `--command_port` line-protocol control channel. The legacy
+wxWidgets **creator** (Windows-only, still proto-based) is deprecated pending ImGui parity.
 
 ## Build & run
 

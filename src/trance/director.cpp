@@ -909,9 +909,9 @@ void Director::draw_debug_overlay() const
   // paths are Windows-specific, which matches the rest of the build.
   if (!_debug_font_loaded) {
     _debug_font_loaded = true;
-    _debug_font_ok = _debug_font.loadFromFile("C:/Windows/Fonts/consola.ttf") ||
-        _debug_font.loadFromFile("C:/Windows/Fonts/cour.ttf") ||
-        _debug_font.loadFromFile("C:/Windows/Fonts/arial.ttf");
+    _debug_font_ok = _debug_font.openFromFile("C:/Windows/Fonts/consola.ttf") ||
+        _debug_font.openFromFile("C:/Windows/Fonts/cour.ttf") ||
+        _debug_font.openFromFile("C:/Windows/Fonts/arial.ttf");
   }
   if (!_debug_font_ok) {
     return;
@@ -1018,18 +1018,18 @@ void Director::draw_debug_overlay() const
   auto& window = _renderer.window();
   window.pushGLStates();
 
-  sf::Text text;
-  text.setFont(_debug_font);
+  sf::Text text{_debug_font};
   text.setCharacterSize(14);
-  text.setFillColor(sf::Color(sf::Uint8(120), sf::Uint8(255), sf::Uint8(160)));
+  text.setFillColor(sf::Color(std::uint8_t(120), std::uint8_t(255), std::uint8_t(160)));
   text.setString(out.str());
-  text.setPosition(14.f, 12.f);
+  text.setPosition({14.f, 12.f});
 
   auto bounds = text.getLocalBounds();
-  sf::RectangleShape backing(
-      sf::Vector2f(bounds.left + bounds.width + 28.f, bounds.top + bounds.height + 24.f));
-  backing.setPosition(6.f, 6.f);
-  backing.setFillColor(sf::Color(sf::Uint8(0), sf::Uint8(0), sf::Uint8(0), sf::Uint8(175)));
+  sf::RectangleShape backing(sf::Vector2f(bounds.position.x + bounds.size.x + 28.f,
+                                          bounds.position.y + bounds.size.y + 24.f));
+  backing.setPosition({6.f, 6.f});
+  backing.setFillColor(
+      sf::Color(std::uint8_t(0), std::uint8_t(0), std::uint8_t(0), std::uint8_t(175)));
   window.draw(backing);
   window.draw(text);
 
