@@ -1,5 +1,6 @@
 #include <common/common.h>
 #include <common/session.h>
+#include <common/session_archive.h>
 #include <common/util.h>
 #include <trance/director.h>
 #include <trance/media/audio.h>
@@ -9,7 +10,10 @@
 #include <trance/render/render.h>
 #include <trance/render/video_export.h>
 #include <trance/theme_bank.h>
+#include <trance/ui/app_ui.h>
+#include <atomic>
 #include <chrono>
+#include <csignal>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -27,6 +31,19 @@
 #include <SFML/Graphics.hpp>
 #include <SFML/Window.hpp>
 #pragma warning(pop)
+
+// Overlay mode (#27): the window is click-through by design, so it can never receive
+// its own quit hotkey (Escape, handled in handle_events() below never arrives). SIGINT/
+// SIGTERM are the only way to stop it -- handled here as a clean flag flip (running =
+// false), not abort/terminate, so the async thread/audio/window all still tear down via
+// the normal play_session() exit path. The #21 command channel will eventually own
+// runtime control (pause/stop/etc) generally; this is the stopgap for #27 specifically.
+std::atomic<bool> g_overlay_stop_requested = false;
+
+extern "C" void overlay_signal_handler(int)
+{
+  g_overlay_stop_requested = true;
+}
 
 std::string next_playlist_item(const std::map<std::string, std::string>& variables,
                                const trance_pb::PlaylistItem* item)
@@ -70,16 +87,26 @@ std::thread run_async_thread(std::atomic<bool>& running, ThemeBank& bank)
 }
 
 void handle_events(std::atomic<bool>& running, sf::RenderWindow& window, Director& director,
-                   Audio* audio)
+                   Audio* audio, AppUi* app_ui)
 {
   sf::Event event;
   while (window.pollEvent(event)) {
+    // ImGui gets first look at input so clicks/typing inside its panels don't also
+    // fall through to the F-key/Escape handling below. Null (or unavailable, see
+    // AppUi::available) in --overlay mode -- the click-through window never
+    // delivers events to this loop in the first place, but guard anyway.
+    if (app_ui) {
+      app_ui->process_event(window, event);
+    }
     if (event.type == event.Closed ||
         (event.type == event.KeyPressed && event.key.code == sf::Keyboard::Escape)) {
       running = false;
     }
     if (event.type == event.KeyPressed && event.key.code == sf::Keyboard::F1) {
       director.toggle_debug_overlay();
+    }
+    if (event.type == event.KeyPressed && event.key.code == sf::Keyboard::F2 && app_ui) {
+      app_ui->toggle();
     }
     if (event.type == event.KeyPressed && event.key.code == sf::Keyboard::M && audio) {
       audio->ToggleMute();
@@ -107,7 +134,8 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
                   const trance_pb::System& system,
                   const std::map<std::string, std::string> variables,
                   const exporter_settings& settings,
-                  const std::function<void(Director&)>& visual_override = {})
+                  const std::function<void(Director&)>& visual_override = {},
+                  const OverlayConfig& overlay = {})
 {
   struct PlayStackEntry {
     const trance_pb::PlaylistItem* item;
@@ -145,13 +173,39 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
   // System::OCULUS (LibOVR) support was removed; old sessions requesting it fall
   // through to the screen renderer below.
   if (!renderer) {
-    renderer.reset(new ScreenRenderer(system));
+    renderer.reset(new ScreenRenderer(system, overlay));
   }
 
   Director director{session, system, *theme_bank, program(), *renderer};
   if (visual_override) {
     visual_override(director);
   }
+
+  // Overlay mode is click-through, so it can never receive its own quit hotkey (see
+  // overlay_signal_handler above) -- SIGINT/SIGTERM are the only way out.
+  if (overlay.enabled) {
+    g_overlay_stop_requested = false;
+    std::signal(SIGINT, overlay_signal_handler);
+    std::signal(SIGTERM, overlay_signal_handler);
+    std::cout << "overlay mode: stop with Ctrl+C / pkill trance" << std::endl;
+  }
+
+  // ImGui in-app UI (task 18), F2-toggled. Only stood up for a real interactive
+  // screen window: unavailable in --overlay mode (click-through, see AppUi::available
+  // and handle_events above), and not wired for VR (per-eye render path, no single
+  // flat 2D pass to composite onto -- out of scope this wave) or video-export mode
+  // (no interactive window loop). director.vr_enabled() is the existing accessor;
+  // no new Director surface added.
+  std::unique_ptr<AppUi> app_ui;
+  if (realtime && !overlay.enabled && !director.vr_enabled() &&
+      AppUi::available(overlay.enabled)) {
+    app_ui.reset(new AppUi());
+    if (!app_ui->init(renderer->window())) {
+      std::cerr << "warning: ImGui-SFML init failed; F2 UI unavailable this run" << std::endl;
+      app_ui.reset();
+    }
+  }
+  sf::Clock ui_clock;
 
   std::thread async_thread;
   std::atomic<bool> running = true;
@@ -166,9 +220,6 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
   std::cout << std::endl << "-> " << session.first_playlist_item() << std::endl;
 
   try {
-    float update_time = 0.f;
-    float playlist_item_time = 0.f;
-
     uint64_t elapsed_export_frames = 0;
     uint64_t async_update_residual = 0;
     double elapsed_frames_residual = 0;
@@ -191,8 +242,8 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
     auto last_clock_time = clock_time();
     auto last_playlist_switch = clock_time();
 
-    while (running) {
-      handle_events(running, renderer->window(), director, audio.get());
+    while (running && !g_overlay_stop_requested) {
+      handle_events(running, renderer->window(), director, audio.get(), app_ui.get());
 
       // TODO: should sleep rather than spinning.
       uint32_t frames_this_loop = 0;
@@ -296,6 +347,21 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
       }
       if (update || !realtime) {
         director.render();
+      }
+      // NOTE (handoff): drawn after director.render()'s window.display() rather than
+      // before it -- Director/ScreenRenderer own the clear-draw-display sequence
+      // (director.cpp/render.cpp), and neither is an owned file this wave, so there's
+      // no seam to inject a pre-display ImGui draw call into. Concretely this composits
+      // one frame late: render() below draws onto the buffer that was just swapped to
+      // back (last-displayed frame's content, not this frame's), then re-displays it,
+      // so the live visual under the UI can lag/flicker by a frame while the panel is
+      // open. Real fix: give Director::render() (or Renderer::render()) a post-scene,
+      // pre-display callback hook -- follow-up task, not this one's owned files.
+      if (app_ui) {
+        app_ui->update(renderer->window(), ui_clock.restart(), director, audio.get(),
+                       *theme_bank);
+        app_ui->render(renderer->window());
+        renderer->window().display();
       }
       if (realtime) {
         audio->Update();
@@ -428,8 +494,19 @@ int validate_session(const std::string& root_path, const trance_pb::Session& ses
   return broken_paths.empty() ? 0 : 1;
 }
 
-int export_archive(const std::string& root_path, const trance_pb::Session& session,
-                   const std::string& archive_path) {
+// SessionArchive (#15): bundles the session JSON and every file it references into a
+// plain zip (src/common/session_archive.{h,cpp}). `session`/`root_path` (the already-
+// loaded/validated in-memory session and its media root) aren't reused here -- the
+// archive needs the pattern-file sidecar too (source_text alone can't recover a pattern's
+// original `file` path), so export_session_archive reloads `session_path` itself with a
+// sidecar rather than duplicating that load here.
+int export_archive(const std::string& session_path, const std::string& archive_path) {
+  std::string error;
+  if (!export_session_archive(session_path, archive_path, error)) {
+    std::cerr << "export_archive failed: " << error << std::endl;
+    return 1;
+  }
+  std::cout << "wrote archive: " << archive_path << std::endl;
   return 0;
 }
 
@@ -453,6 +530,15 @@ DEFINE_string(pattern, "",
               "(parsed the same way as a program's custom_visual_pattern). Themes still come from "
               "the session/program as normal -- only the visual schedule is overridden. Mutually "
               "exclusive with --visual.");
+DEFINE_bool(overlay, false,
+           "v0 overlay click-through mode (#27, X11 only): borderless fullscreen "
+           "always-on-top window, translucent, with input passing through to the desktop "
+           "beneath. Whole-window opacity only (see --overlay_opacity) -- no per-pixel "
+           "alpha until the SFML3 migration (#20). Stop with Ctrl+C / pkill trance, since "
+           "the window can't receive its own quit hotkey.");
+DEFINE_double(overlay_opacity, 0.35,
+             "overlay window opacity, 0 (fully transparent) to 1 (fully opaque). Only "
+             "meaningful with --overlay.");
 
 namespace
 {
@@ -514,6 +600,15 @@ int main(int argc, char** argv)
     std::cerr << "error: --visual and --pattern are mutually exclusive" << std::endl;
     return 1;
   }
+  // --overlay_opacity: validated eagerly here (a typo/out-of-range value should never
+  // surface as a runtime surprise), same spirit as --visual below.
+  if (FLAGS_overlay_opacity < 0. || FLAGS_overlay_opacity > 1.) {
+    std::cerr << "error: --overlay_opacity must be between 0 and 1" << std::endl;
+    return 1;
+  }
+  OverlayConfig overlay;
+  overlay.enabled = FLAGS_overlay;
+  overlay.opacity = static_cast<float>(FLAGS_overlay_opacity);
   // --visual: resolved (and fatal-errors on an unknown name) here at startup, not at
   // first selection -- a typo should never surface as a runtime surprise.
   uint32_t forced_visual_type = 0;
@@ -575,7 +670,7 @@ int main(int argc, char** argv)
     return validate_session(root_path, session);
   }
   if (!FLAGS_export_archive.empty()) {
-    return export_archive(root_path, session, FLAGS_export_archive);
+    return export_archive(session_path, FLAGS_export_archive);
   }
 
   std::function<void(Director&)> visual_override;
@@ -594,6 +689,6 @@ int main(int argc, char** argv)
       }
     };
   }
-  play_session(root_path, session, system, variables, settings, visual_override);
+  play_session(root_path, session, system, variables, settings, visual_override, overlay);
   return 0;
 }

@@ -1,11 +1,12 @@
 #include <common/session.h>
+#include <common/session_json.h>
 #include <common/util.h>
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 
 #pragma warning(push, 0)
-#include <google/protobuf/text_format.h>
 #include <common/trance.pb.h>
 #pragma warning(pop)
 
@@ -228,26 +229,22 @@ namespace
     }
   }
 
-  template <typename T>
-  T load_proto(const std::string& path)
+  // JSON is the only on-disk format the player reads (docs/session-json-format.md sec
+  // 8): "*.session.json" for sessions, "system.json" for system config. A legacy
+  // ".session" / ".cfg" textproto path is a full cut, not a fallback -- reject it with
+  // a hint to run the converter rather than silently misreading it as JSON.
+  bool has_json_extension(const std::string& path)
   {
-    T proto;
-    std::ifstream f{path};
-    if (f) {
-      std::string str{std::istreambuf_iterator<char>{f}, std::istreambuf_iterator<char>{}};
-      if (google::protobuf::TextFormat::ParseFromString(str, &proto)) {
-        return proto;
-      }
-    }
-    throw std::runtime_error("couldn't load " + path);
+    return ext_is(path, "json");
   }
 
-  void save_proto(const google::protobuf::Message& proto, const std::string& path)
+  [[noreturn]] void fatal_legacy_proto_path(const std::string& path)
   {
-    std::string str;
-    google::protobuf::TextFormat::PrintToString(proto, &str);
-    std::ofstream f{path};
-    f << str;
+    throw std::runtime_error(
+        path +
+        ": legacy protobuf session/config files are no longer read directly. Run "
+        "`trance_convert " +
+        path + "` to produce the JSON form (see docs/session-json-format.md), then load that.");
   }
 
 } // anonymous namespace
@@ -413,14 +410,17 @@ void search_audio_files(std::vector<std::string>& files, const std::string& root
 
 trance_pb::System load_system(const std::string& path)
 {
-  auto system = load_proto<trance_pb::System>(path);
+  if (!has_json_extension(path)) {
+    fatal_legacy_proto_path(path);
+  }
+  auto system = load_system_json(path);
   validate_system(system);
   return system;
 }
 
 void save_system(const trance_pb::System& system, const std::string& path)
 {
-  save_proto(system, path);
+  save_system_json(system, path);
 }
 
 trance_pb::System get_default_system()
@@ -462,16 +462,34 @@ void validate_system(trance_pb::System& system)
   system.set_font_cache_size(std::max(2u, system.font_cache_size()));
 }
 
-trance_pb::Session load_session(const std::string& path)
+trance_pb::Session load_session(const std::string& path, SessionJsonSidecar& sidecar)
 {
-  auto session = load_proto<trance_pb::Session>(path);
+  if (!has_json_extension(path)) {
+    fatal_legacy_proto_path(path);
+  }
+  auto root = std::filesystem::path{path}.parent_path().string();
+  auto session = load_session_json(path, root, sidecar);
   validate_session(session);
   return session;
 }
 
+trance_pb::Session load_session(const std::string& path)
+{
+  SessionJsonSidecar sidecar;
+  return load_session(path, sidecar);
+}
+
+void save_session(const trance_pb::Session& session, const std::string& path,
+                   SessionJsonSidecar& sidecar)
+{
+  auto root = std::filesystem::path{path}.parent_path().string();
+  save_session_json(session, path, root, sidecar);
+}
+
 void save_session(const trance_pb::Session& session, const std::string& path)
 {
-  save_proto(session, path);
+  SessionJsonSidecar sidecar;
+  save_session(session, path, sidecar);
 }
 
 trance_pb::Session get_default_session()

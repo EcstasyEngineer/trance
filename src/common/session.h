@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+struct SessionJsonSidecar;
+
 std::string make_relative(const std::string& from, const std::string& to);
 
 namespace trance_pb
@@ -28,13 +30,24 @@ void search_resources(trance_pb::Session& session, const std::string& root);
 void search_resources(trance_pb::Theme& theme, const std::string& root);
 void search_audio_files(std::vector<std::string>& files, const std::string& root);
 
+// Loads system.json (session_json.h). A legacy .cfg proto path is rejected with a
+// fatal hint to run `trance.exe --convert` -- trance.exe no longer reads proto files.
 trance_pb::System load_system(const std::string& path);
 void save_system(const trance_pb::System&, const std::string& path);
 trance_pb::System get_default_system();
 void validate_system(trance_pb::System& session);
 
+// Loads a *.session.json (session_json.h). `root` (the session's media root) is
+// derived from `path`'s parent directory. A legacy .session proto path is rejected
+// with a fatal hint to run `trance.exe --convert`. Overload with `sidecar` also
+// returns the pattern-file/scan-directory sidecar (session_json.h) needed to save the
+// session back without freezing patterns inline or scan expansions into explicit
+// lists; the sidecar-less overload is for read-only callers (playback).
 trance_pb::Session load_session(const std::string& path);
+trance_pb::Session load_session(const std::string& path, SessionJsonSidecar& sidecar);
 void save_session(const trance_pb::Session& session, const std::string& path);
+void save_session(const trance_pb::Session& session, const std::string& path,
+                   SessionJsonSidecar& sidecar);
 trance_pb::Session get_default_session();
 void validate_session(trance_pb::Session& session);
 

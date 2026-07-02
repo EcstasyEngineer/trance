@@ -17,3 +17,4 @@ compile_commands.json
 
 # Runtime-generated config written next to the binary (not source).
 system.cfg
+system.json
