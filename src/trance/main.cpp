@@ -6,6 +6,8 @@
 #include <trance/media/audio.h>
 #include <trance/media/export.h>
 #include <common/media/image.h>
+#include <trance/net/command_channel.h>
+#include <trance/net/command_protocol.h>
 #include <trance/render/openvr.h>
 #include <trance/render/render.h>
 #include <trance/render/video_export.h>
@@ -20,6 +22,7 @@
 #include <iostream>
 #include <map>
 #include <set>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
@@ -130,13 +133,134 @@ void print_info(double elapsed_seconds, uint64_t frames, uint64_t total_frames)
             << std::endl;
 }
 
+// #21 command channel runtime state (docs/spec-mcp-ambient-daemon.md): the mailbox is
+// drained and every verb dispatched from the main loop, right after handle_events(), per
+// the spec's threading invariant (sec 2) -- CommandChannel's reader thread only ever pushes
+// raw lines; only this function (running on the render thread) touches Director/Audio.
+// `paused` gates start/stop/pause/resume (director.update()/theme_bank->advance_frames()
+// simply don't run while paused -- "keep it boring" per the spec's own framing, sec 1).
+// `intensity`/`overlay_on`/`overlay_opacity` are stub state: the spec (sec 4) explicitly
+// scopes intensity's actual wiring as TBD and overlay on/off/opacity as a forward reference
+// to issue #27's not-yet-built overlay window, so both verbs are implemented in full at the
+// protocol level and store their value here for that future consumer to read -- see the
+// handoff note in the final report.
+struct CommandRuntimeState {
+  bool paused = false;
+  float intensity = 1.f;
+  bool overlay_on = false;
+  float overlay_opacity = 0.35f;
+};
+
+std::string execute_command(const command_protocol::ParsedCommand& cmd, Director& director,
+                            CommandRuntimeState& state, const std::chrono::steady_clock::time_point& start_time)
+{
+  using command_protocol::Verb;
+  if (!cmd.ok) {
+    return command_protocol::format_err(cmd.error);
+  }
+  switch (cmd.verb) {
+  case Verb::kStart:
+    state.paused = false;
+    return command_protocol::format_ok();
+  case Verb::kStop:
+    state.paused = true;
+    return command_protocol::format_ok();
+  case Verb::kPause:
+    state.paused = true;
+    return command_protocol::format_ok();
+  case Verb::kResume:
+    state.paused = false;
+    return command_protocol::format_ok();
+  case Verb::kOverlayOn:
+    state.overlay_on = true;
+    return command_protocol::format_ok();
+  case Verb::kOverlayOff:
+    state.overlay_on = false;
+    return command_protocol::format_ok();
+  case Verb::kOverlayOpacity:
+    state.overlay_opacity = cmd.number;
+    return command_protocol::format_ok();
+  case Verb::kIntensity:
+    state.intensity = cmd.number;
+    return command_protocol::format_ok();
+  case Verb::kSet:
+    // Settings surface is mid-migration (protobuf Program -> JSON, this sprint -- spec
+    // sec 4/9): no key is wired yet, so every key is "unknown" until that migration
+    // lands and picks the key names. Never a crash, per spec sec 3.
+    return command_protocol::format_err("unknown key: " + cmd.key);
+  case Verb::kGet:
+    return command_protocol::format_err("unknown key: " + cmd.key);
+  case Verb::kLoadPattern: {
+    std::ifstream f{cmd.value};
+    if (!f) {
+      return command_protocol::format_err("load pattern: could not open " + cmd.value);
+    }
+    std::string source{std::istreambuf_iterator<char>{f}, std::istreambuf_iterator<char>{}};
+    auto error = director.force_pattern_from_source(source, cmd.value);
+    if (!error.empty()) {
+      return command_protocol::format_err("load pattern: " + error);
+    }
+    return command_protocol::format_ok();
+  }
+  case Verb::kLoadSession:
+    // No live session-swap path exists yet (play_session() takes its Session by const-ref
+    // at startup, not a target it can hot-reload) -- protocol-complete stub per the task
+    // brief's "implement the protocol + a stub wiring" instruction; see handoff note.
+    return command_protocol::format_err("load session: not yet supported (no live session "
+                                        "reload path)");
+  case Verb::kStatus: {
+    auto uptime = std::chrono::duration_cast<std::chrono::seconds>(
+                      std::chrono::steady_clock::now() - start_time)
+                      .count();
+    std::ostringstream out;
+    out << "visual=" << director.status_visual_name() << " bed="
+        << (director.status_bed_active() ? "on" : "off") << " overlay="
+        << (state.overlay_on ? "on" : "off") << " uptime=" << uptime;
+    return command_protocol::format_ok(out.str());
+  }
+  case Verb::kUnknown:
+    break;
+  }
+  return command_protocol::format_err("unhandled verb");
+}
+
+// Drains every line CommandChannel has received since the last frame, parses + dispatches
+// each one, and replies exactly once per command -- spec sec 3 ("always exactly one line
+// back per command line in"). Render-thread only (see CommandRuntimeState comment above).
+void handle_commands(CommandChannel& channel, Director& director, CommandRuntimeState& state,
+                     const std::chrono::steady_clock::time_point& start_time)
+{
+  for (const auto& command : channel.drain()) {
+    auto parsed = command_protocol::parse_command(command.line);
+    auto reply = execute_command(parsed, director, state, start_time);
+    channel.reply(command.conn_id, reply);
+  }
+}
+
 void play_session(const std::string& root_path, const trance_pb::Session& session,
                   const trance_pb::System& system,
                   const std::map<std::string, std::string> variables,
                   const exporter_settings& settings,
                   const std::function<void(Director&)>& visual_override = {},
-                  const OverlayConfig& overlay = {})
+                  const OverlayConfig& overlay = {}, uint16_t command_port = 0)
 {
+  // #21 command channel: constructed here, before ThemeBank/renderer/window, so the socket
+  // is live and testable (netcat/pytest, spec sec 6) even in configurations where window
+  // creation would fail headlessly (e.g. no X11/DISPLAY) -- the reader thread has no
+  // dependency on SFML or Director. Verb EXECUTION against Director still only happens
+  // once the main loop below starts draining it, per the spec's threading invariant.
+  std::unique_ptr<CommandChannel> command_channel;
+  if (command_port) {
+    try {
+      command_channel.reset(new CommandChannel(command_port));
+      std::cout << "command channel: listening on 127.0.0.1:" << command_port << std::endl;
+    } catch (const std::runtime_error& e) {
+      std::cerr << "command channel: " << e.what() << std::endl;
+    }
+  }
+  CommandRuntimeState command_state;
+  const auto command_start_time = std::chrono::steady_clock::now();
+
   struct PlayStackEntry {
     const trance_pb::PlaylistItem* item;
     int subroutine_step;
@@ -244,6 +368,12 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
 
     while (running && !g_overlay_stop_requested) {
       handle_events(running, renderer->window(), director, audio.get(), app_ui.get());
+      // #21 command channel: parse + dispatch every line received since last frame, right
+      // after handle_events (spec sec 3: "Parse + dispatch happens in the drain loop --
+      // main.cpp's per-frame loop, right after handle_events").
+      if (command_channel) {
+        handle_commands(*command_channel, director, command_state, command_start_time);
+      }
 
       // TODO: should sleep rather than spinning.
       uint32_t frames_this_loop = 0;
@@ -336,7 +466,11 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
 
       bool update = false;
       bool continue_playing = true;
-      while (frames_this_loop > 0) {
+      // #21 `pause`/`stop`: freeze the current frame -- program state retained (spec sec 4)
+      // -- by simply not draining frames_this_loop while paused. The window still repaints
+      // the last frame every iteration below (`!realtime` / event-driven), so a paused
+      // process stays visibly alive, it just stops advancing.
+      while (!command_state.paused && frames_this_loop > 0) {
         update = true;
         --frames_this_loop;
         continue_playing &= director.update();
@@ -539,6 +673,13 @@ DEFINE_bool(overlay, false,
 DEFINE_double(overlay_opacity, 0.35,
              "overlay window opacity, 0 (fully transparent) to 1 (fully opaque). Only "
              "meaningful with --overlay.");
+DEFINE_int32(command_port, 0,
+            "#21 command channel (docs/spec-mcp-ambient-daemon.md): TCP port to bind on "
+            "127.0.0.1 for the localhost line-protocol control socket (start/stop/pause/"
+            "resume, overlay on|off|opacity, intensity, set/get, load pattern|session, "
+            "status). 0 (default) disables the channel entirely -- no socket is opened. "
+            "Loopback-only, no auth: binding to 127.0.0.1 is the whole trust boundary "
+            "(spec sec 2/9), so only enable this on a machine you trust everyone on.");
 
 namespace
 {
@@ -604,6 +745,13 @@ int main(int argc, char** argv)
   // surface as a runtime surprise), same spirit as --visual below.
   if (FLAGS_overlay_opacity < 0. || FLAGS_overlay_opacity > 1.) {
     std::cerr << "error: --overlay_opacity must be between 0 and 1" << std::endl;
+    return 1;
+  }
+  // --command_port: validated eagerly here for the same reason -- a negative or
+  // out-of-uint16_t-range value should never surface as a runtime surprise (e.g. silently
+  // truncating). 0 means disabled, per the flag's own default/help text.
+  if (FLAGS_command_port < 0 || FLAGS_command_port > 65535) {
+    std::cerr << "error: --command_port must be between 0 and 65535" << std::endl;
     return 1;
   }
   OverlayConfig overlay;
@@ -689,6 +837,7 @@ int main(int argc, char** argv)
       }
     };
   }
-  play_session(root_path, session, system, variables, settings, visual_override, overlay);
+  play_session(root_path, session, system, variables, settings, visual_override, overlay,
+              uint16_t(FLAGS_command_port));
   return 0;
 }

@@ -197,6 +197,8 @@ add_executable(trance
   src/trance/media/entrainment.cpp
   src/trance/media/export.cpp
   src/trance/media/font.cpp
+  src/trance/net/command_channel.cpp
+  src/trance/net/command_protocol.cpp
   src/trance/render/openvr.cpp
   src/trance/render/render.cpp
   src/trance/render/video_export.cpp
@@ -356,4 +358,15 @@ if(TRANCE_BUILD_TESTS)
   add_executable(session_json_test tests/session_json_test.cpp)
   target_link_libraries(session_json_test PRIVATE common_lib trance_options)
   add_test(NAME session_json_test COMMAND session_json_test)
+
+  # #21 command channel protocol test (docs/spec-mcp-ambient-daemon.md sec 3/4). Bare
+  # C++17 like v3_grammar_test above: command_protocol.{h,cpp} is the pure line->Verb
+  # parser with zero socket/Director/Audio dependency by design (see the header comment),
+  # so this links neither common_lib nor any socket TU -- just the parser itself.
+  add_executable(command_protocol_test
+    src/trance/net/command_protocol.cpp
+    tests/command_protocol_test.cpp)
+  target_include_directories(command_protocol_test PRIVATE src/)
+  target_link_libraries(command_protocol_test PRIVATE trance_options)
+  add_test(NAME command_protocol_test COMMAND command_protocol_test)
 endif()

@@ -891,6 +891,18 @@ namespace
   }
 }
 
+std::string Director::status_visual_name() const
+{
+  // Same logic as draw_debug_overlay()'s "visual :" line (#21 status verb reuses what the
+  // F1 overlay already knows, per the owning task's brief).
+  return _last_custom_index >= 0 ? _custom_visual_name : visual_type_name(_last_visual_selection);
+}
+
+bool Director::status_bed_active() const
+{
+  return !_program->entrainment().layer().empty();
+}
+
 void Director::draw_debug_overlay() const
 {
   // Lazily load a monospace system font so the theme glyph rows line up. These
