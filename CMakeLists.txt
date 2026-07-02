@@ -231,6 +231,19 @@ if(WIN32)
 endif()
 
 if(UNIX AND NOT APPLE)
+  # Static openal-soft (x64-linux triplet) has a PRIVATE fmt dependency that its
+  # static archive can't carry itself. It must follow libopenal.a on the link
+  # line, and openal is pulled in late via sfml-audio's interface — so append fmt
+  # to that same interface rather than linking it directly (which would order it
+  # too early and let the linker drop the symbols).
+  find_package(fmt CONFIG REQUIRED)
+  if(TARGET sfml-audio)
+    set_property(TARGET sfml-audio APPEND PROPERTY
+      INTERFACE_LINK_LIBRARIES fmt::fmt)
+  endif()
+endif()
+
+if(UNIX AND NOT APPLE)
   # X11 + Xext (Shape extension): v0 click-through overlay mode (#27) --
   # _NET_WM_WINDOW_OPACITY + XShapeCombineRectangles in src/trance/render/render.cpp.
   # System dev packages (libx11-dev/libxext-dev), not vcpkg -- SFML already links X11
