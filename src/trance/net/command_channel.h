@@ -40,7 +40,10 @@ public:
   void reply(std::uint64_t conn_id, const std::string& line);
 
 private:
-  void reader_loop(int listen_fd);
+  // The listen socket is passed as uintptr_t, NOT int: Win64 SOCKET is pointer-sized and
+  // truncating it through int corrupts the handle (audit finding). POSIX fds round-trip
+  // through uintptr_t losslessly.
+  void reader_loop(std::uintptr_t listen_fd);
 
   std::mutex _mutex;
   std::vector<Command> _queue;  // guarded by _mutex
