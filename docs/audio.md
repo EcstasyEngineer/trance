@@ -28,6 +28,22 @@ Channels are created on demand: `TriggerEvent` grows the vector until the
 requested channel index exists. Supported formats are `.wav`, `.flac`, `.ogg`,
 `.aiff` (see `is_audio_file`, `src/common/session.cpp`).
 
+## Theme audio (issue #23)
+
+Themes own a pool of precanned audio files (`Theme.audio_path`, picked via
+`ThemeBank::get_audio`) exactly like their image/font pools; the grammar
+decides when to play them and at what volume. No TTS -- `audio_path` entries
+are always files. `Audio::play_theme_audio` / `stop_theme_audio` /
+`set_theme_audio_volume` play on a single dedicated channel
+(`kThemeAudioChannel`, a constant far above any realistic hand-authored
+playlist `AudioEvent.channel` index, so the two address spaces never
+collide). This is **single-slot v0**: exactly one live grammar audio at a
+time, the same shape as `VisualApiImpl`'s single live text slot
+(`_current_text`, see `docs/spec-grammar-v3.md`) -- starting a new theme
+audio stops whatever was already playing on that channel. `set_theme_audio_volume`
+takes a `0..1` float (clamped) rather than the `0..100` uint the playlist
+`AudioEvent.volume` uses.
+
 ## The entrainment bed
 
 `EntrainmentStream` (`src/trance/media/entrainment.{h,cpp}`) is an

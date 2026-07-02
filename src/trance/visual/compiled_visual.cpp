@@ -137,6 +137,26 @@ namespace
     case K::SpiralSet:
       api.set_spiral(static_cast<uint32_t>(e.ivalue), static_cast<uint32_t>(e.mod_literal));
       break;
+    case K::Audio: {
+      // Resolve content (concept/reward/runtime) to a precanned path at FIRE time, exactly
+      // like Image resolves its slot -- `runtime` rolls concept-vs-reward per firing, not
+      // once at parse time (resolved_slot handles all three uniformly).
+      pattern::Slot slot = resolved_slot(e, regs);
+      const std::string& path = api.get_theme_audio(slot == pattern::Slot::Alternate);
+      api.play_theme_audio(path, e.force);
+      // A literal `volume` modulator (no curve/expr) is applied once here, at fire time;
+      // a curve/expr volume instead rides the per-frame RenderStmt{Op::AudioVolume} the
+      // parser emits alongside this effect (see pattern_parser_v3.cpp / render_eval.cpp).
+      // rate < 0 is the "no volume written" sentinel: keep the channel's current volume
+      // (initially full). rate == 0 is an explicit, honored mute.
+      if (e.rate >= 0.f) {
+        api.set_theme_audio_volume(e.rate);
+      }
+      break;
+    }
+    case K::AudioStop:
+      api.stop_theme_audio();
+      break;
     }
   }
 }

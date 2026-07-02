@@ -121,10 +121,56 @@ with no entrainment bed configured at all, so they cannot use a length keyword t
 in that case. A custom pattern authored for a specific session that is known to always ship a
 pulsed bed does not have that constraint.
 
-**FUTURE (not shipped):** issue #23 proposes a v3 `audio` effect for theme-driven mantra audio.
-Once that lands, `every beats N { audio mantra }` will let a spoken line trigger phase-locked
-to the entrainment bed, the same way `image`/`word` do today for visuals. Nothing described in
-this paragraph exists yet.
+Themes own PRECANNED audio pools exactly like their image and font pools (no TTS, ever), and
+the `audio` effect (issue #23) is the grammar's window onto them: `every beats N { audio
+mantra }` triggers a spoken line phase-locked to the entrainment bed, the same way `image`/
+`word` trigger a flash. See the worked example below.
+
+## Audio: phase-locking a mantra to the beat
+
+This is the showcase for `beats`: a precanned mantra line, pulled from the active theme's
+audio pool, fires exactly on the entrainment pulse -- the same phase-lock a flash gets, but
+for the ear instead of the eye.
+
+```text
+pattern mantra_pulse for beats 16 {
+  every beats 4 { audio concept loop volume (curve 0.2 -> 0.8) }
+  every beats 1 { image concept zoom (curve 0 -> 0.4) }
+  spiral speed 2
+}
+```
+
+`audio concept` pulls a random precanned line from the primary theme's `audio_path` pool
+(exactly like `image concept` pulls a random image) and starts it playing on the engine's
+dedicated theme-audio channel. `loop` keeps it going for the rest of its `every beats 4`
+window; `volume (curve 0.2 -> 0.8)` fades it in across each 32-beat-frame span, riding the
+SAME curve machinery as `zoom`/`fade`/`spiral speed` -- there is no separate "audio curve"
+concept. Meanwhile `every beats 1` flashes an image once per pulse: the mantra cadence (every
+4 beats) and the flash cadence (every beat) both lock to the same entrainment bed
+independently, so they never drift relative to each other even though they fire at different
+rates.
+
+**Single-slot v0:** there is exactly one live grammar-driven theme audio at a time, the same
+shape as the engine's single live text slot (`docs/audio.md`). A second `audio` fire --
+whether it's a different pattern or the next cycle of this one -- replaces whatever was
+already playing; there is no queueing or crossfade for audio the way there is for images.
+Use `audio stop` to cut a line early:
+
+```text
+audio stop
+```
+
+**Content vocabulary.** `audio` takes the exact same bi-thematic content word as `image`/
+`word`: `concept` (primary theme), `reward` (alternate theme), or `runtime` (rolled at fire
+time). Unlike `get_font` (which falls back to a system font when a theme has no fonts of its
+own), a theme with an empty `audio_path` pool makes `get_audio` return an empty path; the
+engine then fails to open it and logs `couldn't load ` to stderr rather than crashing --
+not silent, but not fatal either. Give the theme at least one file in its audio pool before
+using `audio` against it.
+
+**Volume scale.** `audio ... volume M` is `0..1`, matching `Audio::set_theme_audio_volume`'s
+signature -- NOT the `0..100` scale playlist `AudioEvent.volume` uses elsewhere in the engine.
+Worth remembering if you're used to authoring playlist audio events.
 
 ## Common Effects
 

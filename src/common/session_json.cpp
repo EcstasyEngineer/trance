@@ -507,8 +507,9 @@ namespace
                    const std::string& json_path, const std::string& root,
                    SessionJsonSidecar& sidecar)
   {
-    check_unknown_keys(obj, {"scan", "image_path", "animation_path", "font_path", "text_line"},
-                        json_path);
+    check_unknown_keys(
+        obj, {"scan", "image_path", "animation_path", "font_path", "text_line", "audio_path"},
+        json_path);
 
     if (const json* image_path = find(obj, "image_path")) {
       auto ip = json_path + "/image_path";
@@ -550,6 +551,17 @@ namespace
       }
       for (const auto& entry : *text_line) {
         theme.add_text_line(entry.get<std::string>());
+      }
+    }
+    if (const json* audio_path = find(obj, "audio_path")) {
+      auto ap = json_path + "/audio_path";
+      if (!audio_path->is_array()) {
+        throw std::runtime_error(ap + ": expected an array");
+      }
+      for (const auto& entry : *audio_path) {
+        auto p = entry.get<std::string>();
+        check_relative_path(p, ap);
+        theme.add_audio_path(p);
       }
     }
 
@@ -773,6 +785,11 @@ namespace
       json arr = json::array();
       for (const auto& t : theme.text_line()) arr.push_back(t);
       obj["text_line"] = std::move(arr);
+    }
+    if (theme.audio_path_size()) {
+      json arr = json::array();
+      for (const auto& p : theme.audio_path()) arr.push_back(normalize_path_for_save(p));
+      obj["audio_path"] = std::move(arr);
     }
     return obj;
   }

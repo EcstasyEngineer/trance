@@ -3,6 +3,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <numeric>
 #include <set>
 #include <stdexcept>
@@ -573,11 +574,82 @@ namespace
         sink.push_back(e);
         return;
       }
+      if (kw == "audio") {
+        parse_audio(sink);
+        return;
+      }
       if (kw == "image" || kw == "word" || kw == "caption" || kw == "subtext" || kw == "draw") {
         parse_draw(span, sink);
         return;
       }
       throw ParseError{"unknown statement '" + kw + "'", at};
+    }
+
+    // `audio <content> [loop] [volume <modulator>]` / `audio stop` -- PRECANNED theme audio
+    // (issue #23, no TTS ever). Two nouns still apply: `content` is the same bi-thematic
+    // vocabulary as `image`/`word` (concept/reward/runtime); `volume` is an ordinary
+    // modulator, not a bespoke keyword class. Lowers to Effect{Kind::Audio} (or AudioStop
+    // for `audio stop`); a literal volume sets Effect::rate (fired once), a curve/[expr]
+    // volume instead emits a RenderStmt{Op::AudioVolume} that rides the enclosing pattern's
+    // clock every frame, exactly like `spiral speed`. Single-slot v0 (docs/audio.md): a
+    // second `audio` fire replaces whatever grammar audio was already playing, the same
+    // shape as the single live text slot.
+    void parse_audio(std::vector<Effect>& sink)
+    {
+      expect_word("audio");
+      if (_c.peek_word() == "stop") {
+        _c.word();
+        sink.push_back(effect(Effect::Kind::AudioStop));
+        return;
+      }
+      const std::size_t cat = _c.pos();
+      const std::string content = _c.word();
+      const Slot slot = content_to_slot(content, cat);
+
+      Effect e = effect(Effect::Kind::Audio);
+      e.slot = slot;
+      // Sentinel: rate < 0 means "no literal volume written" -- keep whatever volume is
+      // in effect. Distinct from an explicit `volume 0`, which is a real mute (rate=0).
+      e.rate = -1.f;
+
+      if (_c.peek_word() == "loop") {
+        _c.word();
+        e.force = true;
+      }
+
+      if (_c.peek_word() == "volume") {
+        _c.word();
+        const std::size_t vat = _c.pos();
+        const std::string mod = parse_modulator();
+        float literal = 0.f;
+        if (is_bare_literal(mod, literal)) {
+          // A constant volume needs no per-frame render machinery: set it once at fire
+          // time (Effect::rate), same "constant folds to a fire-time value" shape §4.3
+          // documents for the shared curve-drive param class.
+          e.rate = literal;
+        } else {
+          RenderStmt rs;
+          rs.op = RenderStmt::Op::AudioVolume;
+          rs.speed = mod;
+          push_render(rs);
+        }
+        (void)vat;
+      }
+
+      sink.push_back(e);
+    }
+
+    // Does `s` parse as exactly one bare floating-point literal (what parse_modulator's
+    // literal branch emits via fnum(), e.g. "0.500000")? Used to fold a constant `volume`
+    // modulator to a fire-time Effect field instead of a per-frame RenderStmt -- a curve/
+    // [expr] modulator always contains non-numeric characters (a clock id, an operator, a
+    // paren) and falls through to the per-frame path.
+    static bool is_bare_literal(const std::string& s, float& out)
+    {
+      if (s.empty()) return false;
+      char* end = nullptr;
+      out = std::strtof(s.c_str(), &end);
+      return end == s.c_str() + s.size();
     }
 
     // `look { spiral type=N width=W }` -- SETTINGS, not per-frame: a deterministic SpiralSet that

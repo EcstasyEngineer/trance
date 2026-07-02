@@ -536,6 +536,75 @@ rawexpr   ::= [ EXPR ]                  # this/self substituted
   error (do not silently fall back to linear).
 - **No runtime curve object** — curves are compile-time string sugar (recon-confirmed).
 
+### 4.14 `audio` — grammar-driven THEME audio (issue #23, SHIPPED)
+
+```
+audio <content> [loop] [volume <mod>]   # content ::= concept | reward | runtime
+audio stop
+```
+
+- **What it is.** The showcase primitive for beats: `every beats N { audio mantra }` fires a
+  precanned mantra/cue phase-locked to the entrainment bed, exactly the way `image`/`word`
+  are phase-locked today. **No TTS, ever** — `audio` always plays a file from the theme's
+  PRECANNED `audio_path` pool (`ThemeBank::get_audio`, `docs/audio.md`); the GRAMMAR only
+  decides *when* and *how loud* to play it, never what it says. Themes own the audio pool
+  exactly like the image/font pools; this primitive is what lets a modder reach it.
+- **Two nouns still apply.** `content` is the SAME bi-thematic vocabulary as `image`/`word` —
+  `concept` (primary theme), `reward` (alternate theme), `runtime` (rolled primary-vs-
+  alternate at FIRE time, not parse time — identical to `image runtime`, §4.2). `volume` is
+  an ORDINARY modulator (§4.13 above), not a bespoke keyword class: a literal, a
+  `curve A -> B`, or a raw `[expr]`, riding the enclosing pattern's clock unless redirected
+  with `over NAME`, same as zoom/fade/spiral-speed.
+- **Lowering.**
+  - `audio <content>` ⇒ `Effect{Kind::Audio, slot=lower(content)}`. At FIRE time (not parse
+    time — same `resolved_slot` path every other bi-thematic effect uses), the compiled
+    action resolves `content` to primary/alternate, pulls a path via the new
+    `VisualControl::get_theme_audio(bool alternate)` accessor (mirrors `get_image` exactly —
+    added alongside this primitive since the plumbing wave shipped the playback verbs but not
+    a schedule-side pull accessor), and calls `VisualControl::play_theme_audio(path, loop)`.
+  - `loop` ⇒ `Effect::force = true` (reusing the same field `Font`/`SmallSub` use for their
+    force flags), passed straight through as `play_theme_audio`'s `loop` bool.
+  - `audio stop` ⇒ `Effect{Kind::AudioStop}` → `VisualControl::stop_theme_audio()`. A
+    dedicated `Kind` rather than a flag on `Audio`, so a bare `audio stop` never needs a
+    (meaningless) content word — kept boring per the task's own framing.
+  - `volume <mod>` — **folds at PARSE time based on modulator shape**, the same "constant vs.
+    curve" split zoom/origin/alpha already make implicitly by being `[expr]` strings evaluated
+    every frame regardless of shape; audio's volume instead explicitly forks because a
+    per-frame `sf::Music::setVolume` call every frame forever is wasteful for the common case
+    (a static mantra volume) and there is no visual harm in a fire-once set:
+    - A bare numeric literal (`volume 0.6`) ⇒ `Effect::rate` (reusing the field
+      `SpiralRot` uses for its rate — audio and spiral-rotation effects never coexist on one
+      `Effect`), applied ONCE via `set_theme_audio_volume` right after `play_theme_audio` in
+      the same firing. No render-side cost.
+    - A `curve`/`[expr]` volume (`volume (curve 0.2 -> 0.8)`) ⇒
+      `RenderStmt{Op::AudioVolume, speed=lower(mod)}` (reusing the `speed` field — same
+      convention `Warp` reuses `zoom`/`origin`/`speed` for unrelated params, §4.6), evaluated
+      and applied every frame by `render_eval`, exactly like `spiral speed`. Clamped to
+      `[0,1]` before the call (`Audio::set_theme_audio_volume` clamps again on the engine
+      side — belt and braces, not a double-source-of-truth).
+    - No `volume` param at all ⇒ engine keeps whatever volume was last set (same "no explicit
+      write, no change" default every other param has). The channel's INITIAL volume is
+      **full (1.0)** — a bare `audio concept` is audible without any volume line. Written
+      `volume 0` is a real mute (the parser distinguishes "absent" from "zero" via a
+      rate sentinel; `pattern_ast.h` Effect::rate).
+  - **`VisualRender` gained `set_theme_audio_volume` too** (dual-declared like
+    `rotate_spiral`, §4.4) so `render_eval.cpp`'s render-only `VisualRender&` can reach it for
+    the curve/`[expr]` branch above; `VisualApiImpl`'s single override satisfies both base
+    pure virtuals, same shape as `rotate_spiral`.
+- **Single-slot v0 (documented beside the text-slot limitation, §0.3 / `docs/audio.md`).** One
+  live grammar-driven theme audio at a time — a second `audio` fire replaces whatever was
+  already playing on the dedicated `_theme_audio_channel`; there is no queueing. `audio stop`
+  is the only way to silence it early without starting a replacement.
+- **Volume scale note.** `audio volume M` is `0..1` (matches `Audio::set_theme_audio_volume`'s
+  signature), NOT the `0..100` scale `AudioEvent.volume` (playlist audio) uses — the same
+  scale mismatch `docs/audio.md`'s plumbing section already flags; intentional, not a bug.
+- **Modder note.** `audio mantra` (well, `audio concept`/`audio reward`) plays a spoken line
+  from the theme's audio folder, timed by the SAME `every`/`beats`/`burst` cadence machinery
+  that times a flash. `loop` keeps it going; `volume` fades it in/out like any other curve;
+  `audio stop` cuts it. This is the whole reason theme audio pools exist: drop a folder of
+  mantras next to your images and fonts, and the pattern grammar can trigger them the same way
+  it triggers a flash.
+
 ---
 
 ## 5. The unified curve-drivable effect class (and the spiral split)
@@ -731,6 +800,9 @@ spiral type/width.
 | spiral **DIRECTION** | SETTING | Program proto | global sign; grammar `speed` is magnitude |
 | `warp`/`drunk` amplitude/wavelength/speed | GRAMMAR curve | `RenderStmt.zoom/origin/speed` (`Op::Warp`), live | per-frame scalar, shipped (§4.6, supersedes §4.5's register-walk design) |
 | content theme (concept/reward) | GRAMMAR selector | the alternate bool | only content axis; 3+ themes do NOT lower |
+| theme audio **content** (concept/reward/runtime) | GRAMMAR selector | `Effect::Kind::Audio` slot (§4.14) | same alternate-bool axis as `image`, resolved at fire time |
+| theme audio **volume** | GRAMMAR curve OR fire-once | `RenderStmt.speed` (`Op::AudioVolume`) or `Effect.rate` (§4.14) | literal folds to fire-once; curve/`[expr]` rides per-frame like spiral speed |
+| theme audio **pool contents** (which files) | SETTING | `Theme.audio_path` (proto, `docs/audio.md`) | which files exist is theme identity, not a grammar concern |
 | `global_fps`, font, theme weights | SETTING | Program/Theme proto | session/program identity |
 
 **Direction note.** A signed `speed` modulator interacts with `reverse_spiral_direction`;
@@ -739,11 +811,11 @@ double-control.
 
 ---
 
-## 9. Required runtime extensions (named, ranked by cost) — ALL THREE SHIPPED
+## 9. Required runtime extensions (named, ranked by cost) — ALL SHIPPED
 
-Everything in §4–§8 lowers with **zero runtime change** except the three extensions below,
-all of which have now shipped (this section is retained to name what each one cost and where
-it landed, not as an open TODO list).
+Everything in §4–§8 lowers with **zero runtime change** except the extensions below, all of
+which have now shipped (this section is retained to name what each one cost and where it
+landed, not as an open TODO list).
 
 1. **Continuous spiral speed — SHIPPED.** `RenderStmt::Op::Spiral` carries a `speed` `[expr]`
    field; `eval_render` calls `api.rotate_spiral(speed)` each frame before `render_spiral()`
@@ -768,6 +840,16 @@ it landed, not as an open TODO list).
    width=W }` (§4.12) pins type/width instead of re-rolling via `change_spiral`. No
    degradation path was needed in the end — it shipped alongside the grammar surface that
    uses it.
+
+4. **Grammar-driven theme audio (`Audio`/`AudioStop`/`AudioVolume`) — SHIPPED, §4.14, issue
+   #23.** Two new `Effect::Kind` members (`Audio`, `AudioStop`) plus one new `RenderStmt::Op`
+   (`AudioVolume`). The underlying engine bridge (`Audio::play_theme_audio` / `stop_theme_audio`
+   / `set_theme_audio_volume`, the dedicated `_theme_audio_channel`, `VisualControl`'s three
+   audio verbs, `ThemeBank::get_audio`) had already shipped in a prior plumbing wave (this
+   grammar wave only added `VisualControl::get_theme_audio` — the schedule-side pull accessor
+   that was the one missing piece — and `VisualRender::set_theme_audio_volume`, dual-declared
+   like `rotate_spiral` so the per-frame curve path can reach it from `render_eval.cpp`); this
+   extension is almost entirely schedule+lowering, not new engine capability.
 
 **Out of scope / hard non-goals (still true):** grammar-driven spiral color (per-frame color
 uniform); 3+ simultaneous themes (two live theme slots, VRAM budget); live phase-accurate beat
@@ -899,6 +981,28 @@ burst) if needed. This is the real, shipped version of the pre-ship §13.1 sketc
 shipped syntax drops the sketch's `length 2048f` (redundant with the enclosing pattern's
 span) and moves `-> rapid` to right after `burst` (matching `every`'s `-> NAME` placement).
 
+### EX9 — `audio` phase-locked to the entrainment bed (issue #23, THE beats showcase)
+
+```
+pattern mantra_pulse for beats 16 {
+  every beats 4 { audio concept loop volume (curve 0.2 -> 0.8) }
+  every beats 1 { image concept zoom (curve 0 -> 0.4) }
+  spiral speed 2
+}
+```
+
+With an 8 Hz pulsed bed at 60 fps (`locked_period_frames = 8`, §"Beats" in
+`docs/authoring-v3-patterns.md`), this pattern runs 16*8 = 128 frames and re-fires `audio
+concept` every 4 beats (32f) — a fresh precanned mantra line pulled from the primary theme's
+`audio_path` pool each time, looping, its volume ramping `0.2 -> 0.8` across each 32f window
+(a curve, so it lowers to a per-frame `RenderStmt{Op::AudioVolume}` — see §4.14). Meanwhile
+`every beats 1` flashes an image once per pulse, independent of the mantra cadence, so the
+visual beat and the (four-times-slower) mantra beat both lock to the SAME entrainment bed
+without one driving the other. Single-slot v0 means the SECOND `audio concept` firing (at
+frame 32) replaces the first line outright — no crossfade/queue for audio, unlike the image
+crossfade shape (EX4). Swap `audio concept` for `audio stop` in a later phase to cut the
+mantra early without waiting for the pattern to end.
+
 ---
 
 ## 11. Full EBNF
@@ -916,7 +1020,7 @@ len            ::= UINT "f" | "beats" UINT | "locked"    (* beats/locked hard-er
                                                               program has no pulsed bed *)
 body           ::= stmt*
 stmt           ::= pattern | cadence | burst | look
-                 | warp_stmt | spiral_stmt | copy_stmt | draw_stmt
+                 | warp_stmt | spiral_stmt | copy_stmt | draw_stmt | audio_stmt
 
 (* ---- look{} settings header (parse_look) — the ONLY settings surface ---- *)
 look           ::= "look" "{" look_prop* "}"
@@ -958,6 +1062,14 @@ spiral_stmt    ::= "spiral" [ "speed" modulator ]    (* live [expr], no stairste
 
 (* ---- copy (parse_statement, kw=="copy") — the only state_effect ---- *)
 copy_stmt      ::= "copy" REG "-" ">" REG
+
+(* ---- audio (parse_audio, kw=="audio") — SHIPPED, §4.14, issue #23. PRECANNED only, no TTS. *)
+audio_stmt     ::= "audio" content [ "loop" ] [ "volume" modulator ]
+                 | "audio" "stop"
+                    (* content resolved at FIRE time via VisualControl::get_theme_audio, same
+                       as an image draw's content; `loop` -> Effect::force; a literal `volume`
+                       folds to a fire-once Effect::rate, a curve/[expr] volume instead emits a
+                       RenderStmt{Op::AudioVolume} evaluated every frame like spiral speed. *)
 
 (* ---- draws (parse_draw) ---- *)
 draw_stmt      ::= "image" content [ "-" ">" REG ] draw_param* anim_param? chance_param?

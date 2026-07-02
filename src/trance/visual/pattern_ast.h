@@ -40,7 +40,14 @@ namespace pattern
       Roll,      // scalars[target] = choices[random(choices.size())]
       Pulse,     // bounded counter -> one-frame flag (see fields below)
       Copy,      // images[target] = images[src]
-      SpiralSet  // deterministically set spiral type (ivalue) + width (mod_literal)
+      SpiralSet, // deterministically set spiral type (ivalue) + width (mod_literal)
+      // Grammar-driven theme audio (issue #23): `audio <content> [loop]` pulls a
+      // precanned path from the theme's audio pool (slot semantics identical to
+      // Image) and starts it playing on the engine's single dedicated theme-audio
+      // channel. `force` doubles as the `loop` flag here. `audio stop` is AudioStop
+      // (no fields used). See docs/spec-grammar-v3.md's audio primitive section.
+      Audio,
+      AudioStop
     };
     Kind kind = Kind::Image;
     Slot slot = Slot::None;
@@ -50,8 +57,10 @@ namespace pattern
     std::string target = "current";  // image reg (Image / Copy dst) or scalar reg name
     std::string src;                 // Copy source image register
     uint32_t split = 0;              // SplitType for a Text effect
-    float rate = 0.f;                // rate for SpiralRot
-    bool force = false;              // force flag for Font / SmallSub
+    float rate = 0.f;                // rate for SpiralRot; constant volume (0..1) for Audio
+                                      // (a literal `volume` modulator sets it once at fire
+                                      // time instead of every frame -- see Audio in run_effect)
+    bool force = false;              // force flag for Font / SmallSub; loop flag for Audio
 
     // Scalar-op operands:
     int32_t ivalue = 0;              // Set value / Inc step
@@ -74,7 +83,10 @@ namespace pattern
   // the statement to a VisualRender draw call. This replaces the per-pattern C++ presets.
   struct RenderStmt
   {
-    enum class Op { Image, Text, Subtext, SmallText, Spiral, Warp };
+    // AudioVolume: a per-frame curve-drivable theme-audio volume set (issue #23),
+    // the same shape as Spiral's speed axis -- `speed` field carries the [0,1]-scaled
+    // expr, evaluated and applied every frame so `volume (curve ...)` reads like zoom.
+    enum class Op { Image, Text, Subtext, SmallText, Spiral, Warp, AudioVolume };
     Op op = Op::Image;
 
     // Image op: the image register to draw (e.g. "current"). A register that was never
@@ -96,6 +108,8 @@ namespace pattern
     //   Text:                origin, zoom, shadow_origin, shadow_zoom
     //   Subtext / SmallText: alpha, origin
     //   Spiral:              speed (per-frame rotation advance; empty => static)
+    //   AudioVolume:         speed (per-frame theme-audio volume, 0..1; empty => no-op --
+    //                        a constant volume is set once at fire time instead, see Audio)
     std::string alpha, origin, zoom, shadow_origin, shadow_zoom, speed;
 
     // Optional `when [cond]`: draw only if the expr evaluates non-zero. Empty => always.

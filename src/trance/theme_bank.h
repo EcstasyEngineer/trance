@@ -46,6 +46,10 @@ public:
   Image get_animation(bool alternate);
   const std::string& get_text(bool alternate, bool exclusive);
   const std::string& get_font(bool alternate);
+  // Random pick from the active theme's precanned audio pool (issue #23); empty
+  // string when the theme has no audio_path entries. Same shape as get_font --
+  // the grammar (not ThemeBank) decides when/how loud to play the result.
+  const std::string& get_audio(bool alternate);
 
   // Call to upload a random image from the next theme which has been loaded
   // into RAM but not video memory.
@@ -108,6 +112,8 @@ private:
     Shuffler animation_shuffler;
     // All font paths for this theme.
     std::vector<std::string> font_paths;
+    // All precanned audio paths for this theme (issue #23).
+    std::vector<std::string> audio_paths;
     // All texts for this theme.
     std::vector<std::string> text_lines;
     // Lookup from text to index.
