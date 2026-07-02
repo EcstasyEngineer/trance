@@ -109,6 +109,38 @@ void Audio::ToggleMute()
   sf::Listener::setGlobalVolume(_muted ? 0.f : 100.f);
 }
 
+void Audio::PauseAll()
+{
+  auto pause_channel = [](channel& c) {
+    if (c.music && c.music->getStatus() == sf::SoundSource::Status::Playing) {
+      c.music->pause();
+    }
+  };
+  for (auto& c : _channels) {
+    pause_channel(c);
+  }
+  pause_channel(_theme_audio_channel);
+  if (_entrainment->getStatus() == sf::SoundSource::Status::Playing) {
+    _entrainment->pause();
+  }
+}
+
+void Audio::ResumeAll()
+{
+  auto resume_channel = [](channel& c) {
+    if (c.music && c.music->getStatus() == sf::SoundSource::Status::Paused) {
+      c.music->play();
+    }
+  };
+  for (auto& c : _channels) {
+    resume_channel(c);
+  }
+  resume_channel(_theme_audio_channel);
+  if (_entrainment->getStatus() == sf::SoundSource::Status::Paused) {
+    _entrainment->play();
+  }
+}
+
 bool Audio::Muted() const
 {
   return _muted;

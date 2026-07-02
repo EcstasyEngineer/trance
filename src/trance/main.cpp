@@ -153,24 +153,38 @@ struct CommandRuntimeState {
 };
 
 std::string execute_command(const command_protocol::ParsedCommand& cmd, Director& director,
-                            CommandRuntimeState& state, const std::chrono::steady_clock::time_point& start_time)
+                            Audio* audio, CommandRuntimeState& state,
+                            const std::chrono::steady_clock::time_point& start_time)
 {
   using command_protocol::Verb;
   if (!cmd.ok) {
     return command_protocol::format_err(cmd.error);
   }
+  // pause/stop must actually SUSPEND playback, not just stop advancing visual frames:
+  // the playlist clock is frozen separately in the main loop, and the audible side
+  // (music channels + entrainment bed) pauses here (audit finding). Null audio =
+  // export mode; the verbs still flip the flag and reply ok.
+  auto set_paused = [&](bool paused) {
+    if (paused == state.paused) {
+      return;
+    }
+    state.paused = paused;
+    if (audio) {
+      paused ? audio->PauseAll() : audio->ResumeAll();
+    }
+  };
   switch (cmd.verb) {
   case Verb::kStart:
-    state.paused = false;
+    set_paused(false);
     return command_protocol::format_ok();
   case Verb::kStop:
-    state.paused = true;
+    set_paused(true);
     return command_protocol::format_ok();
   case Verb::kPause:
-    state.paused = true;
+    set_paused(true);
     return command_protocol::format_ok();
   case Verb::kResume:
-    state.paused = false;
+    set_paused(false);
     return command_protocol::format_ok();
   case Verb::kOverlayOn:
     state.overlay_on = true;
@@ -228,12 +242,13 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
 // Drains every line CommandChannel has received since the last frame, parses + dispatches
 // each one, and replies exactly once per command -- spec sec 3 ("always exactly one line
 // back per command line in"). Render-thread only (see CommandRuntimeState comment above).
-void handle_commands(CommandChannel& channel, Director& director, CommandRuntimeState& state,
+void handle_commands(CommandChannel& channel, Director& director, Audio* audio,
+                     CommandRuntimeState& state,
                      const std::chrono::steady_clock::time_point& start_time)
 {
   for (const auto& command : channel.drain()) {
     auto parsed = command_protocol::parse_command(command.line);
-    auto reply = execute_command(parsed, director, state, start_time);
+    auto reply = execute_command(parsed, director, audio, state, start_time);
     channel.reply(command.conn_id, reply);
   }
 }
@@ -368,12 +383,17 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
     auto last_playlist_switch = clock_time();
 
     while (running && !g_overlay_stop_requested) {
+      // (running is also flipped below when the overlay stop fires, so the async
+      // ThemeBank thread's `while (running)` loop terminates and the join at the
+      // bottom of play_session is bounded -- audit finding: exiting this loop with
+      // running still true deadlocked shutdown in overlay mode.)
       handle_events(running, renderer->window(), director, audio.get(), app_ui.get());
       // #21 command channel: parse + dispatch every line received since last frame, right
       // after handle_events (spec sec 3: "Parse + dispatch happens in the drain loop --
       // main.cpp's per-frame loop, right after handle_events").
       if (command_channel) {
-        handle_commands(*command_channel, director, command_state, command_start_time);
+        handle_commands(*command_channel, director, audio.get(), command_state,
+                        command_start_time);
       }
 
       // TODO: should sleep rather than spinning.
@@ -404,6 +424,13 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
       while (!realtime && async_update_residual >= async_millis) {
         async_update_residual -= async_millis;
         theme_bank->async_update();
+      }
+
+      // Paused (#21): freeze the playlist clock too. time_since_switch is wall-clock, so
+      // without this a paused session's items keep timing out and firing audio events /
+      // program switches underneath the frozen visuals (audit finding).
+      if (command_state.paused) {
+        last_playlist_switch += elapsed_ms;
       }
 
       while (true) {
@@ -506,6 +533,11 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
     std::cerr << bad_alloc << std::endl;
     throw;
   }
+
+  // The overlay signal path exits the loop via g_overlay_stop_requested with `running`
+  // still true; flip it so the async ThemeBank thread (gated on `running`) terminates
+  // and the join below cannot hang (audit finding).
+  running = false;
 
   if (realtime) {
     async_thread.join();
@@ -799,6 +831,15 @@ int main(int argc, char** argv)
   try {
     session = load_session(session_path);
   } catch (std::runtime_error& e) {
+    // Fall back to a generated default ONLY when the user didn't name a session and the
+    // default file simply doesn't exist. An EXPLICITLY named session that fails to load
+    // (legacy .session needing trance_convert, JSON typo, missing file) must be a fatal
+    // error -- silently playing default content instead of what was asked for is worse
+    // than exiting (audit finding).
+    if (argc >= 2) {
+      std::cerr << "error: " << e.what() << std::endl;
+      return 1;
+    }
     std::cerr << e.what() << std::endl;
     session = get_default_session();
     search_resources(session, ".");

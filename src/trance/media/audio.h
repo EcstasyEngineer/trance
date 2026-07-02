@@ -34,6 +34,13 @@ public:
   void ToggleMute();
   bool Muted() const;
 
+  // #21 `pause`/`resume` verbs: suspend every currently-playing music channel
+  // (playlist + theme audio) and the entrainment bed, and resume exactly the ones
+  // this pause suspended. Distinct from ToggleMute: sf::Music::pause() stops the
+  // playback cursor, mute just silences it.
+  void PauseAll();
+  void ResumeAll();
+
   // Grammar-driven theme audio (issue #23): plays a precanned mantra/cue picked
   // by ThemeBank::get_audio and phase-locked by the `beats N { audio ... }`
   // grammar. Lives on its own dedicated channel object (_theme_audio_channel),

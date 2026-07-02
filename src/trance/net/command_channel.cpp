@@ -100,7 +100,7 @@ CommandChannel::CommandChannel(uint16_t port) : _running{true}
     throw std::runtime_error("CommandChannel: listen() failed");
   }
 
-  _reader = std::thread{[this, listen_fd] { reader_loop(int(listen_fd)); }};
+  _reader = std::thread{[this, listen_fd] { reader_loop(std::uintptr_t(listen_fd)); }};
 }
 
 CommandChannel::~CommandChannel()
@@ -160,7 +160,7 @@ void CommandChannel::reply(std::uint64_t conn_id, const std::string& line)
        0);
 }
 
-void CommandChannel::reader_loop(int listen_fd_raw)
+void CommandChannel::reader_loop(std::uintptr_t listen_fd_raw)
 {
   socket_t listen_fd = socket_t(listen_fd_raw);
   std::uint64_t next_conn_id = 1;

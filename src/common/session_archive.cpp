@@ -34,6 +34,9 @@ namespace
       for (const auto& p : theme.font_path()) {
         paths.insert(p);
       }
+      for (const auto& p : theme.audio_path()) {
+        paths.insert(p);
+      }
     }
 
     for (const auto& pattern_pair : sidecar.pattern_file) {
@@ -81,9 +84,17 @@ bool export_session_archive(const std::string& session_path, const std::string& 
   // e.g. validate_session()'s repair/prune passes -- and so pattern text lands inlined-by-
   // reference the same way a fresh save always does. `root`/`sidecar` here only affect
   // *where the saver looks things up*, not what's written to session.json itself.
+  // Stage to the system temp dir, NEVER into the session root: the root may already
+  // contain a real file named session.json (or the session itself may be one), and the
+  // stage-then-remove below would silently overwrite and then DELETE it (audit finding).
+  // `root` is still passed as the saver's lookup/pattern root -- only the session.json
+  // location moves.
+  auto staged_session_json = std::filesystem::temp_directory_path() /
+      ("trance-archive-stage-" +
+       std::filesystem::path{archive_path}.filename().string() + ".session.json");
   bool ok = true;
   try {
-    save_session_json(session, (root / "session.json").string(), root.string(), sidecar);
+    save_session_json(session, staged_session_json.string(), root.string(), sidecar);
   } catch (const std::runtime_error& e) {
     // save_session_json shouldn't normally throw on a session we just successfully loaded
     // and validated, but guard anyway rather than leaving a half-written temp file behind.
@@ -91,7 +102,6 @@ bool export_session_archive(const std::string& session_path, const std::string& 
     mz_zip_writer_end(&zip);
     return false;
   }
-  auto staged_session_json = root / "session.json";
   if (!mz_zip_writer_add_file(&zip, "session.json", staged_session_json.string().c_str(), nullptr,
                                0, MZ_NO_COMPRESSION)) {
     error = "failed to add session.json to archive: " +
