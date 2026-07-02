@@ -3,6 +3,7 @@
 #include <common/util.h>
 #include <trance/director.h>
 #include <trance/theme_bank.h>
+#include <cstdint>
 #include <iostream>
 
 #pragma warning(push, 0)
@@ -15,8 +16,8 @@ namespace
 
   sf::Color colour2sf(const trance_pb::Colour& colour)
   {
-    return sf::Color(sf::Uint8(colour.r() * 255), sf::Uint8(colour.g() * 255),
-                     sf::Uint8(colour.b() * 255), sf::Uint8(colour.a() * 255));
+    return sf::Color(std::uint8_t(colour.r() * 255), std::uint8_t(colour.g() * 255),
+                     std::uint8_t(colour.b() * 255), std::uint8_t(colour.a() * 255));
   }
 
   std::vector<std::string> SplitText(const std::string& text, bool split_words)

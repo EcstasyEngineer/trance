@@ -21,6 +21,7 @@
 #include <functional>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -92,30 +93,30 @@ std::thread run_async_thread(std::atomic<bool>& running, ThemeBank& bank)
 void handle_events(std::atomic<bool>& running, sf::RenderWindow& window, Director& director,
                    Audio* audio, AppUi* app_ui)
 {
-  sf::Event event;
-  while (window.pollEvent(event)) {
+  while (const std::optional event = window.pollEvent()) {
     // ImGui gets first look at input so clicks/typing inside its panels don't also
     // fall through to the F-key/Escape handling below. Null (or unavailable, see
     // AppUi::available) in --overlay mode -- the click-through window never
     // delivers events to this loop in the first place, but guard anyway.
     if (app_ui) {
-      app_ui->process_event(window, event);
+      app_ui->process_event(window, *event);
     }
-    if (event.type == event.Closed ||
-        (event.type == event.KeyPressed && event.key.code == sf::Keyboard::Escape)) {
+    const auto* key_pressed = event->getIf<sf::Event::KeyPressed>();
+    if (event->is<sf::Event::Closed>() ||
+        (key_pressed && key_pressed->code == sf::Keyboard::Key::Escape)) {
       running = false;
     }
-    if (event.type == event.KeyPressed && event.key.code == sf::Keyboard::F1) {
+    if (key_pressed && key_pressed->code == sf::Keyboard::Key::F1) {
       director.toggle_debug_overlay();
     }
-    if (event.type == event.KeyPressed && event.key.code == sf::Keyboard::F2 && app_ui) {
+    if (key_pressed && key_pressed->code == sf::Keyboard::Key::F2 && app_ui) {
       app_ui->toggle();
     }
-    if (event.type == event.KeyPressed && event.key.code == sf::Keyboard::M && audio) {
+    if (key_pressed && key_pressed->code == sf::Keyboard::Key::M && audio) {
       audio->ToggleMute();
     }
-    if (event.type == sf::Event::Resized) {
-      glViewport(0, 0, event.size.width, event.size.height);
+    if (const auto* resized = event->getIf<sf::Event::Resized>()) {
+      glViewport(0, 0, resized->size.x, resized->size.y);
     }
   }
 }
@@ -610,7 +611,7 @@ int validate_session(const std::string& root_path, const trance_pb::Session& ses
   for (const auto& path : font_paths) {
     std::cout << "checking " << path << std::endl;
     sf::Font font;
-    if (!font.loadFromFile(path)) {
+    if (!font.openFromFile(path)) {
       broken_paths.insert(path);
       std::cerr << path << " failed to load" << std::endl;
     }

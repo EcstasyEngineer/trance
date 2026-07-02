@@ -51,7 +51,7 @@ void Audio::TriggerEvent(const trance_pb::AudioEvent& event)
   channel_at(event.channel());
   uint32_t i = event.channel();
   while (event.next_unused_channel() && event.type() == trance_pb::AudioEvent::AUDIO_PLAY) {
-    if (channel_at(i).music->getStatus() != sf::SoundSource::Playing) {
+    if (channel_at(i).music->getStatus() != sf::SoundSource::Status::Playing) {
       break;
     }
     ++i;
@@ -63,7 +63,7 @@ void Audio::TriggerEvent(const trance_pb::AudioEvent& event)
       std::cerr << "\ncouldn't load " << event.path() << std::endl;
       return;
     }
-    channel.music->setLoop(event.loop());
+    channel.music->setLooping(event.loop());
     channel.music->setVolume(float(event.volume()));
     channel.music->play();
     channel.volume = event.volume();
@@ -85,7 +85,7 @@ void Audio::play_theme_audio(const std::string& path, bool loop)
     std::cerr << "\ncouldn't load " << path << std::endl;
     return;
   }
-  channel.music->setLoop(loop);
+  channel.music->setLooping(loop);
   channel.music->setVolume(float(channel.volume));
   channel.music->play();
 }

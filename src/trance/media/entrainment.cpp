@@ -5,6 +5,7 @@
 
 #pragma warning(push, 0)
 #include <common/trance.pb.h>
+#include <SFML/Audio/SoundChannel.hpp>
 #pragma warning(pop)
 
 namespace
@@ -21,7 +22,7 @@ namespace
 
 EntrainmentStream::EntrainmentStream() : _master_gain{0.0}
 {
-  initialize(2, sample_rate);
+  initialize(2, sample_rate, {sf::SoundChannel::FrontLeft, sf::SoundChannel::FrontRight});
 }
 
 EntrainmentStream::~EntrainmentStream()
@@ -117,10 +118,10 @@ namespace
     return {std::sqrt(sum_sq / (2.0 * frames)), peak};
   }
 
-  sf::Int16 to_sample(double v)
+  std::int16_t to_sample(double v)
   {
     v = std::max(-1.0, std::min(1.0, v));
-    return static_cast<sf::Int16>(v * 32767.0);
+    return static_cast<std::int16_t>(v * 32767.0);
   }
 }
 
@@ -177,7 +178,7 @@ bool EntrainmentStream::onGetData(Chunk& chunk)
 {
   _buffer.resize(chunk_frames * 2);
   if (_layers.empty()) {
-    std::fill(_buffer.begin(), _buffer.end(), sf::Int16(0));
+    std::fill(_buffer.begin(), _buffer.end(), std::int16_t(0));
   } else {
     // Sample each layer's Tracks once per block (not per sample): the
     // cumulative phase accumulators in synth_frame() already make a

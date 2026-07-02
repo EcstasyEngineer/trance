@@ -1,5 +1,6 @@
 #ifndef TRANCE_SRC_TRANCE_MEDIA_ENTRAINMENT_H
 #define TRANCE_SRC_TRANCE_MEDIA_ENTRAINMENT_H
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -71,7 +72,7 @@ private:
 
   double _master_gain;
   std::vector<Layer> _layers;
-  std::vector<sf::Int16> _buffer;  // interleaved stereo scratch reused per chunk
+  std::vector<std::int16_t> _buffer;  // interleaved stereo scratch reused per chunk
   std::string _last_config;        // serialized config, to skip no-op reconfigures
   double _running_seconds = 0.0;   // stream time at the start of the next block, for Track::eval()
 };

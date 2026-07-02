@@ -20,19 +20,5 @@
       "platform": "windows"
     }
   ],
-  "overrides": [
-    {
-      "name": "sfml",
-      "version": "2.6.1"
-    },
-    {
-      "name": "imgui-sfml",
-      "version": "2.6"
-    },
-    {
-      "name": "imgui",
-      "version": "1.90.6"
-    }
-  ],
   "builtin-baseline": "a7acc4f979f2afde60757e0f9b572b5710ac08b1"
 }

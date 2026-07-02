@@ -219,9 +219,9 @@ ScreenRenderer::ScreenRenderer(const trance_pb::System& system, const OverlayCon
 
   if (overlay.enabled) {
 #if defined(__linux__)
-    apply_x11_overlay_hints(_window->getSystemHandle(), overlay.opacity);
+    apply_x11_overlay_hints(_window->getNativeHandle(), overlay.opacity);
 #elif defined(_WIN32)
-    apply_win32_overlay_hints(_window->getSystemHandle(), overlay.opacity);
+    apply_win32_overlay_hints(_window->getNativeHandle(), overlay.opacity);
 #endif
   }
 

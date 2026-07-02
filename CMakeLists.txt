@@ -27,7 +27,7 @@ endif()
 # ---------------------------------------------------------------------------
 find_package(Protobuf CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
-find_package(SFML 2 COMPONENTS system window graphics audio CONFIG REQUIRED)
+find_package(SFML 3 COMPONENTS System Window Graphics Audio CONFIG REQUIRED)
 # On Windows, SFML's audio module pulls a bare `OpenAL` target whose config
 # selection is ambiguous under the multi-config generator; pin it to the
 # namespaced `OpenAL::OpenAL` (which carries proper per-config locations) so the
@@ -216,7 +216,7 @@ add_executable(trance
 target_link_libraries(trance PRIVATE
   common_lib
   trance_options
-  sfml-system sfml-window sfml-graphics sfml-audio
+  SFML::System SFML::Window SFML::Graphics SFML::Audio
   GLEW::GLEW
   OpenGL::GL
   gflags::gflags
@@ -230,19 +230,6 @@ target_link_libraries(trance PRIVATE
 if(WIN32)
   # avrt: required by openal-soft's WASAPI backend (AvSetMmThreadCharacteristics).
   target_link_libraries(trance PRIVATE ws2_32 winmm shlwapi avrt)
-endif()
-
-if(UNIX AND NOT APPLE)
-  # Static openal-soft (x64-linux triplet) has a PRIVATE fmt dependency that its
-  # static archive can't carry itself. It must follow libopenal.a on the link
-  # line, and openal is pulled in late via sfml-audio's interface — so append fmt
-  # to that same interface rather than linking it directly (which would order it
-  # too early and let the linker drop the symbols).
-  find_package(fmt CONFIG REQUIRED)
-  if(TARGET sfml-audio)
-    set_property(TARGET sfml-audio APPEND PROPERTY
-      INTERFACE_LINK_LIBRARIES fmt::fmt)
-  endif()
 endif()
 
 if(UNIX AND NOT APPLE)
@@ -310,7 +297,7 @@ if(TRANCE_BUILD_CREATOR)
   target_link_libraries(creator PRIVATE
     common_lib
     trance_options
-    sfml-system sfml-window sfml-graphics
+    SFML::System SFML::Window SFML::Graphics
     GLEW::GLEW
     OpenGL::GL
     unofficial::libvpx::libvpx
