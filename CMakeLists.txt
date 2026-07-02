@@ -26,6 +26,7 @@ endif()
 # CMakePresets.json). Nothing is vendored — `vcpkg install` restores everything.
 # ---------------------------------------------------------------------------
 find_package(Protobuf CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 find_package(SFML 2 COMPONENTS system window graphics audio CONFIG REQUIRED)
 # On Windows, SFML's audio module pulls a bare `OpenAL` target whose config
 # selection is ambiguous under the multi-config generator; pin it to the
@@ -65,9 +66,11 @@ endif()
 find_package(GLEW REQUIRED)
 find_package(OpenGL REQUIRED)
 find_package(gflags CONFIG REQUIRED)
+find_package(ImGui-SFML CONFIG REQUIRED)
 find_package(unofficial-libvpx CONFIG REQUIRED)
 find_package(unofficial-libwebm CONFIG REQUIRED)
 find_package(GIF REQUIRED)
+find_package(miniz CONFIG REQUIRED)
 
 # vcpkg's libwebm headers cross-include each other as "mkvparser/..." and
 # "mkvmuxer/..." (paths relative to include/webm), but the imported target only
@@ -163,6 +166,8 @@ add_library(common_lib STATIC
   src/common/media/image.cpp
   src/common/media/streamer.cpp
   src/common/session.cpp
+  src/common/session_archive.cpp
+  src/common/session_json.cpp
   src/jpgd/jpgd.cpp
   ${CMAKE_BINARY_DIR}/common/trance.pb.cc)
 
@@ -175,9 +180,11 @@ target_include_directories(common_lib PUBLIC
 target_link_libraries(common_lib PUBLIC
   trance_options
   protobuf::libprotobuf
+  nlohmann_json::nlohmann_json
   unofficial::libvpx::libvpx
   unofficial::libwebm::libwebm
-  GIF::GIF)
+  GIF::GIF
+  miniz::miniz)
 
 # ---------------------------------------------------------------------------
 # trance executable (realtime renderer + video export)
@@ -194,6 +201,7 @@ add_executable(trance
   src/trance/render/render.cpp
   src/trance/render/video_export.cpp
   src/trance/theme_bank.cpp
+  src/trance/ui/app_ui.cpp
   src/trance/visual/api.cpp
   src/trance/visual/builtin_patterns_v3.cpp
   src/trance/visual/compiled_visual.cpp
@@ -210,6 +218,7 @@ target_link_libraries(trance PRIVATE
   GLEW::GLEW
   OpenGL::GL
   gflags::gflags
+  ImGui-SFML::ImGui-SFML
   unofficial::libvpx::libvpx
   unofficial::libwebm::libwebm
   GIF::GIF
@@ -220,6 +229,34 @@ if(WIN32)
   # avrt: required by openal-soft's WASAPI backend (AvSetMmThreadCharacteristics).
   target_link_libraries(trance PRIVATE ws2_32 winmm shlwapi avrt)
 endif()
+
+if(UNIX AND NOT APPLE)
+  # X11 + Xext (Shape extension): v0 click-through overlay mode (#27) --
+  # _NET_WM_WINDOW_OPACITY + XShapeCombineRectangles in src/trance/render/render.cpp.
+  # System dev packages (libx11-dev/libxext-dev), not vcpkg -- SFML already links X11
+  # transitively for window creation, but the Shape extension calls need it explicit.
+  find_package(PkgConfig QUIET)
+  if(PkgConfig_FOUND)
+    pkg_check_modules(X11_XEXT QUIET IMPORTED_TARGET x11 xext)
+  endif()
+  if(TARGET PkgConfig::X11_XEXT)
+    target_link_libraries(trance PRIVATE PkgConfig::X11_XEXT)
+  else()
+    target_link_libraries(trance PRIVATE X11 Xext)
+  endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# trance_convert (one-shot legacy .session/.cfg textproto -> JSON converter,
+# docs/session-json-format.md sec 7). No SFML/window/GL/audio deps -- links
+# common_lib (protobuf + nlohmann_json) only.
+# ---------------------------------------------------------------------------
+add_executable(trance_convert
+  src/tools/convert_main.cpp)
+
+target_link_libraries(trance_convert PRIVATE
+  common_lib
+  trance_options)
 
 # ---------------------------------------------------------------------------
 # creator executable (wxWidgets session editor)
@@ -298,4 +335,12 @@ if(TRANCE_BUILD_TESTS)
   target_include_directories(v3_grammar_test PRIVATE src/)
   target_link_libraries(v3_grammar_test PRIVATE trance_options)
   add_test(NAME v3_grammar_test COMMAND v3_grammar_test)
+
+  # session.json / system.json mapping test (docs/session-json-format.md). Headless (no
+  # SFML/window/GL/audio) but not "bare C++17" like v3_grammar_test above: it links
+  # common_lib to exercise the real session_json.cpp against protobuf + nlohmann_json,
+  # the same dependency shape session.cpp itself has.
+  add_executable(session_json_test tests/session_json_test.cpp)
+  target_link_libraries(session_json_test PRIVATE common_lib trance_options)
+  add_test(NAME session_json_test COMMAND session_json_test)
 endif()

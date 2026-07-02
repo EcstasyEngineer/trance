@@ -110,4 +110,5 @@ editor), `docs/`, `tests/`.
   `-Werror` (legacy 2014-era code). Keep new code warning-clean on MSVC.
 - Commit messages end with: `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
 - Branch for changes; `master` is the single long-lived branch. Don't leave stray branches.
-- `system.cfg` is a runtime-written config (gitignored), not source.
+- `system.json` is a runtime-written config (gitignored), not source. (`system.cfg` is its
+  retired protobuf ancestor — convert with `trance_convert`.)
