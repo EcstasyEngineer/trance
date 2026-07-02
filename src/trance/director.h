@@ -40,9 +40,16 @@ public:
 
   // Toggle the on-screen debug overlay (bound to F1 in main.cpp).
   void toggle_debug_overlay();
-  // Optional audio handle, used only by the debug overlay to report the live
-  // entrainment bed and mute state. Null in export mode (no realtime audio).
-  void set_audio(const Audio* audio);
+  // Optional audio handle: used by the debug overlay to report the live
+  // entrainment bed and mute state, and bridged to VisualApiImpl for the
+  // grammar-driven theme-audio verbs (issue #23). Null in export mode (no
+  // realtime audio) -- callers must treat that as a graceful no-op.
+  void set_audio(Audio* audio);
+  // Theme-audio bridge for VisualApiImpl (mirrors set_warp/render_image's
+  // director-as-relay shape). No-ops when _audio is null (export/muted case).
+  void play_theme_audio(const std::string& path, bool loop);
+  void stop_theme_audio();
+  void set_theme_audio_volume(float volume);
 
   const trance_pb::Program& program() const;
   bool vr_enabled() const;
@@ -130,7 +137,7 @@ private:
   mutable bool _debug_font_loaded;
   mutable bool _debug_font_ok;
   mutable sf::Font _debug_font;
-  const Audio* _audio;
+  Audio* _audio;
 };
 
 #endif

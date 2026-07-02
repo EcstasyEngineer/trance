@@ -261,6 +261,10 @@ message Theme {
   repeated string font_path = 4;
   // Lines of text.
   repeated string text_line = 5;
+  // Precanned audio files (mantras/cues) this theme owns. The grammar decides
+  // when/how loud to play them (issue #23); absent = empty, old sessions and
+  // the converter are unaffected.
+  repeated string audio_path = 6;
 }
 
 message Variable {

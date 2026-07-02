@@ -73,6 +73,11 @@ void VisualApiImpl::maybe_upload_next() const
   _themes.maybe_upload_next();
 }
 
+const std::string& VisualApiImpl::get_theme_audio(bool alternate) const
+{
+  return _themes.get_audio(alternate);
+}
+
 void VisualApiImpl::rotate_spiral(float amount)
 {
   if (!_director.program().reverse_spiral_direction()) {
@@ -303,6 +308,21 @@ void VisualApiImpl::render_small_subtext(float alpha, float zoom_origin) const
   _director.render_text(font, _small_subtext, false, colour, scale,
                         {_small_subtext_x / 2, _small_subtext_y / 2}, zoom_origin,
                         zoom_intensity(zoom_origin, zoom_origin));
+}
+
+void VisualApiImpl::play_theme_audio(const std::string& path, bool loop)
+{
+  _director.play_theme_audio(path, loop);
+}
+
+void VisualApiImpl::stop_theme_audio()
+{
+  _director.stop_theme_audio();
+}
+
+void VisualApiImpl::set_theme_audio_volume(float volume)
+{
+  _director.set_theme_audio_volume(volume);
 }
 
 void VisualApiImpl::set_warp(float amp, float wavelength, float speed)

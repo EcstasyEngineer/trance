@@ -88,6 +88,30 @@ namespace
     return nullptr;
   }
 
+  // Collect every Effect of a given Kind anywhere in the lowered tree (both leaf `effects`
+  // and, for Burst nodes, `burst_effects`) -- used by the `audio` tests below to find the
+  // Effect::Kind::Audio/AudioStop leaves the parser emits without assuming which exact
+  // Node::Type wraps them (mirrors how the burst test walks a stack rather than assuming a
+  // fixed nesting depth).
+  std::vector<const pattern::Effect*> find_effects(const pattern::Node& root,
+                                                    pattern::Effect::Kind kind)
+  {
+    std::vector<const pattern::Effect*> out;
+    std::vector<const pattern::Node*> stack{&root};
+    while (!stack.empty()) {
+      const pattern::Node* n = stack.back();
+      stack.pop_back();
+      for (const auto& e : n->effects) {
+        if (e.kind == kind) out.push_back(&e);
+      }
+      for (const auto& e : n->burst_effects) {
+        if (e.kind == kind) out.push_back(&e);
+      }
+      for (const auto& c : n->children) stack.push_back(&c);
+    }
+    return out;
+  }
+
   // Evaluate every [expr] field of one RenderStmt against live cycler state, asserting each
   // numeric result is finite and within a sane tripwire bound (a malformed lowered expr -- e.g.
   // `resolve_ident` hitting a dangling/renamed node id -- silently resolves to 0.0 rather than
@@ -519,6 +543,136 @@ pattern beat_locked for beats 8 {
           "beats error: bare `locked` with locked=0 (no pulsed bed) is also a hard parse error");
   }
 
+  // 4i. `audio` (issue #23, §4.14): parses and lowers to Effect::Kind::Audio carrying the
+  // content slot + loop flag; a LITERAL volume folds to Effect::rate (fire-once), not a
+  // render-side op.
+  {
+    auto pr = parse("pattern a for 240f { audio concept loop volume 0.6 }");
+    check(pr.ok, std::string("audio: parses") + (pr.ok ? "" : (" -- " + pr.error)));
+    if (pr.ok) {
+      auto audio_effects = find_effects(pr.root, pattern::Effect::Kind::Audio);
+      check(audio_effects.size() == 1, "audio: lowers to exactly one Effect::Kind::Audio");
+      if (audio_effects.size() == 1) {
+        const auto* e = audio_effects[0];
+        check(e->slot == pattern::Slot::Primary, "audio: `concept` lowers to Slot::Primary");
+        check(e->force, "audio: `loop` lowers to Effect::force = true");
+        check(std::fabs(e->rate - 0.6f) < 1e-4f,
+              "audio: literal `volume 0.6` folds to Effect::rate at fire time");
+      }
+      bool has_volume_render = false;
+      for (const auto& st : pr.render_block) {
+        if (st.op == pattern::RenderStmt::Op::AudioVolume) has_volume_render = true;
+      }
+      check(!has_volume_render,
+            "audio: a LITERAL volume does NOT emit a per-frame RenderStmt (fire-once only)");
+    }
+
+    // `reward` / `runtime` resolve to the other two content slots; no `loop`/`volume` is fine
+    // (both optional).
+    auto pr2 = parse("pattern a for 240f { audio reward }");
+    check(pr2.ok, std::string("audio: `reward`, no loop/volume, parses") +
+                      (pr2.ok ? "" : (" -- " + pr2.error)));
+    if (pr2.ok) {
+      auto audio_effects = find_effects(pr2.root, pattern::Effect::Kind::Audio);
+      check(audio_effects.size() == 1 && audio_effects[0]->slot == pattern::Slot::Alternate,
+            "audio: `reward` lowers to Slot::Alternate");
+      check(audio_effects.size() == 1 && !audio_effects[0]->force,
+            "audio: no `loop` keyword -> Effect::force stays false");
+    }
+
+    auto pr3 = parse("pattern a for 240f { audio runtime }");
+    check(pr3.ok, std::string("audio: `runtime` parses") + (pr3.ok ? "" : (" -- " + pr3.error)));
+    if (pr3.ok) {
+      auto audio_effects = find_effects(pr3.root, pattern::Effect::Kind::Audio);
+      check(audio_effects.size() == 1 && audio_effects[0]->slot == pattern::Slot::Runtime,
+            "audio: `runtime` lowers to Slot::Runtime (resolved at fire time)");
+      // No volume written -> the rate SENTINEL (< 0): fire-time keeps the channel's
+      // current (initially full) volume. Guards the bare-`audio`-is-silent regression.
+      check(audio_effects.size() == 1 && audio_effects[0]->rate < 0.f,
+            "audio: absent volume lowers to the rate<0 sentinel (keep current volume)");
+    }
+
+    // Explicit `volume 0` is a REAL mute, distinct from the absent-volume sentinel.
+    auto pr4 = parse("pattern a for 240f { audio concept volume 0 }");
+    check(pr4.ok, std::string("audio: `volume 0` parses") + (pr4.ok ? "" : (" -- " + pr4.error)));
+    if (pr4.ok) {
+      auto audio_effects = find_effects(pr4.root, pattern::Effect::Kind::Audio);
+      check(audio_effects.size() == 1 && audio_effects[0]->rate == 0.f,
+            "audio: explicit `volume 0` lowers to rate == 0 (honored mute, not sentinel)");
+    }
+  }
+
+  // 4j. `audio ... volume (curve ...)` emits a per-frame RenderStmt{Op::AudioVolume} instead
+  // of folding to Effect::rate -- the "constant vs curve" fork §4.14 documents.
+  {
+    auto pr = parse("pattern a for 240f { audio concept volume (curve 0.2 -> 0.8) }");
+    check(pr.ok, std::string("audio volume curve: parses") + (pr.ok ? "" : (" -- " + pr.error)));
+    if (pr.ok) {
+      auto audio_effects = find_effects(pr.root, pattern::Effect::Kind::Audio);
+      check(audio_effects.size() == 1 && audio_effects[0]->rate < 0.f,
+            "audio volume curve: Effect::rate stays at the sentinel (no fire-once write; "
+            "the per-frame RenderStmt owns volume)");
+      const pattern::RenderStmt* vol = nullptr;
+      for (const auto& st : pr.render_block) {
+        if (st.op == pattern::RenderStmt::Op::AudioVolume) vol = &st;
+      }
+      check(vol != nullptr, "audio volume curve: lowers to a RenderStmt{Op::AudioVolume}");
+      check(vol && !vol->speed.empty() && progress_clock(vol->speed) != "",
+            "audio volume curve: the volume expr rides the enclosing pattern's clock");
+    }
+  }
+
+  // 4k. `audio stop` lowers to a standalone Effect::Kind::AudioStop with no content word
+  // needed, and produces no RenderStmt (schedule-only, like `copy`).
+  {
+    auto pr = parse("pattern a for 240f { audio stop }");
+    check(pr.ok, std::string("audio stop: parses") + (pr.ok ? "" : (" -- " + pr.error)));
+    if (pr.ok) {
+      auto stops = find_effects(pr.root, pattern::Effect::Kind::AudioStop);
+      check(stops.size() == 1, "audio stop: lowers to exactly one Effect::Kind::AudioStop");
+      check(pr.render_block.empty(), "audio stop: schedule-only, emits no RenderStmt");
+    }
+  }
+
+  // 4l. `every (beats 2) { audio concept }` with locked_frames=32: the cadence lowers to a
+  // Rep wrapping an Action leaf carrying the Audio effect, and the leaf length matches
+  // 2*32 = 64f -- confirming `audio` composes with the SAME beats-cadence machinery `image`/
+  // `word` already use, not a bespoke audio-only path.
+  {
+    auto pr = parse("pattern beat_audio for beats 8 { every beats 2 { audio concept } }",
+                     /*locked=*/32);
+    check(pr.ok, std::string("audio cadence: parses with a 32f-locked bed") +
+                     (pr.ok ? "" : (" -- " + pr.error)));
+    if (pr.ok) {
+      Cycler* root = pattern::compile(pr.root);
+      check(root && root->length() == 8 * 32,
+            "audio cadence: pattern span lowers to 8*locked = 256 frames");
+      delete root;
+      // Find the cadence leaf: an Action node carrying the Audio effect.
+      const pattern::Node* leaf = nullptr;
+      std::vector<const pattern::Node*> stack{&pr.root};
+      while (!stack.empty()) {
+        const pattern::Node* n = stack.back();
+        stack.pop_back();
+        for (const auto& e : n->effects) {
+          if (e.kind == pattern::Effect::Kind::Audio) leaf = n;
+        }
+        for (const auto& c : n->children) stack.push_back(&c);
+      }
+      check(leaf != nullptr, "audio cadence: the Audio effect lands on an Action leaf");
+      check(leaf && leaf->length == 2 * 32,
+            "audio cadence: `every beats 2` leaf length is 2*locked = 64f, same math as image");
+    }
+  }
+
+  // 4m. Error case: an unknown content word after `audio` is a hard parse error naming the
+  // bad word (same shape as `image`/`word`'s content-word validation, content_to_slot).
+  {
+    auto pr = parse("pattern a for 100f { audio bogus }");
+    check(!pr.ok && pr.error.find("bogus") != std::string::npos,
+          "audio error: unknown content word is a hard parse error naming the bad word");
+  }
+
   // 5. Every shipped v3 built-in parses and lowers to a runnable tree, and every RenderStmt in
   // its render_block evaluates to finite, sane-bounded numbers at frames {0, mid, end-1} with
   // the cycler tree actually advanced -- not just string-matched. This is the gap parse-time
@@ -606,6 +760,11 @@ pattern burster for 512f {
         {"beats", R"(
 pattern beat_locked for beats 8 {
   every beats 1 { image concept zoom (curve 0 -> 0.5) }
+})"},
+        {"audio", R"(
+pattern mantra_pulse for beats 16 {
+  every beats 4 { audio concept loop volume (curve 0.2 -> 0.8) }
+  every beats 1 { image concept zoom (curve 0 -> 0.4) }
 })"},
     };
     for (const auto& c : cases) {

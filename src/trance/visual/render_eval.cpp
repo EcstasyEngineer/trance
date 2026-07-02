@@ -79,6 +79,14 @@ namespace pattern
         }
         api.render_spiral();
         break;
+      case RenderStmt::Op::AudioVolume:
+        // A curve/expr `volume` modulator (issue #23): evaluated and applied every frame,
+        // the same shape as spiral speed. Clamped defensively -- Audio::set_theme_audio_volume
+        // also clamps, but keeping the render-side value sane avoids a stray >1/<0 number
+        // showing up in debug/logging paths that might read it before the clamp.
+        api.set_theme_audio_volume(
+            std::max(0.0f, std::min(1.0f, eval_num(st.speed, 0.0, regs, nodes, root))));
+        break;
       case RenderStmt::Op::Warp:
         // v3 wave warp: amp in zoom, wavelength in origin, speed in speed. Set once per frame;
         // image draws later in the block read it. amp 0 => no displacement.

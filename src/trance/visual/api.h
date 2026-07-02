@@ -29,6 +29,10 @@ public:
 
   virtual Image get_image(bool alternate = false) const = 0;
   virtual void maybe_upload_next() const = 0;
+  // Random pick from the active theme's precanned audio pool (ThemeBank::get_audio),
+  // same shape as get_image -- the v3 `audio` effect (issue #23) resolves content
+  // (concept/reward/runtime) to a path with this before calling play_theme_audio.
+  virtual const std::string& get_theme_audio(bool alternate = false) const = 0;
 
   virtual void rotate_spiral(float amount) = 0;
   virtual void change_spiral() = 0;
@@ -41,6 +45,15 @@ public:
   virtual void change_subtext(bool alternate = false) = 0;
   virtual void change_small_subtext(bool force = false, bool alternate = false) = 0;
   virtual bool change_themes() = 0;
+
+  // Grammar-driven theme audio (issue #23): bridges to Audio::play_theme_audio /
+  // stop_theme_audio / set_theme_audio_volume via the director. Single-slot v0,
+  // same shape as the single live text slot -- starting a new play stops
+  // whatever grammar audio was already playing. No-op (graceful) when there is
+  // no live Audio object (export/muted case).
+  virtual void play_theme_audio(const std::string& path, bool loop) = 0;
+  virtual void stop_theme_audio() = 0;
+  virtual void set_theme_audio_volume(float volume) = 0;
 };
 
 class VisualRender
@@ -80,6 +93,11 @@ public:
   virtual void rotate_spiral(float amount) = 0;
   // v3 wave warp: set the per-frame image-displacement state (amp 0 = disabled).
   virtual void set_warp(float amp, float wavelength, float speed) = 0;
+  // Exposed on the render interface so a curve/expr `volume` modulator on the v3 `audio`
+  // effect can be applied every frame (issue #23), the same dual-declaration shape as
+  // rotate_spiral above: same method as VisualControl::set_theme_audio_volume;
+  // VisualApiImpl's single override satisfies both.
+  virtual void set_theme_audio_volume(float volume) = 0;
 };
 
 class VisualApiImpl : public VisualControl, public VisualRender
@@ -91,6 +109,7 @@ public:
 
   Image get_image(bool alternate = false) const override;
   void maybe_upload_next() const override;
+  const std::string& get_theme_audio(bool alternate = false) const override;
 
   void rotate_spiral(float amount) override;
   void change_spiral() override;
@@ -101,6 +120,10 @@ public:
   void change_subtext(bool alternate = false) override;
   void change_small_subtext(bool force = false, bool alternate = false) override;
   bool change_themes() override;
+
+  void play_theme_audio(const std::string& path, bool loop) override;
+  void stop_theme_audio() override;
+  void set_theme_audio_volume(float volume) override;
 
   void render_animation_or_image(Anim type, const Image& image, float alpha, float zoom_origin,
                                  float zoom, ThemeSlot slot = ThemeSlot::None) const override;

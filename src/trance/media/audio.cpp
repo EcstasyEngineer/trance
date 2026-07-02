@@ -9,8 +9,14 @@
 #pragma warning(pop)
 
 Audio::Audio(const std::string& root_path)
-: _root_path{root_path}, _entrainment{new EntrainmentStream}
+: _root_path{root_path}
+// Grammar audio starts at FULL volume: a bare `audio concept` with no volume
+// modulator must be audible (the advertised `every beats N { audio mantra }`
+// shape). Patterns that want quieter starts write `volume`.
+, _theme_audio_channel{{}, 100, false, 0, 0, 0, {}}
+, _entrainment{new EntrainmentStream}
 {
+  _theme_audio_channel.music.reset(new sf::Music);
   sf::Listener::setGlobalVolume(100.f);
 }
 
@@ -31,24 +37,26 @@ void Audio::TriggerEvents(const trance_pb::PlaylistItem& item)
   }
 }
 
-void Audio::TriggerEvent(const trance_pb::AudioEvent& event)
+Audio::channel& Audio::channel_at(std::uint32_t index)
 {
-  while (event.channel() >= _channels.size()) {
+  while (index >= _channels.size()) {
     _channels.emplace_back(channel{{}, 0, false, 0, 0, 0, {}});
     _channels.back().music.reset(new sf::Music);
   }
+  return _channels[index];
+}
+
+void Audio::TriggerEvent(const trance_pb::AudioEvent& event)
+{
+  channel_at(event.channel());
   uint32_t i = event.channel();
   while (event.next_unused_channel() && event.type() == trance_pb::AudioEvent::AUDIO_PLAY) {
-    if (i >= _channels.size()) {
-      _channels.emplace_back(channel{{}, 0, false, 0, 0, 0, {}});
-      _channels.back().music.reset(new sf::Music);
-    }
-    if (_channels[i].music->getStatus() != sf::SoundSource::Playing) {
+    if (channel_at(i).music->getStatus() != sf::SoundSource::Playing) {
       break;
     }
     ++i;
   }
-  auto& channel = _channels[i];
+  auto& channel = channel_at(i);
 
   if (event.type() == trance_pb::AudioEvent::AUDIO_PLAY) {
     if (!channel.music->openFromFile(_root_path + "/" + event.path())) {
@@ -68,6 +76,31 @@ void Audio::TriggerEvent(const trance_pb::AudioEvent& event)
     channel.fade_time_seconds = event.time_seconds();
     channel.fade_start = _clock.now();
   }
+}
+
+void Audio::play_theme_audio(const std::string& path, bool loop)
+{
+  auto& channel = _theme_audio_channel;
+  if (!channel.music->openFromFile(_root_path + "/" + path)) {
+    std::cerr << "\ncouldn't load " << path << std::endl;
+    return;
+  }
+  channel.music->setLoop(loop);
+  channel.music->setVolume(float(channel.volume));
+  channel.music->play();
+}
+
+void Audio::stop_theme_audio()
+{
+  _theme_audio_channel.music->stop();
+}
+
+void Audio::set_theme_audio_volume(float volume)
+{
+  volume = std::max(0.f, std::min(1.f, volume));
+  auto& channel = _theme_audio_channel;
+  channel.volume = std::uint32_t(volume * 100.f + .5f);
+  channel.music->setVolume(float(channel.volume));
 }
 
 void Audio::ToggleMute()

@@ -105,6 +105,7 @@ ThemeBank::ThemeBank(const std::string& root_path, const trance_pb::Session& ses
                                        {_all_images.size()},
                                        {_all_animations.size()},
                                        {theme.font_path().begin(), theme.font_path().end()},
+                                       {theme.audio_path().begin(), theme.audio_path().end()},
                                        {theme.text_line().begin(), theme.text_line().end()},
                                        {},
                                        {static_cast<std::size_t>(theme.text_line().size())}});
@@ -308,6 +309,17 @@ const std::string& ThemeBank::get_font(bool alternate)
   }
   auto r = random(theme.font_paths.size());
   return theme.font_paths[r];
+}
+
+const std::string& ThemeBank::get_audio(bool alternate)
+{
+  auto& theme = *_active_themes[alternate ? 2 : 1].load();
+  if (theme.audio_paths.empty()) {
+    const static std::string none;
+    return none;
+  }
+  auto r = random(theme.audio_paths.size());
+  return theme.audio_paths[r];
 }
 
 void ThemeBank::maybe_upload_next()

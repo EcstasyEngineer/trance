@@ -168,6 +168,7 @@ There is **no inline pattern-source key** — `file` is the only form (§4).
 | `animation_path` | array | `Theme.animation_path` |
 | `font_path` | array | `Theme.font_path` |
 | `text_line` | array of strings; embedded `\n` = pre-split lines, as today | `Theme.text_line` |
+| `audio_path` | array of root-relative paths; precanned audio (mantras/cues) this theme owns — the grammar decides when/volume (issue #23) | `Theme.audio_path` |
 
 **`scan` semantics:** at load, the loader walks the directory with the existing
 `search_resources(trance_pb::Theme&, root)` (`session.cpp:372`) and **appends** the found

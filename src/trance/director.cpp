@@ -187,9 +187,30 @@ void Director::toggle_debug_overlay()
   _debug_overlay = !_debug_overlay;
 }
 
-void Director::set_audio(const Audio* audio)
+void Director::set_audio(Audio* audio)
 {
   _audio = audio;
+}
+
+void Director::play_theme_audio(const std::string& path, bool loop)
+{
+  if (_audio) {
+    _audio->play_theme_audio(path, loop);
+  }
+}
+
+void Director::stop_theme_audio()
+{
+  if (_audio) {
+    _audio->stop_theme_audio();
+  }
+}
+
+void Director::set_theme_audio_volume(float volume)
+{
+  if (_audio) {
+    _audio->set_theme_audio_volume(volume);
+  }
 }
 
 const trance_pb::Program& Director::program() const
