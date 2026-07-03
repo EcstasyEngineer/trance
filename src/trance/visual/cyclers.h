@@ -276,7 +276,10 @@ public:
     uint32_t dur_min;      // burst duration in ticks, inclusive range
     uint32_t dur_max;
   };
-  BurstCycler(const Params& params, std::function<void()> base, std::function<void()> burst);
+  // `enter` (optional) fires once at each burst's start, before that tick's burst
+  // action -- the `enter { }` grammar block (one-shot setup, e.g. change-animation).
+  BurstCycler(const Params& params, std::function<void()> base, std::function<void()> burst,
+              std::function<void()> enter = {});
 
   uint32_t length() const override;
   uint32_t position() const override;
@@ -292,6 +295,7 @@ private:
   Params _params;
   std::function<void()> _base;
   std::function<void()> _burst;
+  std::function<void()> _enter;
   uint32_t _position;
   bool _in_burst;
   uint32_t _burst_remaining;

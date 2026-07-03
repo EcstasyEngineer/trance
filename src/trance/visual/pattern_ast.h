@@ -145,12 +145,16 @@ namespace pattern
 
     // Burst (Type::Burst): a base loop (effects) randomly interrupted by a bounded
     // burst (burst_effects). `length` is the total; these are the burst params.
+    // burst_enter_effects fire ONCE at each burst's start (the `enter { }` block) --
+    // for one-shot setup like picking the burst's animation, which would re-randomize
+    // every period if it lived in the per-tick burst block.
     uint32_t burst_period = 0;
     uint32_t burst_chance_den = 0;
     uint32_t burst_cooldown = 0;
     uint32_t burst_dur_min = 0;
     uint32_t burst_dur_max = 0;
     std::vector<Effect> burst_effects;
+    std::vector<Effect> burst_enter_effects;
 
     // Seq / Par / One children; Rep / Off use children[0].
     std::vector<Node> children;

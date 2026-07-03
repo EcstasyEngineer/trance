@@ -1,6 +1,7 @@
 #include <common/common.h>
 #include <common/session.h>
 #include <common/session_archive.h>
+#include <common/session_legacy.h>
 #include <common/util.h>
 #include <trance/director.h>
 #include <trance/media/audio.h>
@@ -153,7 +154,7 @@ struct CommandRuntimeState {
 };
 
 std::string execute_command(const command_protocol::ParsedCommand& cmd, Director& director,
-                            Audio* audio, CommandRuntimeState& state,
+                            Audio* audio, const ThemeBank& themes, CommandRuntimeState& state,
                             const std::chrono::steady_clock::time_point& start_time)
 {
   using command_protocol::Verb;
@@ -231,6 +232,13 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
     out << "visual=" << director.status_visual_name() << " bed="
         << (director.status_bed_active() ? "on" : "off") << " overlay="
         << (state.overlay_on ? "on" : "off") << " uptime=" << uptime;
+    // ThemeBank's four queue slots (prev|primary|alternate|next), so an external
+    // controller -- and the test harness -- can watch theme rotation happen.
+    auto snap = themes.debug_snapshot();
+    out << " themes=";
+    for (std::size_t i = 0; i < snap.slots.size(); ++i) {
+      out << (i ? "|" : "") << (snap.slots[i].valid ? snap.slots[i].name : "(empty)");
+    }
     return command_protocol::format_ok(out.str());
   }
   case Verb::kUnknown:
@@ -243,12 +251,12 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
 // each one, and replies exactly once per command -- spec sec 3 ("always exactly one line
 // back per command line in"). Render-thread only (see CommandRuntimeState comment above).
 void handle_commands(CommandChannel& channel, Director& director, Audio* audio,
-                     CommandRuntimeState& state,
+                     const ThemeBank& themes, CommandRuntimeState& state,
                      const std::chrono::steady_clock::time_point& start_time)
 {
   for (const auto& command : channel.drain()) {
     auto parsed = command_protocol::parse_command(command.line);
-    auto reply = execute_command(parsed, director, audio, state, start_time);
+    auto reply = execute_command(parsed, director, audio, themes, state, start_time);
     channel.reply(command.conn_id, reply);
   }
 }
@@ -345,6 +353,9 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
       app_ui.reset();
     }
   }
+  if (app_ui) {
+    renderer->set_ui_hook([&] { app_ui->render(renderer->window()); });
+  }
   sf::Clock ui_clock;
 
   std::thread async_thread;
@@ -392,7 +403,7 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
       // after handle_events (spec sec 3: "Parse + dispatch happens in the drain loop --
       // main.cpp's per-frame loop, right after handle_events").
       if (command_channel) {
-        handle_commands(*command_channel, director, audio.get(), command_state,
+        handle_commands(*command_channel, director, audio.get(), *theme_bank, command_state,
                         command_start_time);
       }
 
@@ -507,23 +518,20 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
       if (!continue_playing) {
         break;
       }
-      if (update || !realtime) {
-        director.render();
-      }
-      // NOTE (handoff): drawn after director.render()'s window.display() rather than
-      // before it -- Director/ScreenRenderer own the clear-draw-display sequence
-      // (director.cpp/render.cpp), and neither is an owned file this wave, so there's
-      // no seam to inject a pre-display ImGui draw call into. Concretely this composits
-      // one frame late: render() below draws onto the buffer that was just swapped to
-      // back (last-displayed frame's content, not this frame's), then re-displays it,
-      // so the live visual under the UI can lag/flicker by a frame while the panel is
-      // open. Real fix: give Director::render() (or Renderer::render()) a post-scene,
-      // pre-display callback hook -- follow-up task, not this one's owned files.
-      if (app_ui) {
+      // With a live UI the window redraws every loop iteration (the panels must stay
+      // responsive even when no visual frame elapsed / playback is paused via #21);
+      // otherwise keep the old only-on-update behaviour. ImGui's frame starts here and
+      // the renderer's pre-display hook draws it inside director.render(), between the
+      // scene draw and the buffer swap -- exactly one display() per iteration. (The old
+      // shape displayed twice: UI strobed at half rate and the scene ping-ponged one
+      // frame back every other swap.)
+      const bool do_render = update || !realtime || app_ui != nullptr;
+      if (app_ui && do_render) {
         app_ui->update(renderer->window(), ui_clock.restart(), director, audio.get(),
                        *theme_bank);
-        app_ui->render(renderer->window());
-        renderer->window().display();
+      }
+      if (do_render) {
+        director.render();
       }
       if (realtime) {
         audio->Update();
@@ -831,18 +839,41 @@ int main(int argc, char** argv)
   try {
     session = load_session(session_path);
   } catch (std::runtime_error& e) {
-    // Fall back to a generated default ONLY when the user didn't name a session and the
-    // default file simply doesn't exist. An EXPLICITLY named session that fails to load
-    // (legacy .session needing trance_convert, JSON typo, missing file) must be a fatal
-    // error -- silently playing default content instead of what was asked for is worse
-    // than exiting (audit finding).
-    if (argc >= 2) {
+    // An EXPLICITLY named session that fails to load (legacy .session needing
+    // trance_convert, JSON typo, missing file) must be a fatal error -- silently playing
+    // default content instead of what was asked for is worse than exiting (audit
+    // finding). Same for an EXISTING ./default.json that fails to parse: overwriting a
+    // hand-edited-but-broken file with a generated one would destroy the user's edits.
+    if (argc >= 2 || std::filesystem::exists(DEFAULT_SESSION_PATH)) {
       std::cerr << "error: " << e.what() << std::endl;
       return 1;
     }
-    std::cerr << e.what() << std::endl;
-    session = get_default_session();
-    search_resources(session, ".");
+    // No-arg cold start with no ./default.json: bootstrap one, the same role
+    // ./default.session played in the original trance.exe. A legacy ./default.session
+    // sitting here is auto-migrated (converted in place, original left untouched);
+    // otherwise generate the built-in default over whatever media the directory holds.
+    if (std::filesystem::exists(LEGACY_DEFAULT_SESSION_PATH)) {
+      std::cout << "migrating legacy ./" << LEGACY_DEFAULT_SESSION_PATH << " -> ./"
+                << DEFAULT_SESSION_PATH << std::endl;
+      session = load_legacy_session(LEGACY_DEFAULT_SESSION_PATH);
+      validate_session(session);
+    } else {
+      std::cerr << e.what() << std::endl;
+      session = get_default_session();
+      search_resources(session, ".");
+    }
+    try {
+      save_session(session, "./" + DEFAULT_SESSION_PATH);
+      std::cout << "wrote ./" << DEFAULT_SESSION_PATH << std::endl;
+      // Play what was WRITTEN, not the in-memory legacy proto: the JSON saver
+      // normalizes Windows backslash media paths to forward slashes (spec sec 1),
+      // and the legacy-authored originals don't resolve on non-Windows.
+      session = load_session("./" + DEFAULT_SESSION_PATH);
+    } catch (const std::runtime_error& save_error) {
+      // Read-only directory: still playable this run, just not persisted.
+      std::cerr << "couldn't write ./" << DEFAULT_SESSION_PATH << ": " << save_error.what()
+                << std::endl;
+    }
   }
 
   std::string system_path{argc >= 3 ? argv[2] : "./" + SYSTEM_CONFIG_PATH};

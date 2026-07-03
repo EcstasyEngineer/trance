@@ -36,7 +36,7 @@ structures (`SessionArchive`, deprecated fields, `OCULUS`) cut.
 | Thing | Name |
 |---|---|
 | Session file | `*.session.json` (double extension: JSON tooling + human-readable purpose) |
-| Default session | `default.session.json` (`DEFAULT_SESSION_PATH`, `src/common/common.h:6`) |
+| Default session | `default.json` (`DEFAULT_SESSION_PATH`, `src/common/common.h`) — auto-created on a no-arg cold start, auto-migrated from a legacy `./default.session` when one is present (main.cpp) |
 | System config | `system.json` next to the exe (`SYSTEM_CONFIG_PATH`, `common.h:7`) |
 | Pattern source | `*.pattern`, plain UTF-8 v3 DSL text. Named by what it is, **not** by grammar revision — a future grammar bump must not force a mass rename. |
 | Archive (future wave) | `*.trance` — a zip of the session root with the session file stored as `session.json` at zip root. See §9. |
@@ -376,7 +376,7 @@ converter bug.
 **Playback and the editor load only `*.session.json` / `system.json`.** The legacy
 textproto parser survives solely inside `trance_convert`; there is no dual load path and no
 extension sniffing in the player. Constants change: `DEFAULT_SESSION_PATH =
-"default.session.json"`, `SYSTEM_CONFIG_PATH = "system.json"` (`common.h:6-7`). A missing
+"default.json"`, `SYSTEM_CONFIG_PATH = "system.json"` (`common.h`). A missing
 `system.json` is regenerated from `get_default_system()` and saved, exactly as today
 (`main.cpp:563-570`).
 

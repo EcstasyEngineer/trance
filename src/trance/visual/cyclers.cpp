@@ -428,10 +428,11 @@ void OffsetCycler::advance_to_offset()
 }
 
 BurstCycler::BurstCycler(const Params& params, std::function<void()> base,
-                         std::function<void()> burst)
+                         std::function<void()> burst, std::function<void()> enter)
 : _params{params}
 , _base{std::move(base)}
 , _burst{std::move(burst)}
+, _enter{std::move(enter)}
 , _position{0}
 , _in_burst{false}
 , _burst_remaining{0}
@@ -487,6 +488,9 @@ void BurstCycler::advance(bool trigger_actions)
           + (_params.dur_max > _params.dur_min ? random(_params.dur_max - _params.dur_min + 1) : 0);
       if (!_burst_remaining) {
         _burst_remaining = 1;
+      }
+      if (_enter) {
+        _enter();
       }
       if (_burst) {
         _burst();

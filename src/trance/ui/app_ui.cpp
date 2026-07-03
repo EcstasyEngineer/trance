@@ -6,6 +6,7 @@
 #include <vector>
 
 #pragma warning(push, 0)
+#include <GL/glew.h>
 #include <common/trance.pb.h>
 #include <imgui.h>
 #include <imgui-SFML.h>
@@ -74,6 +75,7 @@ void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Au
     return;
   }
   ImGui::SFML::Update(window, dt);
+  _frame_started = true;
 
   // Hover-reveal corner icon (issue #24 item 1): a small always-on window sits in
   // the bottom-right corner; hovering it reveals the full panel set below. This
@@ -106,9 +108,19 @@ void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Au
 
 void AppUi::render(sf::RenderWindow& window)
 {
-  if (!_initialized) {
+  if (!_initialized || !_frame_started) {
     return;
   }
+  _frame_started = false;
+  // The scene renderer (director.cpp) leaves its GLSL program bound and drives GL
+  // state imgui-sfml's fixed-function renderer never resets (it only backs up what it
+  // touches). A bound program in particular bypasses fixed-function texturing entirely,
+  // which garbles every glyph quad. Neutralize before handing the context to ImGui;
+  // ImGui::SFML::Render's own resetGLStates handles the SFML-visible remainder.
+  glUseProgram(0);
+  glActiveTexture(GL_TEXTURE0);
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
   ImGui::SFML::Render(window);
 }
 

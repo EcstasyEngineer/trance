@@ -3,7 +3,13 @@
 #include <filesystem>
 #include <string>
 
-static const std::string DEFAULT_SESSION_PATH = "default.session.json";
+// The no-arg default session. Named default.json (not default.session.json): it is
+// auto-created on first run (and auto-migrated from a legacy ./default.session), the
+// same bootstrap role default.session played in the original trance.exe.
+static const std::string DEFAULT_SESSION_PATH = "default.json";
+// Its legacy textproto ancestor: auto-migrated to DEFAULT_SESSION_PATH on a no-arg
+// cold start when present (see main.cpp).
+static const std::string LEGACY_DEFAULT_SESSION_PATH = "default.session";
 static const std::string SYSTEM_CONFIG_PATH = "system.json";
 static const std::string TRANCE_EXE_PATH = "trance.exe";
 static const std::size_t MAXIMUM_STACK = 256;

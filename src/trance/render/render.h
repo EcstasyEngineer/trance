@@ -55,8 +55,17 @@ public:
   virtual bool update() = 0;
   virtual void render(const std::function<void(State)>& render_fn) = 0;
 
+  // Pre-display UI hook: runs after the scene is drawn but BEFORE the buffer swap, so a
+  // 2D UI (the F2 ImGui panels) composites onto the same frame it belongs to. Calling
+  // display() again outside render() instead double-swaps: the UI lands on the previous
+  // frame's back buffer, strobing the UI at half rate and ping-ponging the scene one
+  // frame back every other swap. Only ScreenRenderer honours it (VR renders per-eye and
+  // video export has no interactive window).
+  void set_ui_hook(std::function<void()> hook) { _ui_hook = std::move(hook); }
+
 protected:
   std::unique_ptr<sf::RenderWindow> _window;
+  std::function<void()> _ui_hook;
 };
 
 class ScreenRenderer : public Renderer
