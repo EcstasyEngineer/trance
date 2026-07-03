@@ -409,6 +409,13 @@ void OffsetCycler::reset()
 
 void OffsetCycler::advance(bool trigger_actions)
 {
+  // Mirror the other cyclers' wrap discipline so position()/progress stay inside
+  // [0, length) across repeats. Only the counter wraps -- the child wraps itself on
+  // its own advance(), and a full reset() here would re-run advance_to_offset() and
+  // double-shift the phase every cycle.
+  if (complete()) {
+    _position = 0;
+  }
   ++_position;
   _subcycle->advance(trigger_actions);
 }

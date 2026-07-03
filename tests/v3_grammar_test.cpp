@@ -444,9 +444,11 @@ pattern burster for 512f {
         check(burst_node->length == 512, "burst: length takes the enclosing pattern's span");
         check(burst_node->burst_period == 8, "burst: period param");
         check(burst_node->burst_chance_den == 24, "burst: chance 1/24 -> chance_den 24");
-        check(burst_node->burst_cooldown == 32, "burst: cooldown param");
-        check(burst_node->burst_dur_min == 32 && burst_node->burst_dur_max == 96,
-              "burst: duration min..max params");
+        // Authored in frames, stored in period TICKS (BurstCycler's FSM only steps on
+        // period boundaries): 32f/8f = 4 ticks, 96f/8f = 12 ticks -- issue #28 finding 2.
+        check(burst_node->burst_cooldown == 4, "burst: cooldown 32f -> 4 ticks at period 8f");
+        check(burst_node->burst_dur_min == 4 && burst_node->burst_dur_max == 12,
+              "burst: duration 32f..96f -> 4..12 ticks at period 8f");
         check(burst_node->effects.size() == 1 && burst_node->burst_effects.size() == 1,
               "burst: base block -> effects, burst block -> burst_effects (one each)");
         check(!burst_node->id.empty(), "burst: `-> rapid` mints a stable node id");
@@ -947,6 +949,86 @@ pattern mantra_pulse for beats 16 {
               "simple: zoom rides the image's own 64f life (got " + std::to_string(early_z) +
                   " -> " + std::to_string(late_z) + ")");
       }
+    }
+  }
+
+  // 7. Runtime-unit regressions (issue #28 findings 2 + 3).
+  {
+    // 7a. Burst cooldown/duration are authored in FRAMES but BurstCycler counts period
+    //     TICKS -- the parser must convert (`duration 16f` at period 8f = 2 ticks = 16
+    //     frames, not 16 ticks = 128 frames). chance 1/1 makes entry deterministic
+    //     (random_chance(1) always hits), so the first burst starts at the first tick.
+    auto pr = parse(R"(
+pattern p for 512f {
+  burst period 8f chance 1/1 cooldown 32f duration 16f {
+    base  { image concept }
+    burst { word concept }
+  }
+})");
+    check(pr.ok, std::string("burst units: parses") + (pr.ok ? "" : (" -- " + pr.error)));
+    if (pr.ok) {
+      pattern::NodeMap node_map;
+      Cycler* compiled = pattern::compile(pr.root, pattern::MakeAction{}, node_map);
+      // Find the Burst cycler in the tree.
+      const Cycler* burst = nullptr;
+      std::vector<const Cycler*> stack{compiled};
+      while (!stack.empty()) {
+        const Cycler* c = stack.back();
+        stack.pop_back();
+        if (std::string(c->type_name()) == "Burst") burst = c;
+        for (const Cycler* k : c->children()) stack.push_back(k);
+      }
+      check(burst != nullptr, "burst units: burst cycler found in compiled tree");
+      if (burst) {
+        uint32_t first_burst_frames = 0, cooldown_frames = 0;
+        bool in_first = false, first_done = false;
+        for (uint32_t f = 0; f < 512 && !(first_done && burst->index() == 1); ++f) {
+          compiled->advance();
+          if (burst->index() == 1 && !first_done) {
+            in_first = true;
+            ++first_burst_frames;
+          } else if (in_first) {
+            in_first = false;
+            first_done = true;
+            ++cooldown_frames;
+          } else if (first_done) {
+            ++cooldown_frames;
+          }
+        }
+        check(first_burst_frames == 16,
+              "burst units: `duration 16f` lasts 16 frames (got " +
+                  std::to_string(first_burst_frames) + ")");
+        check(cooldown_frames >= 32,
+              "burst units: `cooldown 32f` holds >= 32 frames before the next burst (got " +
+                  std::to_string(cooldown_frames) + ")");
+      }
+      delete compiled;
+    }
+
+    // 7b. OffsetCycler wraps: an `offset` lane's position()/progress must stay inside
+    //     [0, length] across many cycles (it previously ran away past length forever,
+    //     breaking .progress/.active introspection on offset lanes).
+    pr = parse("pattern p for 128f { every 32f offset 16f { image concept } }");
+    check(pr.ok, std::string("offset wrap: parses") + (pr.ok ? "" : (" -- " + pr.error)));
+    if (pr.ok) {
+      pattern::NodeMap node_map;
+      Cycler* compiled = pattern::compile(pr.root, pattern::MakeAction{}, node_map);
+      const Cycler* off = nullptr;
+      std::vector<const Cycler*> stack{compiled};
+      while (!stack.empty()) {
+        const Cycler* c = stack.back();
+        stack.pop_back();
+        if (std::string(c->type_name()) == "Offset") off = c;
+        for (const Cycler* k : c->children()) stack.push_back(k);
+      }
+      check(off != nullptr, "offset wrap: offset cycler found in compiled tree");
+      bool bounded = true;
+      for (uint32_t f = 0; f < 5 * 128 && off; ++f) {
+        compiled->advance();
+        bounded = bounded && off->position() <= off->length();
+      }
+      check(bounded, "offset wrap: position stays within [0, length] over 5 cycles");
+      delete compiled;
     }
   }
 

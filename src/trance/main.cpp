@@ -159,7 +159,7 @@ struct CommandRuntimeState {
 
 std::string execute_command(const command_protocol::ParsedCommand& cmd, Director& director,
                             Audio* audio, const ThemeBank& themes, AppUi* app_ui,
-                            CommandRuntimeState& state,
+                            bool screenshot_supported, CommandRuntimeState& state,
                             const std::chrono::steady_clock::time_point& start_time)
 {
   using command_protocol::Verb;
@@ -255,6 +255,12 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
     app_ui->set_visible(cmd.verb == Verb::kUiOn);
     return command_protocol::format_ok();
   case Verb::kScreenshot:
+    // Only ack when a hook that will actually consume the request is installed
+    // (realtime screen renderer) -- an `ok` that never writes a file is a lie
+    // (issue #28 finding 1).
+    if (!screenshot_supported) {
+      return command_protocol::format_err("screenshot: unavailable in this mode (VR/export)");
+    }
     state.screenshot_path = cmd.value;
     return command_protocol::format_ok("writing " + cmd.value + " after the next frame");
   case Verb::kUnknown:
@@ -267,12 +273,14 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
 // each one, and replies exactly once per command -- spec sec 3 ("always exactly one line
 // back per command line in"). Render-thread only (see CommandRuntimeState comment above).
 void handle_commands(CommandChannel& channel, Director& director, Audio* audio,
-                     const ThemeBank& themes, AppUi* app_ui, CommandRuntimeState& state,
+                     const ThemeBank& themes, AppUi* app_ui, bool screenshot_supported,
+                     CommandRuntimeState& state,
                      const std::chrono::steady_clock::time_point& start_time)
 {
   for (const auto& command : channel.drain()) {
     auto parsed = command_protocol::parse_command(command.line);
-    auto reply = execute_command(parsed, director, audio, themes, app_ui, state, start_time);
+    auto reply = execute_command(parsed, director, audio, themes, app_ui, screenshot_supported,
+                                 state, start_time);
     channel.reply(command.conn_id, reply);
   }
 }
@@ -417,7 +425,8 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
     }
     command_state.screenshot_path.clear();
   };
-  if (realtime && !director.vr_enabled()) {
+  const bool screenshot_supported = realtime && !director.vr_enabled();
+  if (screenshot_supported) {
     renderer->set_ui_hook([&] {
       if (app_ui) {
         app_ui->render(renderer->window());
@@ -473,7 +482,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       // main.cpp's per-frame loop, right after handle_events").
       if (command_channel) {
         handle_commands(*command_channel, director, audio.get(), *theme_bank, app_ui.get(),
-                        command_state, command_start_time);
+                        screenshot_supported, command_state, command_start_time);
       }
 
       // TODO: should sleep rather than spinning.
@@ -594,7 +603,11 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       // scene draw and the buffer swap -- exactly one display() per iteration. (The old
       // shape displayed twice: UI strobed at half rate and the scene ping-ponged one
       // frame back every other swap.)
-      const bool do_render = update || !realtime || app_ui != nullptr;
+      // A pending screenshot forces a render even when nothing else would repaint
+      // (paused with no UI, e.g. overlay mode) -- the verb already ack'd, so the
+      // hook must get a frame to consume it (issue #28 finding 1).
+      const bool do_render =
+          update || !realtime || app_ui != nullptr || !command_state.screenshot_path.empty();
       if (app_ui && do_render) {
         app_ui->update(renderer->window(), ui_clock.restart(), director, audio.get(),
                        *theme_bank);

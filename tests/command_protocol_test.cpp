@@ -154,6 +154,25 @@ int main()
   check(command_protocol::format_err("unknown verb: x") == "err unknown verb: x",
        "format_err(msg) prepends 'err '");
 
+  // ui / screenshot -- the debug/validation verbs (issue #28 finding 1 coverage).
+  {
+    auto c = command_protocol::parse_command("ui on");
+    check(c.ok && c.verb == Verb::kUiOn, "'ui on' parses");
+    c = command_protocol::parse_command("ui off");
+    check(c.ok && c.verb == Verb::kUiOff, "'ui off' parses");
+    c = command_protocol::parse_command("ui");
+    check(!c.ok, "'ui' without on|off rejects with usage");
+    c = command_protocol::parse_command("ui sideways");
+    check(!c.ok, "'ui sideways' rejects");
+    c = command_protocol::parse_command("screenshot /tmp/x.png");
+    check(c.ok && c.verb == Verb::kScreenshot && c.value == "/tmp/x.png",
+          "'screenshot PATH' parses with the path in value");
+    c = command_protocol::parse_command("screenshot");
+    check(!c.ok, "'screenshot' without a path rejects with usage");
+    c = command_protocol::parse_command("screenshot a b");
+    check(!c.ok, "'screenshot' with extra args rejects");
+  }
+
   // clamp01 -- shared by intensity/overlay-opacity.
   check(command_protocol::clamp01(-5.f) == 0.f, "clamp01(-5) == 0");
   check(command_protocol::clamp01(5.f) == 1.f, "clamp01(5) == 1");

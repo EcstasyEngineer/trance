@@ -1141,6 +1141,20 @@ namespace
       }
       if (!have_period) throw ParseError{"burst needs a `period`", _c.pos()};
 
+      // The surface authors cooldown/duration in FRAMES (`cooldown 64f`), but
+      // BurstCycler counts PERIOD TICKS (it only steps its FSM on period boundaries).
+      // Convert here -- round up, minimum one tick for a non-zero value -- so the
+      // runtime honors the authored units: `cooldown 64f` at `period 8f` is 8 ticks,
+      // not 64 ticks (512 frames), which is how the first shipped version behaved.
+      auto to_ticks = [&](uint32_t frames) -> uint32_t {
+        if (frames == 0) return 0;
+        const uint32_t ticks = (frames + period - 1) / period;
+        return ticks ? ticks : 1;
+      };
+      cooldown = to_ticks(cooldown);
+      dur_min = to_ticks(dur_min);
+      dur_max = to_ticks(dur_max);
+
       _clocks.push_back({clkname, cid});
 
       std::vector<Effect> base_effects, burst_effects, enter_effects;
