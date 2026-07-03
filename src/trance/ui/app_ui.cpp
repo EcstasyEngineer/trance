@@ -42,12 +42,16 @@ namespace
 
 AppUi::AppUi(trance_pb::Session& session, const std::string& session_path,
              SessionJsonSidecar& sidecar, std::function<void()> on_program_change,
-             std::function<trance_pb::Program*()> active_program)
+             std::function<trance_pb::Program*()> active_program,
+             std::function<std::pair<bool, float>()> get_overlay,
+             std::function<void(bool, float)> set_overlay)
 : _session{session}
 , _session_path{session_path}
 , _sidecar{sidecar}
 , _on_program_change{std::move(on_program_change)}
 , _active_program{std::move(active_program)}
+, _get_overlay{std::move(get_overlay)}
+, _set_overlay{std::move(set_overlay)}
 {
   // Seed Save As with the loaded path so "tweak the filename" is the common case.
   std::snprintf(_save_as_buf, sizeof(_save_as_buf), "%s", session_path.c_str());
@@ -141,6 +145,9 @@ void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Au
   }
   if (ImGui::CollapsingHeader("Session")) {
     draw_session_section();
+  }
+  if (ImGui::CollapsingHeader("Overlay")) {
+    draw_overlay_section();
   }
   if (ImGui::CollapsingHeader("Entrainment")) {
     draw_entrainment_section(audio);
@@ -490,6 +497,33 @@ void AppUi::save_session_to(const std::string& path)
   } catch (const std::exception& e) {
     _save_status = std::string("error: ") + e.what();
     _save_error = true;
+  }
+}
+
+void AppUi::draw_overlay_section()
+{
+  // #27 live overlay toggle. This section only reads/writes main.cpp's
+  // CommandRuntimeState (via the constructor callbacks); the main loop's apply seam
+  // -- the same one the #21 `overlay on|off|opacity` verbs go through -- pushes the
+  // change onto the actual window, so this panel and the command channel can never
+  // disagree about the state.
+  //
+  // The warning renders ALWAYS (before the user turns the overlay on), because once
+  // it's on this panel can no longer be clicked.
+  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.75f, 0.3f, 1.f));
+  ImGui::TextWrapped(
+      "Warning: while the overlay is on, the window ignores the mouse entirely (that's "
+      "the point) -- this panel can't be clicked to turn it back off. Keyboard (F2/Esc) "
+      "keeps working only until focus moves to another window. Reliable off-switches: "
+      "`overlay off` over the command channel (--command_port), or Ctrl+C.");
+  ImGui::PopStyleColor();
+
+  auto [on, opacity] = _get_overlay();
+  bool changed = ImGui::Checkbox("click-through overlay", &on);
+  // Always shown; while the overlay is on, opacity changes apply live each frame.
+  changed |= ImGui::SliderFloat("opacity", &opacity, 0.05f, 1.f, "%.2f");
+  if (changed) {
+    _set_overlay(on, opacity);
   }
 }
 

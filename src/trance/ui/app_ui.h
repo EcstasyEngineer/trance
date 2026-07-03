@@ -22,6 +22,10 @@
 //   - Session: loaded path, Save (back to that path) and Save As, via
 //     save_session(session, path, sidecar) so pattern files / scan-dir themes
 //     round-trip instead of being frozen inline.
+//   - Overlay: live click-through overlay toggle + opacity slider (#27). Reads/writes
+//     main.cpp's CommandRuntimeState via the get_overlay/set_overlay callbacks; the
+//     main loop's apply seam (shared with the #21 `overlay ...` verbs) pushes changes
+//     onto the actual window.
 //   - Entrainment: mute toggle (Audio::ToggleMute). No volume slider: Audio exposes
 //     only a global mute (sf::Listener::setGlobalVolume 0/100 in ToggleMute), not a
 //     settable gain -- see the handoff note in draw_entrainment_section.
@@ -32,6 +36,7 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sf
@@ -63,10 +68,15 @@ public:
   // ThemeBank/Director (the same pair the playlist-switch path calls) so live edits
   // apply. `active_program` resolves the mutable active program in session's
   // program_map, or nullptr when the built-in default fallback is playing (the
-  // Program section disables itself in that case).
+  // Program section disables itself in that case). `get_overlay`/`set_overlay`
+  // read/write the live overlay state (on, opacity) -- main.cpp wires them to
+  // CommandRuntimeState's two overlay fields, and its per-frame apply seam pushes
+  // any change onto the actual window (#27).
   AppUi(trance_pb::Session& session, const std::string& session_path,
         SessionJsonSidecar& sidecar, std::function<void()> on_program_change,
-        std::function<trance_pb::Program*()> active_program);
+        std::function<trance_pb::Program*()> active_program,
+        std::function<std::pair<bool, float>()> get_overlay,
+        std::function<void(bool, float)> set_overlay);
   ~AppUi();
 
   AppUi(const AppUi&) = delete;
@@ -108,6 +118,7 @@ private:
   void draw_program_section();
   void draw_themes_section();
   void draw_session_section();
+  void draw_overlay_section();
   void draw_entrainment_section(Audio* audio);
   // Save (with sidecar) to `path`, recording a transient status line either way.
   void save_session_to(const std::string& path);
@@ -117,6 +128,8 @@ private:
   SessionJsonSidecar& _sidecar;
   std::function<void()> _on_program_change;
   std::function<trance_pb::Program*()> _active_program;
+  std::function<std::pair<bool, float>()> _get_overlay;
+  std::function<void(bool, float)> _set_overlay;
 
   bool _visible = false;
   bool _initialized = false;

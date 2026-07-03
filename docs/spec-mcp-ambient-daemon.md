@@ -127,10 +127,11 @@ Playback lifecycle:
 - **`pause`** — freeze the current frame; program state retained.
 - **`resume`** — un-freeze after `pause`.
 
-Overlay (forward-reference: the consumer is issue #27's click-through overlay window; that
-overlay is not built by this spec, only its two knobs are exposed here):
-- **`overlay on`** / **`overlay off`** — toggle the overlay layer.
-- **`overlay opacity VALUE`** — `VALUE` in `0..1`, clamped.
+Overlay (live, drives issue #27's click-through overlay on the running window):
+- **`overlay on`** / **`overlay off`** — apply/clear the overlay hints at runtime: on makes
+  the window click-through, translucent and always-on-top; off restores a normal window.
+- **`overlay opacity VALUE`** — `VALUE` in `0..1`, clamped; applies live while the overlay
+  is on.
 
 Intensity:
 - **`intensity VALUE`** — `VALUE` in `0..1`, clamped. A single global multiplier concept, not
@@ -194,8 +195,8 @@ the runtime or as a daemon.**
    `status` line, get an `ok ...` reply. (No effects yet.)
 2. **Drain + verb dispatch** in `main.cpp`'s loop; wire `start`/`stop`/`pause`/`resume`.
    Test each over the socket.
-3. **`overlay on|off` / `overlay opacity`** — wire to the overlay's on/off + opacity state
-   (issue #27 is the consumer of the overlay itself; this spec only exposes the two knobs).
+3. **`overlay on|off` / `overlay opacity`** — wire to the live overlay toggle (#27):
+   apply/clear the click-through/translucency hints on the running window.
 4. **`intensity VALUE`** — wire to whatever global scaling hook exists at implementation
    time (see §4 note on TBD wiring).
 5. **`set KEY VALUE` / `get KEY`** — wire to the settings surface current at implementation
@@ -233,8 +234,9 @@ these verbs, indistinguishable on the wire from a shell script.
 - **Fixed v0 verb set** (§4): `start`/`stop`/`pause`/`resume`, `overlay on|off`/
   `overlay opacity`, `intensity`, `set`/`get`, `load pattern`/`load session`, `status`. No
   verb is added speculatively.
-- **Overlay is a forward reference to issue #27** (click-through overlay window); this spec
-  exposes the on/off + opacity knobs only, does not build the overlay.
+- **Overlay verbs drive issue #27's click-through overlay live**: `overlay on|off` /
+  `overlay opacity` apply/clear the hints on the running window at runtime (same seam the
+  F2 UI's Overlay section uses).
 - **Settings keys are TBD** pending the `.session`-to-JSON migration happening this sprint;
   this spec fixes the `set KEY VALUE` / `get KEY` verb shape, not the key names.
 - **MCP integration is an external, separate process**, out of this repo's scope (§8).
