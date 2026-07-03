@@ -22,22 +22,25 @@
 namespace
 {
 #if defined(__linux__)
-  // v0 overlay wiring (#27) on top of the X11 groundwork from #20. All of this is a
-  // no-op (returns without touching anything) if we're not actually on an X11 session
-  // (e.g. Wayland-only, or DISPLAY unset) -- overlay mode then degrades gracefully to
-  // an always-on-top borderless window without click-through or translucency, rather
-  // than crashing.
-  void apply_x11_overlay_hints(sf::WindowHandle handle, float opacity)
+  // Overlay wiring (#27) on top of the X11 groundwork from #20, now runtime-toggleable
+  // (apply_overlay_hints/clear_overlay_hints below). All of this is a no-op (returns
+  // without touching anything) if we're not actually on an X11 session (e.g. Wayland-
+  // only, or DISPLAY unset) -- overlay mode then degrades gracefully to an always-on-top
+  // borderless window without click-through or translucency, rather than crashing.
+  Display* x11_open_overlay_display()
   {
     Display* display = XOpenDisplay(nullptr);
     if (!display) {
       std::cerr << "overlay mode: couldn't open X11 display (Wayland-only session?); "
                 << "click-through and translucency hints skipped" << std::endl;
-      return;
     }
-    Window window = static_cast<Window>(handle);
+    return display;
+  }
 
-    // Whole-window translucency. No per-pixel alpha in SFML 2.6 -- see OverlayConfig.
+  // Whole-window translucency. No per-pixel alpha in SFML's default visual -- see
+  // OverlayConfig.
+  void x11_write_opacity(Display* display, Window window, float opacity)
+  {
     Atom opacity_atom = XInternAtom(display, "_NET_WM_WINDOW_OPACITY", False);
     if (opacity_atom != None) {
       auto value = static_cast<unsigned long>(
@@ -45,72 +48,179 @@ namespace
       XChangeProperty(display, window, opacity_atom, XA_CARDINAL, 32, PropModeReplace,
                       reinterpret_cast<unsigned char*>(&value), 1);
     }
+  }
 
-    // Skip taskbar/pager + always-above, so the overlay doesn't clutter window
-    // switchers and stays on top of normal windows.
-    Atom state_atom = XInternAtom(display, "_NET_WM_STATE", False);
-    Atom skip_taskbar_atom = XInternAtom(display, "_NET_WM_STATE_SKIP_TASKBAR", False);
-    Atom skip_pager_atom = XInternAtom(display, "_NET_WM_STATE_SKIP_PAGER", False);
-    Atom above_atom = XInternAtom(display, "_NET_WM_STATE_ABOVE", False);
-    if (state_atom != None) {
-      Atom states[3];
-      int count = 0;
-      if (skip_taskbar_atom != None) {
-        states[count++] = skip_taskbar_atom;
-      }
-      if (skip_pager_atom != None) {
-        states[count++] = skip_pager_atom;
-      }
-      if (above_atom != None) {
-        states[count++] = above_atom;
-      }
-      if (count) {
-        XChangeProperty(display, window, state_atom, XA_ATOM, 32, PropModeReplace,
-                        reinterpret_cast<unsigned char*>(states), count);
-      }
-    }
-
-    // Empty input shape: the window still receives no input at all, so clicks/keys
-    // fall through to whatever is beneath it on the desktop.
+  // click_through = true installs an EMPTY input shape (the window receives no input
+  // at all; clicks/keys fall through to whatever is beneath it on the desktop);
+  // false restores the default full-window input region (None mask + ShapeSet).
+  void x11_set_click_through(Display* display, Window window, bool click_through)
+  {
     int shape_event_base = 0, shape_error_base = 0;
-    if (XShapeQueryExtension(display, &shape_event_base, &shape_error_base)) {
-      XShapeCombineRectangles(display, window, ShapeInput, 0, 0, nullptr, 0, ShapeSet, 0);
-    } else {
+    if (!XShapeQueryExtension(display, &shape_event_base, &shape_error_base)) {
       std::cerr << "overlay mode: X11 Shape extension unavailable; window will not be "
                 << "click-through" << std::endl;
+      return;
     }
+    if (click_through) {
+      XShapeCombineRectangles(display, window, ShapeInput, 0, 0, nullptr, 0, ShapeSet, 0);
+    } else {
+      XShapeCombineMask(display, window, ShapeInput, 0, 0, None, ShapeSet);
+    }
+  }
 
+  // The _NET_WM_STATE atoms overlay mode toggles: skip taskbar/pager (don't clutter
+  // window switchers) + always-above (stay on top of normal windows). Fills `atoms`,
+  // returns how many resolved.
+  int x11_overlay_state_atoms(Display* display, Atom (&atoms)[3])
+  {
+    int count = 0;
+    for (const char* name :
+         {"_NET_WM_STATE_SKIP_TASKBAR", "_NET_WM_STATE_SKIP_PAGER", "_NET_WM_STATE_ABOVE"}) {
+      Atom atom = XInternAtom(display, name, False);
+      if (atom != None) {
+        atoms[count++] = atom;
+      }
+    }
+    return count;
+  }
+
+  // Runtime path: the window is already MAPPED, so per EWMH the states must be changed
+  // with a _NET_WM_STATE ClientMessage sent to the root window -- the WM only honours
+  // direct property writes on not-yet-mapped windows. data.l[0]: 1 = _NET_WM_STATE_ADD,
+  // 0 = _NET_WM_STATE_REMOVE.
+  void x11_send_wm_state(Display* display, Window window, bool add)
+  {
+    Atom state_atom = XInternAtom(display, "_NET_WM_STATE", False);
+    if (state_atom == None) {
+      return;
+    }
+    Atom atoms[3];
+    int count = x11_overlay_state_atoms(display, atoms);
+    // Each ClientMessage carries up to two atoms (data.l[1] / data.l[2]).
+    for (int i = 0; i < count; i += 2) {
+      XEvent event = {};
+      event.xclient.type = ClientMessage;
+      event.xclient.window = window;
+      event.xclient.message_type = state_atom;
+      event.xclient.format = 32;
+      event.xclient.data.l[0] = add ? 1 : 0;
+      event.xclient.data.l[1] = static_cast<long>(atoms[i]);
+      event.xclient.data.l[2] = i + 1 < count ? static_cast<long>(atoms[i + 1]) : 0;
+      event.xclient.data.l[3] = 1;  // source indication: normal application
+      XSendEvent(display, DefaultRootWindow(display), False,
+                 SubstructureRedirectMask | SubstructureNotifyMask, &event);
+    }
+  }
+
+  // Startup path (ScreenRenderer constructor, --overlay): the window is NOT yet mapped
+  // (setVisible(false) until init()), so the states are written directly as a property
+  // and the WM picks them up at map time. Opacity + input shape are shared with the
+  // runtime path and work either way.
+  void apply_x11_overlay_hints_at_startup(sf::WindowHandle handle, float opacity)
+  {
+    Display* display = x11_open_overlay_display();
+    if (!display) {
+      return;
+    }
+    Window window = static_cast<Window>(handle);
+    x11_write_opacity(display, window, opacity);
+    Atom state_atom = XInternAtom(display, "_NET_WM_STATE", False);
+    if (state_atom != None) {
+      Atom atoms[3];
+      int count = x11_overlay_state_atoms(display, atoms);
+      if (count) {
+        XChangeProperty(display, window, state_atom, XA_ATOM, 32, PropModeReplace,
+                        reinterpret_cast<unsigned char*>(atoms), count);
+      }
+    }
+    x11_set_click_through(display, window, true);
     XFlush(display);
     XCloseDisplay(display);
   }
+#endif
+}
+
+// Runtime overlay toggle (#27): both callable on a live, mapped window from the main
+// loop (main.cpp's apply seam, fed by the #21 `overlay ...` verbs and the F2 UI's
+// Overlay section). apply_overlay_hints() is idempotent -- calling it again while
+// already on just rewrites the opacity, which is exactly the live-opacity-change path.
+void apply_overlay_hints(sf::WindowHandle handle, float opacity)
+{
+#if defined(__linux__)
+  Display* display = x11_open_overlay_display();
+  if (!display) {
+    return;
+  }
+  Window window = static_cast<Window>(handle);
+  x11_write_opacity(display, window, opacity);
+  x11_send_wm_state(display, window, true);
+  x11_set_click_through(display, window, true);
+  XFlush(display);
+  XCloseDisplay(display);
 #elif defined(_WIN32)
   // UNVALIDATED: no Windows box in this environment to test against. Mirrors the X11
   // path's intent (always-on-top, uniform translucency, click-through) via the
-  // documented WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST combination. Wire up
-  // and test on an actual Windows machine before relying on this for #27 there.
-  void apply_win32_overlay_hints(sf::WindowHandle handle, float opacity)
-  {
-    HWND hwnd = handle;
-    LONG_PTR ex_style = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
-    ex_style |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW;
-    SetWindowLongPtr(hwnd, GWL_EXSTYLE, ex_style);
-    SetLayeredWindowAttributes(
-        hwnd, 0, static_cast<BYTE>(std::clamp(opacity, 0.f, 1.f) * 255.f), LWA_ALPHA);
-    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-  }
+  // documented WS_EX_LAYERED | WS_EX_TRANSPARENT combination. SWP_FRAMECHANGED because
+  // at runtime the ex-style just changed under a live window. Test on an actual
+  // Windows machine before relying on this for #27 there.
+  HWND hwnd = handle;
+  LONG_PTR ex_style = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+  ex_style |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW;
+  SetWindowLongPtr(hwnd, GWL_EXSTYLE, ex_style);
+  SetLayeredWindowAttributes(
+      hwnd, 0, static_cast<BYTE>(std::clamp(opacity, 0.f, 1.f) * 255.f), LWA_ALPHA);
+  SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+#else
+  (void)handle;
+  (void)opacity;
 #endif
+}
+
+void clear_overlay_hints(sf::WindowHandle handle)
+{
+#if defined(__linux__)
+  Display* display = x11_open_overlay_display();
+  if (!display) {
+    return;
+  }
+  Window window = static_cast<Window>(handle);
+  Atom opacity_atom = XInternAtom(display, "_NET_WM_WINDOW_OPACITY", False);
+  if (opacity_atom != None) {
+    XDeleteProperty(display, window, opacity_atom);
+  }
+  x11_send_wm_state(display, window, false);
+  x11_set_click_through(display, window, false);
+  XFlush(display);
+  XCloseDisplay(display);
+#elif defined(_WIN32)
+  // UNVALIDATED (see apply_overlay_hints). Restore full alpha before stripping
+  // WS_EX_LAYERED, then drop the overlay ex-styles and the topmost bit.
+  HWND hwnd = handle;
+  SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+  LONG_PTR ex_style = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+  ex_style &= ~static_cast<LONG_PTR>(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW);
+  SetWindowLongPtr(hwnd, GWL_EXSTYLE, ex_style);
+  SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+#else
+  (void)handle;
+#endif
+}
 
 #if defined(__linux__)
-  // X11/Xlib.h #defines plain identifiers (None, Bool, Status, Success, ...) that
-  // collide with sf::Style::None and friends used below. apply_x11_overlay_hints()
-  // above is the only place that needs the X11 macros, so undef them here rather than
-  // avoiding the names project-wide.
+// X11/Xlib.h #defines plain identifiers (None, Bool, Status, Success, ...) that
+// collide with sf::Style::None and friends used below. The overlay-hint code above is
+// the only place that needs the X11 macros, so undef them here rather than avoiding
+// the names project-wide.
 #undef None
 #undef Bool
 #undef Status
 #undef Success
 #endif
 
+namespace
+{
   void compile_shader(GLuint shader)
   {
     glCompileShader(shader);
@@ -221,9 +331,13 @@ ScreenRenderer::ScreenRenderer(const trance_pb::System& system, const OverlayCon
 
   if (overlay.enabled) {
 #if defined(__linux__)
-    apply_x11_overlay_hints(_window->getNativeHandle(), overlay.opacity);
+    // Startup variant: the window is still unmapped here (setVisible(false) above), so
+    // _NET_WM_STATE goes on as a direct property write; the WM reads it when init()
+    // maps the window. The runtime toggle path uses ClientMessages instead.
+    apply_x11_overlay_hints_at_startup(_window->getNativeHandle(), overlay.opacity);
 #elif defined(_WIN32)
-    apply_win32_overlay_hints(_window->getNativeHandle(), overlay.opacity);
+    // Win32 ex-styles work the same mapped or unmapped -- one path for both.
+    apply_overlay_hints(_window->getNativeHandle(), overlay.opacity);
 #endif
   }
 

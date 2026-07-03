@@ -142,11 +142,11 @@ void print_info(double elapsed_seconds, uint64_t frames, uint64_t total_frames)
 // raw lines; only this function (running on the render thread) touches Director/Audio.
 // `paused` gates start/stop/pause/resume (director.update()/theme_bank->advance_frames()
 // simply don't run while paused -- "keep it boring" per the spec's own framing, sec 1).
-// `intensity`/`overlay_on`/`overlay_opacity` are stub state: the spec (sec 4) explicitly
-// scopes intensity's actual wiring as TBD and overlay on/off/opacity as a forward reference
-// to issue #27's not-yet-built overlay window, so both verbs are implemented in full at the
-// protocol level and store their value here for that future consumer to read -- see the
-// handoff note in the final report.
+// `intensity` is still stub state: the spec (sec 4) explicitly scopes its actual wiring
+// as TBD, so the verb is protocol-complete and just stores the value here for a future
+// consumer. `overlay_on`/`overlay_opacity` are LIVE (#27): the verbs (and the F2 UI's
+// Overlay section) only write these two fields; play_session()'s per-frame apply seam
+// reconciles the real window against them via apply_overlay_hints/clear_overlay_hints.
 struct CommandRuntimeState {
   bool paused = false;
   float intensity = 1.f;
@@ -313,6 +313,11 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
     }
   }
   CommandRuntimeState command_state;
+  // Seed the live overlay state from the startup flags so `status` reports --overlay
+  // mode correctly and the first runtime toggle diffs against reality (see the apply
+  // seam in the main loop below).
+  command_state.overlay_on = overlay.enabled;
+  command_state.overlay_opacity = overlay.opacity;
   const auto command_start_time = std::chrono::steady_clock::now();
 
   struct PlayStackEntry {
@@ -396,7 +401,18 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       theme_bank->set_program(program());
       director.set_program(program());
     };
-    app_ui.reset(new AppUi(session, session_path, sidecar, on_program_change, active_program));
+    // Overlay callbacks (#27): the UI's Overlay section reads/writes the same two
+    // CommandRuntimeState fields the `overlay ...` verbs use; the apply seam in the
+    // main loop below is the single place either path touches the actual window.
+    auto get_overlay = [&command_state] {
+      return std::make_pair(command_state.overlay_on, command_state.overlay_opacity);
+    };
+    auto set_overlay = [&command_state](bool on, float opacity) {
+      command_state.overlay_on = on;
+      command_state.overlay_opacity = opacity;
+    };
+    app_ui.reset(new AppUi(session, session_path, sidecar, on_program_change, active_program,
+                           get_overlay, set_overlay));
     if (!app_ui->init(renderer->window())) {
       std::cerr << "warning: ImGui-SFML init failed; F2 UI unavailable this run" << std::endl;
       app_ui.reset();
@@ -448,6 +464,13 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   }
   std::cout << std::endl << "-> " << session.first_playlist_item() << std::endl;
 
+  // #27 live overlay: what's actually applied to the window right now, seeded from the
+  // startup flags. The #21 `overlay` verbs and the F2 UI's Overlay section only write
+  // command_state; the apply seam in the loop below diffs against these two and pushes
+  // any change onto the native window.
+  bool overlay_applied = overlay.enabled;
+  float overlay_opacity_applied = overlay.opacity;
+
   try {
     uint64_t elapsed_export_frames = 0;
     uint64_t async_update_residual = 0;
@@ -483,6 +506,23 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       if (command_channel) {
         handle_commands(*command_channel, director, audio.get(), *theme_bank, app_ui.get(),
                         screenshot_supported, command_state, command_start_time);
+      }
+      // #27 live overlay apply seam: the single reconcile point for BOTH the #21
+      // `overlay on|off|opacity` verbs and the F2 UI's Overlay section (each only
+      // writes command_state above). Realtime only -- export mode has no real
+      // window to overlay.
+      if (realtime &&
+          (command_state.overlay_on != overlay_applied ||
+           (command_state.overlay_on &&
+            command_state.overlay_opacity != overlay_opacity_applied))) {
+        if (command_state.overlay_on) {
+          apply_overlay_hints(renderer->window().getNativeHandle(),
+                              command_state.overlay_opacity);
+        } else {
+          clear_overlay_hints(renderer->window().getNativeHandle());
+        }
+        overlay_applied = command_state.overlay_on;
+        overlay_opacity_applied = command_state.overlay_opacity;
       }
 
       // TODO: should sleep rather than spinning.

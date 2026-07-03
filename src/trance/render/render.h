@@ -6,6 +6,7 @@
 
 #pragma warning(push, 0)
 #include <GL/glew.h>
+#include <SFML/Window/WindowHandle.hpp>
 #pragma warning(pop)
 
 namespace sf
@@ -30,6 +31,16 @@ struct OverlayConfig {
   // 0 (fully transparent) .. 1 (fully opaque). Applies to the whole window uniformly.
   float opacity = 0.35f;
 };
+
+// Runtime overlay toggle (#27): callable on a live, MAPPED window from the main loop.
+// apply_overlay_hints() turns the window into a click-through translucent always-on-top
+// overlay (idempotent -- calling it again while already on just rewrites the opacity,
+// which is the live opacity-change path); clear_overlay_hints() restores a normal
+// interactive window. The --overlay startup path (ScreenRenderer constructor) shares
+// the same underlying hint code but writes _NET_WM_STATE as a property because that
+// window isn't mapped yet.
+void apply_overlay_hints(sf::WindowHandle handle, float opacity);
+void clear_overlay_hints(sf::WindowHandle handle);
 
 class Renderer
 {
