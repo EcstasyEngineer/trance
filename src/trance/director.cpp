@@ -299,6 +299,12 @@ void Director::render_spiral(float spiral, uint32_t spiral_width, uint32_t spira
 
 void Director::render_image(const Image& image, float alpha, float zoom_origin, float zoom) const
 {
+  if (!image) {
+    // An empty image (failed load / theme with nothing drawable) must not
+    // draw: zero dimensions make the scale maths NaN and texture 0 renders a
+    // black quad over the frame.
+    return;
+  }
   GLuint position_buffer;
   glGenBuffers(1, &position_buffer);
   std::vector<float> position_data;

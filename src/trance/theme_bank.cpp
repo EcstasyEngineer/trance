@@ -86,6 +86,7 @@ ThemeBank::ThemeBank(const std::string& root_path, const trance_pb::Session& ses
   }
   _all_animations.insert(_all_animations.begin(), all_animation_paths.begin(),
                          all_animation_paths.end());
+  _animation_dead.assign(_all_animations.size(), false);
 
   // Set up data for each theme.
   for (const auto& pair : session.theme_map()) {
@@ -245,12 +246,19 @@ Image ThemeBank::get_image(bool alternate)
   {
     std::lock_guard<std::mutex> lock{theme.load_mutex};
     index = theme.image_shuffler.next();
-    if (!_all_images[index].image) {
-      return {};
+    if (index < _all_images.size() && _all_images[index].image) {
+      do_video_upload(*_all_images[index].image);
+      image = *_all_images[index].image;
     }
-    do_video_upload(*_all_images[index].image);
-    image = *_all_images[index].image;
   }
+  auto& last_good = _last_good_image[alternate ? 1 : 0];
+  if (!image) {
+    // Nothing drawable right now (e.g. every image in the theme failed to
+    // load, or the shuffler fell through to an unloaded slot). Repeat the last
+    // good image rather than handing back an empty one that draws black.
+    return last_good ? last_good : get_animation(alternate);
+  }
+  last_good = image;
   _last_images.push_back(index);
   for (auto& other_theme : _themes) {
     std::lock_guard<std::mutex> lock{other_theme->load_mutex};
@@ -501,19 +509,30 @@ void ThemeBank::do_load(ThemeInfo& theme)
   auto& image = _all_images[index];
   // Could store spare capacity due to duplicated images and load more. Might
   // get a bit confusing though.
-  if (!image.use_count++) {
+  if (!image.use_count++ && !image.failed) {
     image.image.reset(new Image{load_image(_root_path + "/" + image.path)});
-  }
-  // Don't try to load again if it failed.
-  if (!*image.image) {
-    for (auto& other_theme : _themes) {
-      other_theme->load_shuffler.modify(index, -static_cast<int32_t>(last_image_count));
+    if (!*image.image) {
+      // Mark it dead: never retry the file, and never put the blank image in
+      // the draw shuffler (it used to poison the slot with a black texture).
+      // Also strip the base priority every theme image gets in image_shuffler
+      // at construction -- otherwise the dead index still competes with
+      // recently-drawn healthy images and starves rotation on small themes.
+      image.failed = true;
+      image.image.reset();
+      for (auto& other_theme : _themes) {
+        other_theme->load_shuffler.modify(index, -static_cast<int32_t>(last_image_count));
+        std::lock_guard<std::mutex> lock{other_theme->load_mutex};
+        other_theme->image_shuffler.modify(index, -static_cast<int32_t>(last_image_count));
+      }
     }
   }
-  {
+  if (!image.failed) {
     std::lock_guard<std::mutex> lock{theme.load_mutex};
     theme.image_shuffler.increase(index);
   }
+  // Failed loads still count towards loaded_size/loaded_index so the theme-swap
+  // bookkeeping (all_loaded / do_unload) stays symmetric; they just never
+  // become drawable.
   ++theme.loaded_size;
 }
 
@@ -526,12 +545,12 @@ void ThemeBank::do_unload(ThemeInfo& theme)
   theme.load_shuffler.increase(index);
   theme.loaded_index.erase(theme.loaded_index.begin());
 
-  {
+  auto& image = _all_images[index];
+  if (!image.failed) {
     std::lock_guard<std::mutex> lock{theme.load_mutex};
     theme.image_shuffler.decrease(index);
   }
-  auto& image = _all_images[index];
-  if (!--image.use_count) {
+  if (!--image.use_count && image.image) {
     _purge_mutex.lock();
     _purgeable_images.push_back(image.image->get_sf_image());
     _purge_mutex.unlock();
@@ -544,14 +563,19 @@ std::unique_ptr<Streamer> ThemeBank::do_load_animation(bool alternate)
 {
   auto& theme = *_active_themes[alternate ? 2 : 1].load();
   auto index = theme.animation_shuffler.next();
-  if (index >= _all_animations.size()) {
+  if (index >= _all_animations.size() || _animation_dead[index]) {
     return {};
   }
 
   auto streamer = load_animation(_root_path + "/" + _all_animations[index]);
-  int32_t amount = -1;
   if (!streamer || !streamer->success()) {
-    // Don't try to load again if it failed.
+    // Mark it dead and don't try to load again: AsyncStreamer::async_update
+    // requests a replacement streamer every 10ms tick, so a retryable failure
+    // means reopening/reparsing the bad file ~100x/second (CPU spikes). Also
+    // never hand back a failed streamer -- advance_frame would immediately
+    // churn it out again, repeating the reload cycle.
+    _animation_dead[index] = true;
+    streamer.reset();
     for (auto& other_theme : _themes) {
       other_theme->animation_shuffler.modify(index, -5);
     }
