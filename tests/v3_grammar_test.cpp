@@ -20,6 +20,7 @@
 #include <trance/visual/pattern_parser_v3.h>
 #include <trance/visual/render_eval.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <iostream>
@@ -776,6 +777,175 @@ pattern mantra_pulse for beats 16 {
                        (pr.ok ? "" : (" -- " + pr.error)));
       if (pr.ok) {
         eval_render_block_at_frames(pr.root, pr.render_block, std::string("expr-eval ") + c.label);
+      }
+    }
+  }
+
+  // 6. Behavioral parity regressions (the 2026-07-02 display-validation batch). Each of these
+  //    encodes one user-visible regression against the original hand-written visuals, at the
+  //    level that broke: pacing distribution, zoom ranges, layer alphas, burst render gating.
+  {
+    // 6a. accelerate pacing: the ramp must RUSH off the slow end and DWELL at the fast end
+    //     (original: count = 1 + d^6/56^5, ~40%+ of runtime at cut lengths <= 16f, ~100+ cuts).
+    //     The `ease late` authoring regression inverted this: 46 cuts, ~3% of time at fast.
+    auto pr = parse(builtin::pattern_source_v3(1));
+    check(pr.ok, std::string("builtin accelerate: parses") + (pr.ok ? "" : (" -- " + pr.error)));
+    if (pr.ok) {
+      // Collect the ramp's sampled segment lengths: every Action leaf carrying an Image effect.
+      std::vector<uint32_t> segs;
+      std::vector<const pattern::Node*> stack{&pr.root};
+      while (!stack.empty()) {
+        const pattern::Node* n = stack.back();
+        stack.pop_back();
+        if (n->type == pattern::Node::Type::Action) {
+          for (const auto& e : n->effects) {
+            if (e.kind == pattern::Effect::Kind::Image) {
+              segs.push_back(n->length);
+              break;
+            }
+          }
+        }
+        for (const auto& c : n->children) stack.push_back(&c);
+      }
+      uint64_t total = 0, fast = 0;
+      for (uint32_t s : segs) {
+        total += s;
+        if (s <= 16) fast += s;
+      }
+      check(segs.size() >= 80, "accelerate: at least 80 cuts (got " + std::to_string(segs.size()) + ")");
+      check(total == 2772, "accelerate: segment lengths sum to the 2772f span");
+      check(total > 0 && 100 * fast / total >= 22,
+            "accelerate: >= 22% of runtime at fast (<= 16f) cuts, matching the original's ~25% (got " +
+                std::to_string(total ? 100 * fast / total : 0) + "%)");
+    }
+
+    // 6b. flash_text zoom cap: image zoom near 1.0 projects onto the near plane and the
+    //     mirror-tiled grid degenerates into a garbled mosaic (the "jigsaw" report). Evaluate
+    //     every image draw's zoom at every frame of a full run; none may exceed 0.85.
+    pr = parse(builtin::pattern_source_v3(4));
+    check(pr.ok, std::string("builtin flash_text: parses") + (pr.ok ? "" : (" -- " + pr.error)));
+    if (pr.ok) {
+      pattern::NodeMap node_map;
+      Cycler* compiled = pattern::compile(pr.root, pattern::MakeAction{}, node_map);
+      pattern::Registers regs;
+      double max_zoom = 0.0;
+      for (uint32_t f = 0; f < compiled->length(); ++f) {
+        compiled->advance();
+        for (const auto& st : pr.render_block) {
+          if (st.op != pattern::RenderStmt::Op::Image) continue;
+          if (!pattern::eval_cond_expr(st.when, regs, node_map, compiled)) continue;
+          max_zoom = std::max(max_zoom, pattern::eval_expr(st.zoom, 0.0, regs, node_map, compiled));
+        }
+      }
+      delete compiled;
+      check(max_zoom <= 0.85, "flash_text: image zoom stays <= 0.85 over a full run (jigsaw guard)");
+      check(max_zoom >= 0.7, "flash_text: zoom still reaches the original's ~0.8 peak");
+    }
+
+    // 6c. super_parallel layering: three image lanes with source-over alphas 1 / 0.5 / 0.33 and
+    //     two staggered offsets -- three full-alpha layers just show whichever drew last, which
+    //     was the "only one image at a time" regression.
+    pr = parse(builtin::pattern_source_v3(6));
+    check(pr.ok, std::string("builtin super_parallel: parses") + (pr.ok ? "" : (" -- " + pr.error)));
+    if (pr.ok) {
+      std::vector<double> alphas;
+      pattern::Registers regs;
+      pattern::NodeMap node_map;
+      Cycler* compiled = pattern::compile(pr.root, pattern::MakeAction{}, node_map);
+      for (const auto& st : pr.render_block) {
+        if (st.op == pattern::RenderStmt::Op::Image) {
+          alphas.push_back(pattern::eval_expr(st.alpha, 1.0, regs, node_map, compiled));
+        }
+      }
+      delete compiled;
+      std::sort(alphas.begin(), alphas.end());
+      check(alphas.size() == 3, "super_parallel: three image layers");
+      check(alphas.size() == 3 && alphas[0] < 0.4 && alphas[1] < 0.6 && alphas[2] == 1.0,
+            "super_parallel: source-over alpha stack ~{1, 0.5, 0.33}");
+      uint32_t offsets = 0;
+      std::vector<const pattern::Node*> stack{&pr.root};
+      while (!stack.empty()) {
+        const pattern::Node* n = stack.back();
+        stack.pop_back();
+        if (n->type == pattern::Node::Type::Off) ++offsets;
+        for (const auto& c : n->children) stack.push_back(&c);
+      }
+      check(offsets == 2, "super_parallel: two offset lanes (32f/64f stagger)");
+    }
+
+    // 6d. super_fast burst gating: the base cuts and the burst animation must be FSM-gated so
+    //     exactly one paints at any frame -- an ungated always-anim burst draw painted one
+    //     animation over the whole pattern (the "no cuts at all" regression). Also: the
+    //     animation is picked ONCE per burst (enter block), not re-rolled every period.
+    pr = parse(builtin::pattern_source_v3(8));
+    check(pr.ok, std::string("builtin super_fast: parses") + (pr.ok ? "" : (" -- " + pr.error)));
+    if (pr.ok) {
+      const pattern::RenderStmt* base_stmt = nullptr;
+      const pattern::RenderStmt* burst_stmt = nullptr;
+      for (const auto& st : pr.render_block) {
+        if (st.op != pattern::RenderStmt::Op::Image) continue;
+        (st.has_anim ? burst_stmt : base_stmt) = &st;
+      }
+      check(base_stmt && !base_stmt->has_anim, "super_fast: base draw is a still image");
+      check(burst_stmt && burst_stmt->has_anim, "super_fast: burst draw renders the animation");
+      const pattern::Node* burst_node = nullptr;
+      std::vector<const pattern::Node*> stack{&pr.root};
+      while (!stack.empty()) {
+        const pattern::Node* n = stack.back();
+        stack.pop_back();
+        if (n->type == pattern::Node::Type::Burst) burst_node = n;
+        for (const auto& c : n->children) stack.push_back(&c);
+      }
+      check(burst_node && burst_node->burst_enter_effects.size() == 1 &&
+                burst_node->burst_enter_effects[0].kind == pattern::Effect::Kind::Anim,
+            "super_fast: burst picks its animation once on entry (enter block)");
+      if (base_stmt && burst_stmt) {
+        pattern::NodeMap node_map;
+        Cycler* compiled = pattern::compile(pr.root, pattern::MakeAction{}, node_map);
+        pattern::Registers regs;
+        bool exclusive = true, saw_base = false, saw_burst = false;
+        for (uint32_t f = 0; f < compiled->length(); ++f) {
+          compiled->advance();
+          bool b = pattern::eval_cond_expr(base_stmt->when, regs, node_map, compiled);
+          bool a = pattern::eval_cond_expr(burst_stmt->when, regs, node_map, compiled);
+          exclusive = exclusive && (b != a);
+          saw_base = saw_base || b;
+          saw_burst = saw_burst || a;
+        }
+        delete compiled;
+        check(exclusive, "super_fast: base/burst draws are mutually exclusive every frame");
+        check(saw_base, "super_fast: the still-cut base actually paints");
+        // saw_burst is random-chance-driven; over 256 periods at 1/12 it is overwhelmingly
+        // likely, and asserting it guards the gate polarity (a flipped gate would never fire).
+        check(saw_burst, "super_fast: a burst fired and its animation painted");
+      }
+    }
+
+    // 6e. Per-image zoom motion (the universal "no zoom" regression): a builtin image draw's
+    //     zoom must GROW over one image's on-screen life -- a constant `zoom 0.5` reads as a
+    //     static magnification. simple's 64f cadence: zoom near frame 8 << zoom near frame 56.
+    pr = parse(builtin::pattern_source_v3(5));
+    check(pr.ok, std::string("builtin simple: parses") + (pr.ok ? "" : (" -- " + pr.error)));
+    if (pr.ok) {
+      const pattern::RenderStmt* img = nullptr;
+      for (const auto& st : pr.render_block) {
+        if (st.op == pattern::RenderStmt::Op::Image) img = &st;
+      }
+      check(img != nullptr, "simple: has an image draw");
+      if (img) {
+        auto zoom_at = [&](uint32_t frame) {
+          pattern::NodeMap node_map;
+          Cycler* compiled = pattern::compile(pr.root, pattern::MakeAction{}, node_map);
+          pattern::Registers regs;
+          for (uint32_t i = 0; i <= frame; ++i) compiled->advance();
+          double z = pattern::eval_expr(img->zoom, 0.0, regs, node_map, compiled);
+          delete compiled;
+          return z;
+        };
+        double early_z = zoom_at(8), late_z = zoom_at(56);
+        check(late_z > early_z + 0.2,
+              "simple: zoom rides the image's own 64f life (got " + std::to_string(early_z) +
+                  " -> " + std::to_string(late_z) + ")");
       }
     }
   }

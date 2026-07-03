@@ -409,13 +409,18 @@ namespace
           _c.word();
           const std::size_t eat = _c.pos();
           ease = _c.word();
-          if (ease != "linear" && ease != "late")
-            throw ParseError{"unknown ease '" + ease + "' (only linear|late)", eat};
+          if (ease != "linear" && ease != "late" && ease != "early")
+            throw ParseError{"unknown ease '" + ease + "' (only linear|late|early)", eat};
         }
         const std::string clk = parse_over();
-        // linear: A + (B-A)*p ; late: front-loaded dwell ~ A + (B-A)*p^3 (render_eval has ^).
-        const std::string p =
-            (ease == "late") ? ("(" + clk + ".progress ^ 3)") : (clk + ".progress");
+        // linear: A + (B-A)*p ; late: dwell at the START value ~ A + (B-A)*p^3 ;
+        // early: the mirror image, rush off the start and dwell at the END value ~
+        // A + (B-A)*(1-(1-p)^3). Cubic on both sides: for a once-per-sample ramp this
+        // reproduces the original accelerate's time-at-fast distribution (d^6-repeat
+        // curve: ~25% of runtime at <=16f cuts, ~38% at <=20f) -- quadratic gave 16%.
+        const std::string p = (ease == "late") ? ("(" + clk + ".progress ^ 3)")
+            : (ease == "early")               ? ("(1 - ((1 - " + clk + ".progress) ^ 3))")
+                                              : (clk + ".progress");
         result = "(" + fnum(a) + " + " + fnum(b - a) + " * " + p + ")";
       } else if (_c.next_is_digit()) {
         result = fnum(_c.number_lit());  // a literal modulator is a CONSTANT
@@ -578,6 +583,17 @@ namespace
         parse_audio(sink);
         return;
       }
+      // Standalone `anim <content>`: switch which animation the streamer plays, without
+      // pulling an image or drawing anything -- one-shot setup (e.g. a burst `enter`
+      // block picks the burst's animation once, instead of re-rolling it every period).
+      if (kw == "anim") {
+        _c.word();
+        const std::size_t cat = _c.pos();
+        Effect e = effect(Effect::Kind::Anim);
+        e.slot = content_to_slot(_c.word(), cat);
+        sink.push_back(e);
+        return;
+      }
       if (kw == "image" || kw == "word" || kw == "caption" || kw == "subtext" || kw == "draw") {
         parse_draw(span, sink);
         return;
@@ -685,7 +701,10 @@ namespace
       const std::size_t at = _c.pos();
       const std::string kw = _c.word();
 
-      // `draw REG`: draw an existing register without pulling a new image.
+      // `draw REG [params] [anim]`: draw an existing register without pulling a new
+      // image. Trailing `anim` renders the streamer's animation layer instead of the
+      // still (pure render -- no change-animation effect; pair with a standalone
+      // `anim <content>` statement, e.g. in a burst `enter` block, to pick WHICH).
       if (kw == "draw") {
         const std::size_t rat = _c.pos();
         const std::string ref = read_reg();
@@ -695,6 +714,10 @@ namespace
         rs.op = RenderStmt::Op::Image;
         rs.image_reg = qreg;
         parse_params(rs);
+        if (_c.peek_word() == "anim") {
+          _c.word();
+          rs.has_anim = true;
+        }
         push_render(rs);
         return;
       }
@@ -830,7 +853,9 @@ namespace
         // Sample at segment midpoints (i+0.5)/steps: matches how a `curve` reads a clock's
         // continuous progress rather than biasing toward either endpoint.
         const double p = (double(i) + 0.5) / double(steps);
-        const double eased = (ease == "late") ? (p * p * p) : p;
+        const double eased = (ease == "late") ? (p * p * p)
+            : (ease == "early")              ? (1.0 - (1.0 - p) * (1.0 - p) * (1.0 - p))
+                                             : p;
         raw[i] = double(a) + (double(b) - double(a)) * eased;
         raw_sum += raw[i];
       }
@@ -899,8 +924,8 @@ namespace
         _c.word();
         const std::size_t eat = _c.pos();
         ease = _c.word();
-        if (ease != "linear" && ease != "late")
-          throw ParseError{"unknown ease '" + ease + "' (only linear|late)", eat};
+        if (ease != "linear" && ease != "late" && ease != "early")
+          throw ParseError{"unknown ease '" + ease + "' (only linear|late|early)", eat};
       }
 
       std::string clkname;
@@ -946,7 +971,14 @@ namespace
         _c.seek(body_open);
         std::vector<Effect> leaf_effects;
         std::vector<Node> nested;
-        while (_c.pos() < body_close) {
+        for (;;) {
+          // peek_char first: it skips whitespace/comments, so a body whose last
+          // statement ends flush against trailing whitespace + '}' doesn't re-enter
+          // parse_statement on the gap and die on an empty keyword.
+          _c.peek_char();
+          if (_c.pos() >= body_close) {
+            break;
+          }
           parse_statement(len, leaf_effects, nested);
         }
 
@@ -1007,6 +1039,13 @@ namespace
         _c.expect('>');
         clkname = _c.word();
       }
+      // `offset Nf`: delay this lane's start by N frames (OffsetCycler) -- the staggered
+      // parallel-lane idiom (e.g. super_parallel's three image layers 32f apart).
+      uint32_t offset = 0;
+      if (_c.peek_word() == "offset") {
+        _c.word();
+        offset = parse_len();
+      }
       if (span != 0 && span % len != 0) {
         _warnings.push_back(loc(lat) + ": cadence " + std::to_string(len) +
                             " does not divide span " + std::to_string(span));
@@ -1025,6 +1064,13 @@ namespace
       apply_image_hint(leaf, leaf.effects);
       leaf.id = cid;
       Node node = (span != 0 && len != 0) ? repeat(span / len, std::move(leaf)) : std::move(leaf);
+      if (offset) {
+        Node off;
+        off.type = Node::Type::Off;
+        off.count = offset;
+        off.children.push_back(std::move(node));
+        node = std::move(off);
+      }
       // Fold any nested-pattern subtrees beside the cadence leaf (run in parallel).
       if (!nested.empty()) {
         nested.insert(nested.begin(), std::move(node));
@@ -1097,23 +1143,35 @@ namespace
 
       _clocks.push_back({clkname, cid});
 
-      std::vector<Effect> base_effects, burst_effects;
+      std::vector<Effect> base_effects, burst_effects, enter_effects;
       std::vector<Node> nested;  // `pattern`/`every` inside base/burst blocks, run alongside
       _c.expect('{');
       bool saw_base = false, saw_burst = false;
       while (_c.peek_char() != '}') {
         const std::size_t bat = _c.pos();
         const std::string bw = _c.word();
-        std::vector<Effect>& target = bw == "base"     ? (saw_base = true, base_effects)
-                                       : bw == "burst"  ? (saw_burst = true, burst_effects)
-                                                        : throw ParseError{
-                                                              "expected 'base' or 'burst' block",
-                                                              bat};
+        std::vector<Effect>& target = bw == "base"    ? (saw_base = true, base_effects)
+                                      : bw == "burst" ? (saw_burst = true, burst_effects)
+                                      : bw == "enter"
+                                          ? enter_effects
+                                          : throw ParseError{
+                                                "expected 'base', 'burst' or 'enter' block", bat};
+        const std::size_t render_before = _render.size();
         _c.expect('{');
         while (_c.peek_char() != '}') {
           parse_statement(span, target, nested);
         }
         _c.expect('}');
+        // Gate this block's draws on the burst FSM's state (NAME.index: 1 during a
+        // burst, else 0), so base draws stop painting during a burst and vice versa.
+        // Without this, a burst-block `image ... anim` paints its animation over the
+        // base cuts EVERY frame of the whole pattern (push_render's pattern-active gate
+        // alone can't tell the two blocks apart). `enter` draws count as burst-side.
+        const std::string gate = cid + (bw == "base" ? ".index == 0" : ".index >= 1");
+        for (std::size_t ri = render_before; ri < _render.size(); ++ri) {
+          auto& rs = _render[ri];
+          rs.when = rs.when.empty() ? gate : ("(" + rs.when + ") and " + gate);
+        }
       }
       _c.expect('}');
       if (!saw_base && !saw_burst)
@@ -1132,6 +1190,7 @@ namespace
       n.burst_dur_max = dur_max;
       n.effects = std::move(base_effects);
       n.burst_effects = std::move(burst_effects);
+      n.burst_enter_effects = std::move(enter_effects);
       // One combined hint across base+burst (apply_image_hint recomputes from scratch each
       // call, so two separate calls would let the second silently clobber the first instead of
       // merging -- pass both lists' effects together like any other single-effects-list node).

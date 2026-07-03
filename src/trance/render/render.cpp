@@ -279,5 +279,8 @@ void ScreenRenderer::render(const std::function<void(State)>& render_fn)
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   glClear(GL_COLOR_BUFFER_BIT);
   render_fn(State::NONE);
+  if (_ui_hook) {
+    _ui_hook();
+  }
   _window->display();
 }

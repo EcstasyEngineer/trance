@@ -69,13 +69,10 @@ public:
   void update(sf::RenderWindow& window, sf::Time dt, Director& director, Audio* audio,
              const ThemeBank& themes);
 
-  // Issues ImGui's GL draw calls into `window`'s currently-bound buffer. Must be
-  // called after the frame's scene has been drawn and BEFORE the frame's
-  // window.display() -- see the handoff note in main.cpp's play_session loop for why
-  // this wave's call site can't reach that point (Director/Renderer own the
-  // clear/draw/display sequence; ui/ can't inject a hook into it without touching
-  // director.cpp/render.cpp, which are outside this task's owned files). Until that
-  // seam exists, the UI necessarily composites one frame late (see main.cpp).
+  // Issues ImGui's GL draw calls into `window`'s currently-bound buffer. Runs via
+  // Renderer::set_ui_hook, after the frame's scene draw and before its display().
+  // No-op unless a matching update() started an ImGui frame this iteration (ImGui
+  // asserts on Render without a prior NewFrame).
   void render(sf::RenderWindow& window);
 
 private:
@@ -86,6 +83,8 @@ private:
   bool _visible = false;
   bool _initialized = false;
   bool _init_failed = false;
+  // An ImGui frame is open (update() ran, render() hasn't) -- pairs Update/Render.
+  bool _frame_started = false;
   // Last force_pattern_from_source() parse error, shown inline in the Visuals panel
   // until the next click. Empty when nothing failed.
   std::string _last_pattern_error;

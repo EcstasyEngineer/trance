@@ -84,12 +84,16 @@ namespace
       base_node.effects = n.effects;
       pattern::Node burst_node;
       burst_node.effects = n.burst_effects;
+      pattern::Node enter_node;
+      enter_node.effects = n.burst_enter_effects;
       std::function<void()> base = make_action ? make_action(base_node) : std::function<void()>{};
       std::function<void()> burst =
           make_action ? make_action(burst_node) : std::function<void()>{};
+      std::function<void()> enter =
+          make_action ? make_action(enter_node) : std::function<void()>{};
       BurstCycler::Params p{n.length,        n.burst_period,  n.burst_chance_den,
                             n.burst_cooldown, n.burst_dur_min, n.burst_dur_max};
-      c = new BurstCycler{p, base, burst};
+      c = new BurstCycler{p, base, burst, enter};
       break;
     }
     }

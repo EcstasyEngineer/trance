@@ -404,11 +404,15 @@ loop N { <body> }
 - **Modder note.** Repeats its body on a beat. Name it with `-> beat` so a zoom can ride
   that per-beat clock. For an accelerating/decelerating cadence, reach for `every ramp`
   (§4.10) instead of trying to feed a curve into `every`'s length.
+- **`offset Nf`** (after the optional `-> NAME`) delays the lane's start by N frames
+  (lowers to an `OffsetCycler` wrapper) — the staggered parallel-lane idiom, e.g.
+  `super_parallel`'s three image layers a third of a 96f cycle apart:
+  `every 96f offset 32f { image concept -> b alpha 0.5 zoom (curve 0 -> 0.875) }`.
 
 ### 4.10 `every ramp A -> B steps N [ease] [-> NAME]` — SHIPPED sampled ramp cadence
 
 ```
-every ramp <N>f -> <N>f steps <N> [ease (linear | late)] [-> NAME] { <body> }
+every ramp <N>f -> <N>f steps <N> [ease (linear | late | early)] [-> NAME] { <body> }
 ```
 
 - **What it's for.** A cadence whose per-flash length itself accelerates/decelerates —
@@ -451,6 +455,7 @@ every ramp <N>f -> <N>f steps <N> [ease (linear | late)] [-> NAME] { <body> }
 ```
 burst [-> NAME] period <N>f chance 1/<N> cooldown <N>f duration <N>f[..<N>f] {
   base  { <body> }
+  enter { <body> }   # optional: fires ONCE at each burst's start
   burst { <body> }
 }
 ```
@@ -473,6 +478,13 @@ burst [-> NAME] period <N>f chance 1/<N> cooldown <N>f duration <N>f[..<N>f] {
     with a bare fraction elsewhere).
   - `duration Af` (a single fixed duration) or `duration Af..Bf` (a min..max range) are both
     valid; `A..B` uses a literal `..` (two dots, no space required between them).
+  - **`enter { }`** (optional) fires once at each burst's START, before that tick's burst
+    action — one-shot setup like `anim runtime` (pick which animation this burst plays).
+    Effects that live in the per-tick `burst { }` block instead re-fire every `period`.
+  - **Draws are FSM-gated.** Render statements from the `base` block are additionally gated
+    on `NAME.index == 0` and those from `burst`/`enter` on `NAME.index >= 1`, so the base's
+    layers stop painting during a burst and vice versa. (Ungated, a burst-block
+    `image ... anim` painted its animation over the base cuts for the WHOLE pattern.)
 - **Lowering.** One `Node::Burst` (`n.burst_period/_chance_den/_cooldown/_dur_min/_dur_max`),
   `base { }`'s statements ⇒ `Node.effects`, `burst { }`'s statements ⇹ `Node.burst_effects`.
   Both blocks share the SAME enclosing pattern's clock scope — no separate clock/register
@@ -517,7 +529,7 @@ anim-param     ::= "anim" [ "every" <N> ("st"|"nd"|"rd"|"th") ]
 ```
 modulator ::= literal | curve | rawexpr   [ over NAME ]
 literal   ::= NUMBER
-curve     ::= curve NUMBER -> NUMBER [ ease (linear | late) ]
+curve     ::= curve NUMBER -> NUMBER [ ease (linear | late | early) ]
 rawexpr   ::= [ EXPR ]                  # this/self substituted
 ```
 
@@ -532,8 +544,11 @@ rawexpr   ::= [ EXPR ]                  # this/self substituted
   `beat` modulator (an implicit `Repeat(length=locked_frames)` clock) was never built — ride
   the beat's own clock instead by naming a cadence leaf (`every beats 1 -> beat { ... }`,
   §4.9) and writing `over beat`, or use `beats N` in a `for`/`every` length (§4.1).
-- **Only `linear` and `late` eases are implemented.** Any other ease word is a hard parse
-  error (do not silently fall back to linear).
+- **Only `linear`, `late` and `early` eases are implemented.** Any other ease word is a
+  hard parse error (do not silently fall back to linear). `late` is cubic dwell at the
+  START value (`p^3`); `early` is its mirror, rushing off the start and dwelling at the END
+  value (`1 - (1-p)^3`) — for a once-per-sample ramp this is what reproduces the original
+  accelerate's time-at-fast distribution (~25% of runtime at <=16f cuts).
 - **No runtime curve object** — curves are compile-time string sugar (recon-confirmed).
 
 ### 4.14 `audio` — grammar-driven THEME audio (issue #23, SHIPPED)
@@ -949,37 +964,47 @@ baked opacity ladder — every line the modder sees is
 
 ```
 pattern accelerate for 2772f {
-  every ramp 56f -> 12f steps 46 ease late -> cut {
-    image concept zoom 0.5
+  every ramp 56f -> 12f steps 120 ease early -> cut {
+    image concept zoom (curve 0 -> 0.5)
+    word concept chance 0.5
   }
-  spiral speed (curve 2 -> 6 over accelerate)
+  spiral speed (curve 1 -> 4 over accelerate)
 }
 ```
-46 steps is the exact count that makes the sampled segment durations sum to 2772f with zero
-rounding remainder to fold. Each cut is its own minted id (`cut_00`..`cut_45`); a bare
-modulator inside the ramp body (none here) would ride the ACTIVE cut's own clock. `spiral
-speed` reads `over accelerate` — the WHOLE pattern's parent clock, not any one segment — so
-the spin accelerates smoothly across the entire span independent of the ramp's per-segment
-granularity. This is the real, shipped version of the pre-ship §13.2 sketch.
+`ease early` (cubic, `1-(1-p)^3`) rushes the cut length off the slow end and dwells at the
+fast end — with once-per-sample segments this reproduces the original's `1 + d^6/56^5` repeat
+curve within a point or two (~26% of runtime at ≤16f cuts; `ease late` here was the shipped
+regression: 46 mostly-slow cuts and ~3% at fast). Each cut is its own minted id
+(`cut_000`..); the image's `zoom (curve 0 -> 0.5)` — a bare modulator inside the ramp body —
+rides the ACTIVE cut's own clock, so every image zooms over its own on-screen life at the
+current cut rate. `spiral speed` reads `over accelerate` — the WHOLE pattern's parent clock,
+not any one segment — so the spin accelerates smoothly across the entire span independent of
+the ramp's per-segment granularity. This is the real, shipped version of the pre-ship §13.2
+sketch.
 
 ### EX8 — `burst` random-interrupt cadence (the shipped `super_fast` built-in, §4.11)
 
 ```
 pattern super_fast for 2048f {
-  burst -> rapid period 8f chance 1/24 cooldown 32f duration 32f..96f {
-    base  { image runtime zoom 0.5 anim every 4th }
-    burst { image runtime zoom 0.5 anim }
+  burst -> rapid period 8f chance 1/12 cooldown 64f duration 64f..128f {
+    base  { image runtime zoom 0.15 }
+    enter { anim runtime }
+    burst { draw cur zoom 0.4 anim }
   }
   every 8f { word concept chance 0.25 }
   spiral speed 3
 }
 ```
-`base` cuts rapidly (every-4th-fire animates); roughly every 8f there's a 1-in-24 roll to
-enter a 32f..96f burst where every fire animates, then a 32f cooldown before the next roll is
-eligible. `-> rapid` mints an id so a render expr could read `rapid.index` (1 during the
-burst) if needed. This is the real, shipped version of the pre-ship §13.1 sketch — note the
-shipped syntax drops the sketch's `length 2048f` (redundant with the enclosing pattern's
-span) and moves `-> rapid` to right after `burst` (matching `every`'s `-> NAME` placement).
+`base` cuts a still image every 8f; roughly every 8f there's a 1-in-12 roll to enter a
+64f..128f burst, then a 64f cooldown before the next roll is eligible. On entry the `enter`
+block picks the burst's animation ONCE (`anim runtime` — a standalone anim statement, no
+image pull); the per-tick `burst` block then just renders it (`draw cur ... anim`, a pure
+render). Base and burst draws are FSM-gated on `rapid.index` so exactly one side paints at
+any frame — an ungated always-anim burst draw painted one animation over the whole pattern
+(the "no cuts at all" regression). This is the real, shipped version of the pre-ship §13.1
+sketch — note the shipped syntax drops the sketch's `length 2048f` (redundant with the
+enclosing pattern's span) and moves `-> rapid` to right after `burst` (matching `every`'s
+`-> NAME` placement).
 
 ### EX9 — `audio` phase-locked to the entrainment bed (issue #23, THE beats showcase)
 
@@ -1020,15 +1045,22 @@ len            ::= UINT "f" | "beats" UINT | "locked"    (* beats/locked hard-er
                                                               program has no pulsed bed *)
 body           ::= stmt*
 stmt           ::= pattern | cadence | burst | look
-                 | warp_stmt | spiral_stmt | copy_stmt | draw_stmt | audio_stmt
+                 | warp_stmt | spiral_stmt | copy_stmt | draw_stmt | audio_stmt | anim_stmt
+
+anim_stmt      ::= "anim" content
+                    (* standalone: switch WHICH animation the streamer plays (an
+                       Effect::Kind::Anim), no image pull, nothing drawn. One-shot setup --
+                       e.g. a burst `enter { anim runtime }` picks the burst's animation
+                       once; a `draw REG ... anim` then renders it. *)
 
 (* ---- look{} settings header (parse_look) — the ONLY settings surface ---- *)
 look           ::= "look" "{" look_prop* "}"
 look_prop      ::= "spiral" ( "type" "=" UINT )? ( "width" "=" UINT )?   (* either/both, any order *)
 
 (* ---- cadence (parse_cadence / parse_ramp_cadence) ---- *)
-cadence        ::= "every" len [ "->" NAME ] "{" body "}"
+cadence        ::= "every" len [ "->" NAME ] [ "offset" len ] "{" body "}"
                  | "every" ramp_len "{" body "}"
+                    (* `offset Nf` delays the lane's start: an OffsetCycler wrapper *)
 
 ramp_len       ::= "ramp" FLOAT "f" "-" ">" FLOAT "f"
                     "steps" UINT [ "ease" easeword ] [ "-" ">" NAME ]
@@ -1047,9 +1079,11 @@ burst          ::= "burst" [ "->" NAME ]
                     (* `period` is mandatory; the other three are optional and may appear in
                        any order (a for(;;) loop over peeked keywords). No `length` keyword —
                        length is always the enclosing pattern's span. *)
-burst_block    ::= ( "base" | "burst" ) "{" body "}"   (* same statement grammar as any body;
-                                                            both blocks share the enclosing
-                                                            pattern's clock/register scope *)
+burst_block    ::= ( "base" | "burst" | "enter" ) "{" body "}"
+                    (* same statement grammar as any body; all blocks share the enclosing
+                       pattern's clock/register scope. `enter` effects fire once at burst
+                       start. Draws are FSM-gated: base => NAME.index == 0, burst/enter =>
+                       NAME.index >= 1. *)
 
 (* ---- warp/drunk (parse_statement, kw=="warp"||"drunk") — SHIPPED, §4.6, supersedes §4.5 ---- *)
 warp_stmt      ::= "warp" ( "amplitude" modulator | "wavelength" modulator
@@ -1074,7 +1108,10 @@ audio_stmt     ::= "audio" content [ "loop" ] [ "volume" modulator ]
 (* ---- draws (parse_draw) ---- *)
 draw_stmt      ::= "image" content [ "-" ">" REG ] draw_param* anim_param? chance_param?
                  | ( "word" | "caption" | "subtext" ) content draw_param* chance_param?
-                 | "draw" REG draw_param*
+                 | "draw" REG draw_param* [ "anim" ]
+                    (* trailing `anim` on `draw`: render the animation stream layer instead
+                       of the still -- pure render, no change-animation effect (pair with a
+                       standalone anim_stmt to pick which); no `every Nth` form here. *)
 content        ::= "concept" | "reward" | "runtime"   (* Slot::Primary / Alternate / Runtime;
                                                             "runtime" resolves the theme at
                                                             fire time, not parse time *)
@@ -1097,7 +1134,8 @@ literal        ::= FLOAT                              (* a bare number: a CONSTA
 curve          ::= "curve" FLOAT "-" ">" FLOAT [ "ease" easeword ]
 rawexpr        ::= "[" EXPR "]"                        (* this/self substituted with the
                                                             resolved clock id *)
-easeword       ::= "linear" | "late"                   (* any other word is a hard parse error *)
+easeword       ::= "linear" | "late" | "early"         (* any other word is a hard parse error;
+                                                            late = p^3, early = 1-(1-p)^3 *)
 EXPR           ::= (* render_eval grammar, evaluated live each frame: ternary ?:, and/or,
                       compare (== != < > <= >=), arithmetic (+ - * / % ^, unary - and !),
                       min/max/abs, identifiers as <node-id>.(progress|frame|length|position|
