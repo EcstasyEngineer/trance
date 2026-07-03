@@ -1,7 +1,12 @@
 #include <trance/ui/app_ui.h>
+#include <common/session.h>
+#include <common/session_json.h>
 #include <trance/director.h>
 #include <trance/media/audio.h>
 #include <trance/theme_bank.h>
+#include <algorithm>
+#include <cstdio>
+#include <filesystem>
 #include <utility>
 #include <vector>
 
@@ -18,7 +23,7 @@ namespace
   // Program::VisualType value -> v3 built-in name. Mirrors main.cpp's
   // visual_name_table() (the --visual CLI table); kept local rather than shared
   // because main.cpp's table is deliberately private to that TU and this is a
-  // different consumer (click-to-force in the UI vs. a startup flag).
+  // different consumer (click-to-force + weight labels in the UI vs. a startup flag).
   const std::vector<std::pair<uint32_t, std::string>>& builtin_visual_table()
   {
     static const std::vector<std::pair<uint32_t, std::string>> table = {
@@ -33,6 +38,19 @@ namespace
     };
     return table;
   }
+}
+
+AppUi::AppUi(trance_pb::Session& session, const std::string& session_path,
+             SessionJsonSidecar& sidecar, std::function<void()> on_program_change,
+             std::function<trance_pb::Program*()> active_program)
+: _session{session}
+, _session_path{session_path}
+, _sidecar{sidecar}
+, _on_program_change{std::move(on_program_change)}
+, _active_program{std::move(active_program)}
+{
+  // Seed Save As with the loaded path so "tweak the filename" is the common case.
+  std::snprintf(_save_as_buf, sizeof(_save_as_buf), "%s", session_path.c_str());
 }
 
 AppUi::~AppUi()
@@ -76,11 +94,14 @@ void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Au
   }
   ImGui::SFML::Update(window, dt);
   _frame_started = true;
+  if (_save_status_ttl > 0.f) {
+    _save_status_ttl -= dt.asSeconds();
+  }
 
   // Hover-reveal corner icon (issue #24 item 1): a small always-on window sits in
-  // the bottom-right corner; hovering it reveals the full panel set below. This
-  // keeps the UI out of the way of the visuals when not in active use, without
-  // needing persisted state (NONE this wave -- see app_ui.h).
+  // the bottom-right corner; hovering it reveals the full panel below. This keeps
+  // the UI out of the way of the visuals when not in active use, without needing
+  // persisted state (NONE this wave -- see app_ui.h).
   const auto display_size = ImGui::GetIO().DisplaySize;
   const float icon_size = 28.f;
   const float margin = 10.f;
@@ -101,9 +122,30 @@ void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Au
     return;
   }
 
-  draw_entrainment_panel(audio);
-  draw_visuals_panel(director);
-  draw_status_panel(director, audio, themes);
+  // One window, top-left, with collapsing sections (the old three overlapping
+  // windows folded in). FirstUseEver so the user can still move/resize it.
+  ImGui::SetNextWindowPos(ImVec2(10.f, 10.f), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(ImVec2(420.f, 640.f), ImGuiCond_FirstUseEver);
+  ImGui::Begin("trance");
+  if (ImGui::CollapsingHeader("Status", ImGuiTreeNodeFlags_DefaultOpen)) {
+    draw_status_section(director, audio, themes);
+  }
+  if (ImGui::CollapsingHeader("Visuals", ImGuiTreeNodeFlags_DefaultOpen)) {
+    draw_visuals_section(director);
+  }
+  if (ImGui::CollapsingHeader("Program")) {
+    draw_program_section();
+  }
+  if (ImGui::CollapsingHeader("Themes")) {
+    draw_themes_section();
+  }
+  if (ImGui::CollapsingHeader("Session")) {
+    draw_session_section();
+  }
+  if (ImGui::CollapsingHeader("Entrainment")) {
+    draw_entrainment_section(audio);
+  }
+  ImGui::End();
 }
 
 void AppUi::render(sf::RenderWindow& window)
@@ -147,31 +189,36 @@ void AppUi::render(sf::RenderWindow& window)
   }
 }
 
-void AppUi::draw_entrainment_panel(Audio* audio)
+void AppUi::draw_status_section(Director& director, Audio* audio, const ThemeBank& themes)
 {
-  ImGui::Begin("Entrainment");
-  if (audio) {
-    bool muted = audio->Muted();
-    if (ImGui::Checkbox("Mute", &muted)) {
-      audio->ToggleMute();
-    }
-    // TODO(handoff): no volume slider. Audio only exposes a global on/off mute
-    // (ToggleMute -> sf::Listener::setGlobalVolume(0/100)); per-channel volume is
-    // driven by session AudioEvents / fades (audio.cpp), not a public setter. Add
-    // Audio::SetMasterVolume(float) (or similar) if a continuous slider is wanted,
-    // then wire it here -- out of scope for this skeleton (audio.{h,cpp} isn't an
-    // owned file this wave).
-    ImGui::TextDisabled("(volume slider: no setter on Audio yet, see handoff)");
+  // Reuses the same accessors draw_debug_overlay() (director.cpp, F1) reads --
+  // no new Director surface added for this section. ThemeBank is passed in directly
+  // from main.cpp's play_session() (which already owns it), rather than adding a
+  // new Director accessor for it.
+  const auto& program = director.program();
+  ImGui::Text("global fps (config): %u", program.global_fps());
+  ImGui::Text("vr enabled: %s", director.vr_enabled() ? "yes" : "no");
+  // TODO(handoff): "current visual name" (F1's overlay prints it via the private
+  // _last_visual_selection/_custom_visual_name) has no public Director accessor.
+  // Adding one is a one-line getter, but director.h/.cpp aren't owned files this
+  // wave -- leaving it out rather than editing outside scope.
+
+  auto snap = themes.debug_snapshot();
+  ImGui::Text("theme primary  : %s", snap.slots[1].valid ? snap.slots[1].name.c_str() : "(empty)");
+  ImGui::Text("theme alternate: %s", snap.slots[2].valid ? snap.slots[2].name.c_str() : "(empty)");
+
+  const auto& entrainment = program.entrainment();
+  if (entrainment.layer().empty()) {
+    ImGui::TextUnformatted("bed: (none)");
   } else {
-    // Null in export/video-render mode (see Director::set_audio's doc comment).
-    ImGui::TextDisabled("(no live audio -- export mode)");
+    float master_db = entrainment.master_db() != 0.f ? entrainment.master_db() : -28.f;
+    ImGui::Text("bed: %d layer(s), master %.1f dB%s", entrainment.layer_size(), master_db,
+               (audio && audio->Muted()) ? "  [MUTED]" : "");
   }
-  ImGui::End();
 }
 
-void AppUi::draw_visuals_panel(Director& director)
+void AppUi::draw_visuals_section(Director& director)
 {
-  ImGui::Begin("Visuals");
   ImGui::TextUnformatted("Built-ins (click to force now):");
   for (const auto& entry : builtin_visual_table()) {
     if (ImGui::Button(entry.second.c_str())) {
@@ -202,37 +249,245 @@ void AppUi::draw_visuals_panel(Director& director)
   if (!_last_pattern_error.empty()) {
     ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "parse error: %s", _last_pattern_error.c_str());
   }
-  ImGui::End();
 }
 
-void AppUi::draw_status_panel(Director& director, Audio* audio, const ThemeBank& themes)
+void AppUi::draw_program_section()
 {
-  ImGui::Begin("Status");
+  // Live edit of the ACTIVE program: mutations land in the session proto in place
+  // (map value addresses stay stable -- fields only, never map reorder/erase), then
+  // on_program_change re-pushes it into ThemeBank/Director, the same pair the
+  // playlist-switch path in play_session calls.
+  trance_pb::Program* program = _active_program ? _active_program() : nullptr;
+  if (!program) {
+    // The playlist item resolves to the built-in default program (no program_map
+    // entry) -- nothing in the session to edit.
+    ImGui::TextDisabled("(active program is the built-in default -- not editable)");
+    return;
+  }
+  bool changed = false;
 
-  // Reuses the same accessors draw_debug_overlay() (director.cpp, F1) reads --
-  // no new Director surface added for this panel. ThemeBank is passed in directly
-  // from main.cpp's play_session() (which already owns it), rather than adding a
-  // new Director accessor for it.
-  const auto& program = director.program();
-  ImGui::Text("global fps (config): %u", program.global_fps());
-  ImGui::Text("vr enabled: %s", director.vr_enabled() ? "yes" : "no");
-  // TODO(handoff): "current visual name" (F1's overlay prints it via the private
-  // _last_visual_selection/_custom_visual_name) has no public Director accessor.
-  // Adding one is a one-line getter, but director.h/.cpp aren't owned files this
-  // wave -- leaving it out rather than editing outside scope.
-
-  auto snap = themes.debug_snapshot();
-  ImGui::Text("theme primary  : %s", snap.slots[1].valid ? snap.slots[1].name.c_str() : "(empty)");
-  ImGui::Text("theme alternate: %s", snap.slots[2].valid ? snap.slots[2].name.c_str() : "(empty)");
-
-  const auto& entrainment = program.entrainment();
-  if (entrainment.layer().empty()) {
-    ImGui::TextUnformatted("bed: (none)");
-  } else {
-    float master_db = entrainment.master_db() != 0.f ? entrainment.master_db() : -28.f;
-    ImGui::Text("bed: %d layer(s), master %.1f dB%s", entrainment.layer_size(), master_db,
-               (audio && audio->Muted()) ? "  [MUTED]" : "");
+  int fps = static_cast<int>(program->global_fps());
+  if (ImGui::DragInt("global fps", &fps, 0.25f, 15, 240, "%d", ImGuiSliderFlags_AlwaysClamp)) {
+    program->set_global_fps(static_cast<uint32_t>(std::max(15, std::min(240, fps))));
+    changed = true;
   }
 
-  ImGui::End();
+  ImGui::Separator();
+  ImGui::TextUnformatted("Visual weights:");
+  for (int i = 0; i < program->visual_type_size(); ++i) {
+    auto* config = program->mutable_visual_type(i);
+    const char* label = nullptr;
+    for (const auto& entry : builtin_visual_table()) {
+      if (entry.first == static_cast<uint32_t>(config->type())) {
+        label = entry.second.c_str();
+        break;
+      }
+    }
+    char fallback[32];
+    if (!label) {
+      std::snprintf(fallback, sizeof(fallback), "type %d", static_cast<int>(config->type()));
+      label = fallback;
+    }
+    int weight = static_cast<int>(config->random_weight());
+    ImGui::PushID(i);
+    if (ImGui::SliderInt(label, &weight, 0, 10)) {
+      config->set_random_weight(static_cast<uint32_t>(weight));
+      changed = true;
+    }
+    ImGui::PopID();
+  }
+
+  ImGui::Separator();
+  ImGui::TextUnformatted("Colours:");
+  // mutable_ on an unset Colour materializes it zeroed -- same value the renderer
+  // was already reading through the const accessor, so no visible change until the
+  // user actually drags.
+  auto edit_colour = [&](const char* label, trance_pb::Colour* colour) {
+    float rgba[4] = {colour->r(), colour->g(), colour->b(), colour->a()};
+    if (ImGui::ColorEdit4(label, rgba)) {
+      colour->set_r(rgba[0]);
+      colour->set_g(rgba[1]);
+      colour->set_b(rgba[2]);
+      colour->set_a(rgba[3]);
+      changed = true;
+    }
+  };
+  edit_colour("main text", program->mutable_main_text_colour());
+  edit_colour("shadow text", program->mutable_shadow_text_colour());
+  edit_colour("spiral a", program->mutable_spiral_colour_a());
+  edit_colour("spiral b", program->mutable_spiral_colour_b());
+
+  if (changed && _on_program_change) {
+    _on_program_change();
+  }
+}
+
+void AppUi::draw_themes_section()
+{
+  // ThemeBank is built once at startup and has no live-rebuild path; image_path
+  // edits only take effect via Save + restart. Weight/enable edits DO live-apply
+  // (they go through ThemeBank::set_program like a playlist switch).
+  ImGui::TextDisabled("(content changes need restart)");
+  trance_pb::Program* program = _active_program ? _active_program() : nullptr;
+  if (!program) {
+    ImGui::TextDisabled("(active program is the built-in default -- weights not editable)");
+  }
+  bool changed = false;
+
+  // Protobuf map iteration order is unspecified (and can differ run to run); sort
+  // the names so rows don't jump around.
+  std::vector<std::string> names;
+  names.reserve(_session.theme_map().size());
+  for (const auto& pair : _session.theme_map()) {
+    names.push_back(pair.first);
+  }
+  std::sort(names.begin(), names.end());
+
+  for (const auto& name : names) {
+    ImGui::PushID(name.c_str());
+    if (program) {
+      // Find this theme's enabled_theme entry. enabled == entry with weight > 0;
+      // disabling keeps the entry at weight 0, matching ThemeBank::set_program.
+      trance_pb::Program::EnabledTheme* entry = nullptr;
+      for (int i = 0; i < program->enabled_theme_size(); ++i) {
+        if (program->enabled_theme(i).theme_name() == name) {
+          entry = program->mutable_enabled_theme(i);
+          break;
+        }
+      }
+      auto ensure_entry = [&]() -> trance_pb::Program::EnabledTheme* {
+        if (!entry) {
+          // Appending to the repeated field is safe: only the map VALUE addresses
+          // must stay stable for Director/ThemeBank, and they do.
+          entry = program->add_enabled_theme();
+          entry->set_theme_name(name);
+        }
+        return entry;
+      };
+      bool enabled = entry && entry->random_weight() > 0;
+      if (ImGui::Checkbox("##enabled", &enabled)) {
+        if (enabled) {
+          auto it = _theme_last_weight.find(name);
+          ensure_entry()->set_random_weight(it != _theme_last_weight.end() ? it->second : 1);
+        } else if (entry) {
+          _theme_last_weight[name] = entry->random_weight();
+          entry->set_random_weight(0);
+        }
+        changed = true;
+      }
+      ImGui::SameLine();
+      int weight = entry ? static_cast<int>(entry->random_weight()) : 0;
+      ImGui::SetNextItemWidth(120.f);
+      if (ImGui::SliderInt("##weight", &weight, 0, 10)) {
+        ensure_entry()->set_random_weight(static_cast<uint32_t>(weight));
+        changed = true;
+      }
+      ImGui::SameLine();
+    }
+
+    auto theme_it = _session.mutable_theme_map()->find(name);
+    if (ImGui::TreeNode(name.c_str())) {
+      // Image multiselect: checked == present in the theme's image_path. Unchecked
+      // paths stay in the per-run ever-seen cache so they can be re-checked (a
+      // re-check appends, so on-disk ordering may change after a save -- harmless,
+      // selection is random anyway).
+      auto& seen = _theme_seen_images[name];
+      for (const auto& path : theme_it->second.image_path()) {
+        if (std::find(seen.begin(), seen.end(), path) == seen.end()) {
+          seen.push_back(path);
+        }
+      }
+      if (seen.empty()) {
+        ImGui::TextDisabled("(no images)");
+      }
+      auto* image_paths = theme_it->second.mutable_image_path();
+      for (const auto& path : seen) {
+        bool present =
+            std::find(image_paths->begin(), image_paths->end(), path) != image_paths->end();
+        if (ImGui::Checkbox(path.c_str(), &present)) {
+          if (present) {
+            theme_it->second.add_image_path(path);
+          } else {
+            auto it = std::find(image_paths->begin(), image_paths->end(), path);
+            if (it != image_paths->end()) {
+              image_paths->erase(it);
+            }
+          }
+        }
+      }
+      ImGui::TreePop();
+    }
+    ImGui::PopID();
+  }
+
+  if (changed && _on_program_change) {
+    _on_program_change();
+  }
+}
+
+void AppUi::draw_session_section()
+{
+  ImGui::Text("loaded: %s", _session_path.c_str());
+  if (ImGui::Button("Save")) {
+    save_session_to(_session_path);
+  }
+  ImGui::SetNextItemWidth(-80.f);
+  ImGui::InputText("##save_as_path", _save_as_buf, sizeof(_save_as_buf));
+  ImGui::SameLine();
+  if (ImGui::Button("Save As")) {
+    save_session_to(_save_as_buf);
+  }
+  if (_save_status_ttl > 0.f && !_save_status.empty()) {
+    ImGui::TextColored(_save_error ? ImVec4(1.f, 0.4f, 0.4f, 1.f) : ImVec4(0.4f, 1.f, 0.4f, 1.f),
+                       "%s", _save_status.c_str());
+  }
+}
+
+void AppUi::save_session_to(const std::string& path)
+{
+  _save_status_ttl = 6.f;
+  if (path.empty()) {
+    _save_status = "error: empty path";
+    _save_error = true;
+    return;
+  }
+  try {
+    // The sidecar overload so pattern files / scan-dir themes round-trip instead of
+    // being frozen inline (session_json.cpp handles scan themes on save itself; no
+    // UI special-casing beyond the restart note in the Themes section).
+    save_session(_session, path, _sidecar);
+    // save_session_json doesn't check its output stream -- verify the file landed
+    // so an unwritable path reports as an error instead of a silent "saved".
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) {
+      _save_status = "error: couldn't write " + path;
+      _save_error = true;
+    } else {
+      _save_status = "saved " + path;
+      _save_error = false;
+    }
+  } catch (const std::exception& e) {
+    _save_status = std::string("error: ") + e.what();
+    _save_error = true;
+  }
+}
+
+void AppUi::draw_entrainment_section(Audio* audio)
+{
+  if (audio) {
+    bool muted = audio->Muted();
+    if (ImGui::Checkbox("Mute", &muted)) {
+      audio->ToggleMute();
+    }
+    // TODO(handoff): no volume slider. Audio only exposes a global on/off mute
+    // (ToggleMute -> sf::Listener::setGlobalVolume(0/100)); per-channel volume is
+    // driven by session AudioEvents / fades (audio.cpp), not a public setter. Add
+    // Audio::SetMasterVolume(float) (or similar) if a continuous slider is wanted,
+    // then wire it here -- out of scope this wave (audio.{h,cpp} isn't an owned
+    // file).
+    ImGui::TextDisabled("(volume slider: no setter on Audio yet, see handoff)");
+  } else {
+    // Null in export/video-render mode (see Director::set_audio's doc comment).
+    ImGui::TextDisabled("(no live audio -- export mode)");
+  }
 }

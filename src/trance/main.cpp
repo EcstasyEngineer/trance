@@ -1,6 +1,7 @@
 #include <common/common.h>
 #include <common/session.h>
 #include <common/session_archive.h>
+#include <common/session_json.h>
 #include <common/session_legacy.h>
 #include <common/util.h>
 #include <trance/director.h>
@@ -223,9 +224,10 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
     return command_protocol::format_ok();
   }
   case Verb::kLoadSession:
-    // No live session-swap path exists yet (play_session() takes its Session by const-ref
-    // at startup, not a target it can hot-reload) -- protocol-complete stub per the task
-    // brief's "implement the protocol + a stub wiring" instruction; see handoff note.
+    // No live session-swap path exists yet (play_session() binds one Session at startup;
+    // the F2 UI mutates it in place but nothing can replace it wholesale) -- protocol-
+    // complete stub per the task brief's "implement the protocol + a stub wiring"
+    // instruction; see handoff note.
     return command_protocol::format_err("load session: not yet supported (no live session "
                                         "reload path)");
   case Verb::kStatus: {
@@ -275,7 +277,13 @@ void handle_commands(CommandChannel& channel, Director& director, Audio* audio,
   }
 }
 
-void play_session(const std::string& root_path, const trance_pb::Session& session,
+// `session` is non-const (and `session_path`/`sidecar` are threaded through) for the F2
+// UI: its Program/Themes sections mutate the proto in place and its Session section saves
+// it back to disk with the sidecar (pattern files / scan-dir themes round-trip). Director/
+// ThemeBank keep their const refs -- in-place field mutation keeps map value addresses
+// stable, and the UI never reorders/erases map entries.
+void play_session(const std::string& root_path, trance_pb::Session& session,
+                  const std::string& session_path, SessionJsonSidecar& sidecar,
                   const trance_pb::System& system,
                   const std::map<std::string, std::string> variables,
                   const exporter_settings& settings,
@@ -361,7 +369,26 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
   std::unique_ptr<AppUi> app_ui;
   if (realtime && !overlay.enabled && !director.vr_enabled() &&
       AppUi::available(overlay.enabled)) {
-    app_ui.reset(new AppUi());
+    // Mutable mirror of the program() lambda above, for the UI's Program/Themes
+    // sections: resolves the ACTIVE program in the session's program_map, or nullptr
+    // when the built-in default fallback is playing (the panel disables itself).
+    auto active_program = [&]() -> trance_pb::Program* {
+      if (!stack.back().item->has_standard()) {
+        return nullptr;
+      }
+      auto it = session.mutable_program_map()->find(stack.back().item->standard().program());
+      if (it == session.mutable_program_map()->end()) {
+        return nullptr;
+      }
+      return &it->second;
+    };
+    // Live apply after a UI edit: the same ThemeBank/Director pair the playlist-
+    // switch path in the while-loop below calls.
+    auto on_program_change = [&] {
+      theme_bank->set_program(program());
+      director.set_program(program());
+    };
+    app_ui.reset(new AppUi(session, session_path, sidecar, on_program_change, active_program));
     if (!app_ui->init(renderer->window())) {
       std::cerr << "warning: ImGui-SFML init failed; F2 UI unavailable this run" << std::endl;
       app_ui.reset();
@@ -878,8 +905,11 @@ int main(int argc, char** argv)
 
   std::string session_path{argc >= 2 ? argv[1] : "./" + DEFAULT_SESSION_PATH};
   trance_pb::Session session;
+  // Loaded WITH the sidecar (pattern file paths / theme scan dirs) so the F2 UI's
+  // Save writes those back as references instead of freezing them inline.
+  SessionJsonSidecar sidecar;
   try {
-    session = load_session(session_path);
+    session = load_session(session_path, sidecar);
   } catch (std::runtime_error& e) {
     // An EXPLICITLY named session that fails to load (legacy .session needing
     // trance_convert, JSON typo, missing file) must be a fatal error -- silently playing
@@ -909,8 +939,10 @@ int main(int argc, char** argv)
       std::cout << "wrote ./" << DEFAULT_SESSION_PATH << std::endl;
       // Play what was WRITTEN, not the in-memory legacy proto: the JSON saver
       // normalizes Windows backslash media paths to forward slashes (spec sec 1),
-      // and the legacy-authored originals don't resolve on non-Windows.
-      session = load_session("./" + DEFAULT_SESSION_PATH);
+      // and the legacy-authored originals don't resolve on non-Windows. Reset the
+      // sidecar first -- the failed initial load may have partially filled it.
+      sidecar = SessionJsonSidecar{};
+      session = load_session("./" + DEFAULT_SESSION_PATH, sidecar);
     } catch (const std::runtime_error& save_error) {
       // Read-only directory: still playable this run, just not persisted.
       std::cerr << "couldn't write ./" << DEFAULT_SESSION_PATH << ": " << save_error.what()
@@ -952,7 +984,7 @@ int main(int argc, char** argv)
       }
     };
   }
-  play_session(root_path, session, system, variables, settings, visual_override, overlay,
-              uint16_t(FLAGS_command_port));
+  play_session(root_path, session, session_path, sidecar, system, variables, settings,
+              visual_override, overlay, uint16_t(FLAGS_command_port));
   return 0;
 }
