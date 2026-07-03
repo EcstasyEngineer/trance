@@ -24,6 +24,13 @@ namespace command_protocol
     kLoadPattern,
     kLoadSession,
     kStatus,
+    // Debug/validation verbs (not in the ambient-daemon spec's settings surface, but shaped
+    // the same): toggle the F2 ImGui panels remotely and dump the next rendered frame to a
+    // PNG -- together they make headless/display-locked validation possible (a controller
+    // can SEE what the app is drawing without keyboard access to the window).
+    kUiOn,
+    kUiOff,
+    kScreenshot,
   };
 
   struct ParsedCommand {

@@ -60,6 +60,8 @@ public:
 
   bool visible() const { return _visible; }
   void toggle() { _visible = !_visible; }
+  // Remote-controlled visibility (#21 `ui on|off`) -- same state F2 toggles.
+  void set_visible(bool visible) { _visible = visible; }
 
   // Forwarded from handle_events() so ImGui can see keyboard/mouse input while open.
   void process_event(sf::RenderWindow& window, const sf::Event& event);

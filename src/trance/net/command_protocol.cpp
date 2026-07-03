@@ -115,6 +115,21 @@ namespace command_protocol
       cmd.ok = false;
       cmd.error = "usage: load pattern|session FILE";
       return cmd;
+    } else if (verb == "ui" && tokens.size() == 2 && tokens[1] == "on") {
+      cmd.verb = Verb::kUiOn;
+    } else if (verb == "ui" && tokens.size() == 2 && tokens[1] == "off") {
+      cmd.verb = Verb::kUiOff;
+    } else if (verb == "ui") {
+      cmd.ok = false;
+      cmd.error = "usage: ui on|off";
+      return cmd;
+    } else if (verb == "screenshot" && tokens.size() == 2) {
+      cmd.verb = Verb::kScreenshot;
+      cmd.value = tokens[1];
+    } else if (verb == "screenshot") {
+      cmd.ok = false;
+      cmd.error = "usage: screenshot FILE.png";
+      return cmd;
     } else {
       cmd.ok = false;
       cmd.error = "unknown verb: " + verb;

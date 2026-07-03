@@ -151,10 +151,14 @@ struct CommandRuntimeState {
   float intensity = 1.f;
   bool overlay_on = false;
   float overlay_opacity = 0.35f;
+  // `screenshot PATH`: consumed by the renderer's pre-display hook (which sees the fully
+  // composited back buffer) on the next rendered frame; empty = nothing pending.
+  std::string screenshot_path;
 };
 
 std::string execute_command(const command_protocol::ParsedCommand& cmd, Director& director,
-                            Audio* audio, const ThemeBank& themes, CommandRuntimeState& state,
+                            Audio* audio, const ThemeBank& themes, AppUi* app_ui,
+                            CommandRuntimeState& state,
                             const std::chrono::steady_clock::time_point& start_time)
 {
   using command_protocol::Verb;
@@ -241,6 +245,16 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
     }
     return command_protocol::format_ok(out.str());
   }
+  case Verb::kUiOn:
+  case Verb::kUiOff:
+    if (!app_ui) {
+      return command_protocol::format_err("ui: unavailable in this mode (overlay/VR/export)");
+    }
+    app_ui->set_visible(cmd.verb == Verb::kUiOn);
+    return command_protocol::format_ok();
+  case Verb::kScreenshot:
+    state.screenshot_path = cmd.value;
+    return command_protocol::format_ok("writing " + cmd.value + " after the next frame");
   case Verb::kUnknown:
     break;
   }
@@ -251,12 +265,12 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
 // each one, and replies exactly once per command -- spec sec 3 ("always exactly one line
 // back per command line in"). Render-thread only (see CommandRuntimeState comment above).
 void handle_commands(CommandChannel& channel, Director& director, Audio* audio,
-                     const ThemeBank& themes, CommandRuntimeState& state,
+                     const ThemeBank& themes, AppUi* app_ui, CommandRuntimeState& state,
                      const std::chrono::steady_clock::time_point& start_time)
 {
   for (const auto& command : channel.drain()) {
     auto parsed = command_protocol::parse_command(command.line);
-    auto reply = execute_command(parsed, director, audio, themes, state, start_time);
+    auto reply = execute_command(parsed, director, audio, themes, app_ui, state, start_time);
     channel.reply(command.conn_id, reply);
   }
 }
@@ -353,8 +367,36 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
       app_ui.reset();
     }
   }
-  if (app_ui) {
-    renderer->set_ui_hook([&] { app_ui->render(renderer->window()); });
+  // The hook also serves the `screenshot` verb: it runs after the scene (and ImGui) draw
+  // but before the buffer swap, so glReadPixels sees the exact composited frame -- works
+  // even when the physical display is locked or there's no compositor to grab from.
+  auto save_pending_screenshot = [&] {
+    if (command_state.screenshot_path.empty()) {
+      return;
+    }
+    const auto size = renderer->window().getSize();
+    std::vector<std::uint8_t> pixels(std::size_t{size.x} * size.y * 4);
+    glReadPixels(0, 0, GLsizei(size.x), GLsizei(size.y), GL_RGBA, GL_UNSIGNED_BYTE,
+                 pixels.data());
+    // GL reads bottom-up; sf::Image wants top-down.
+    std::vector<std::uint8_t> flipped(pixels.size());
+    const std::size_t stride = std::size_t{size.x} * 4;
+    for (std::size_t y = 0; y < size.y; ++y) {
+      std::copy_n(pixels.data() + (size.y - 1 - y) * stride, stride, flipped.data() + y * stride);
+    }
+    sf::Image image{sf::Vector2u{size.x, size.y}, flipped.data()};
+    if (!image.saveToFile(command_state.screenshot_path)) {
+      std::cerr << "screenshot: couldn't write " << command_state.screenshot_path << std::endl;
+    }
+    command_state.screenshot_path.clear();
+  };
+  if (realtime && !director.vr_enabled()) {
+    renderer->set_ui_hook([&] {
+      if (app_ui) {
+        app_ui->render(renderer->window());
+      }
+      save_pending_screenshot();
+    });
   }
   sf::Clock ui_clock;
 
@@ -403,8 +445,8 @@ void play_session(const std::string& root_path, const trance_pb::Session& sessio
       // after handle_events (spec sec 3: "Parse + dispatch happens in the drain loop --
       // main.cpp's per-frame loop, right after handle_events").
       if (command_channel) {
-        handle_commands(*command_channel, director, audio.get(), *theme_bank, command_state,
-                        command_start_time);
+        handle_commands(*command_channel, director, audio.get(), *theme_bank, app_ui.get(),
+                        command_state, command_start_time);
       }
 
       // TODO: should sleep rather than spinning.
