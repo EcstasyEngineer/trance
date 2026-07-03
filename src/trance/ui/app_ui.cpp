@@ -122,6 +122,29 @@ void AppUi::render(sf::RenderWindow& window)
   glBindBuffer(GL_ARRAY_BUFFER, 0);
   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
   ImGui::SFML::Render(window);
+
+  // Repair imgui-sfml 3.0's dynamic font-atlas updates (imgui 1.92 rasterizes glyphs on
+  // demand and ships them as dirty sub-rects). Its WantUpdates path uploads each rect via
+  // sf::Texture::update, which expects TIGHTLY-PACKED pixels -- but ImTextureData's
+  // GetPixelsAt points into the full-stride atlas, so every partial glyph upload shears
+  // ("missingno" text; boxes/separators stay clean because the white texel comes from the
+  // correct initial full-atlas WantCreate upload). Re-upload this frame's rects with the
+  // correct row stride; imgui only clears tex->Updates at the next NewFrame, so they are
+  // still valid here. Cost: a new glyph draws garbled for exactly one frame.
+  for (ImTextureData* tex : ImGui::GetPlatformIO().Textures) {
+    if (tex->Format != ImTextureFormat_RGBA32 || tex->Status != ImTextureStatus_OK ||
+        tex->Updates.empty() || !tex->GetTexID()) {
+      continue;
+    }
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(tex->GetTexID()));
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, tex->Width);
+    for (const ImTextureRect& r : tex->Updates) {
+      glTexSubImage2D(GL_TEXTURE_2D, 0, r.x, r.y, r.w, r.h, GL_RGBA, GL_UNSIGNED_BYTE,
+                      tex->GetPixelsAt(r.x, r.y));
+    }
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+  }
 }
 
 void AppUi::draw_entrainment_panel(Audio* audio)

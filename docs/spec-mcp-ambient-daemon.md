@@ -152,8 +152,15 @@ Loading:
 
 Status:
 - **`status`** — single-line, parseable reply: current visual name, entrainment-bed state,
-  overlay state, process uptime. Exact reply shape:
-  `ok visual=<name> bed=<on|off> overlay=<on|off> uptime=<seconds>`
+  overlay state, process uptime, and ThemeBank's four queue slots. Exact reply shape:
+  `ok visual=<name> bed=<on|off> overlay=<on|off> uptime=<seconds> themes=<a|b|c|d>`
+
+Debug/validation (same line protocol, not part of the settings surface proper):
+- **`ui on|off`** — show/hide the F2 ImGui panels remotely (same state the F2 key toggles);
+  `err` in modes with no UI (overlay/VR/export).
+- **`screenshot FILE.png`** — dump the next fully-composited rendered frame (scene + UI,
+  pre-swap glReadPixels) to a PNG. Works when the physical display is locked/headless —
+  this is what makes remote visual validation possible without keyboard access.
 
 That's the entire v0 verb set. No `trigger`, no `Moment`, no choreography primitive — an
 agent or script that wants a "flash three images then fade to spiral" sequence composes it
