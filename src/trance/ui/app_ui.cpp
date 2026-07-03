@@ -387,6 +387,20 @@ void AppUi::draw_themes_section()
 
     auto theme_it = _session.mutable_theme_map()->find(name);
     if (ImGui::TreeNode(name.c_str())) {
+      // Scan themes: save_theme (session_json.cpp) deliberately omits their media
+      // lists -- the scan directory is re-expanded on every load -- so image edits
+      // here would silently vanish on Save/restart (issue #28 finding 4). Offer the
+      // honest path instead: converting drops the theme's scan sidecar entry, making
+      // the current expansion an explicit (editable, persisted) image list.
+      if (_sidecar.theme_scan.count(name)) {
+        ImGui::TextDisabled("(scan theme -- images follow the scanned directory)");
+        if (ImGui::Button("convert to explicit image list")) {
+          _sidecar.theme_scan.erase(name);
+        }
+        ImGui::TreePop();
+        ImGui::PopID();
+        continue;
+      }
       // Image multiselect: checked == present in the theme's image_path. Unchecked
       // paths stay in the per-run ever-seen cache so they can be re-checked (a
       // re-check appends, so on-disk ordering may change after a save -- harmless,
