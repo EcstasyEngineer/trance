@@ -131,6 +131,10 @@ private:
     // Reference count; corresponds to ThemeInfo::loaded_index.
     uint32_t use_count;
     std::unique_ptr<Image> image;
+    // The file failed to load once; never retried and never handed to the
+    // draw (image_shuffler) path, so a bad file can't poison a slot with a
+    // blank texture or burn CPU on repeated decode attempts.
+    bool failed = false;
   };
 
   void advance_theme();
@@ -152,7 +156,16 @@ private:
   std::vector<ImageInfo> _all_images;
   std::vector<std::size_t> _last_images;
   std::vector<std::string> _all_animations;
+  // Parallel to _all_animations: file failed to load once, never retried
+  // (AsyncStreamer::async_update asks for a replacement streamer every 10ms
+  // tick, so a retryable failure means reopening/reparsing the file ~100x/s).
+  // Async-thread-only (do_load_animation + constructor).
+  std::vector<bool> _animation_dead;
   std::string _last_text;
+  // Last valid image handed out per lane ([0] primary, [1] alternate), held so
+  // a theme with nothing currently drawable repeats the previous image instead
+  // of flashing an empty (black) frame. Render-thread-only.
+  std::array<Image, 2> _last_good_image;
 
   std::unique_ptr<AsyncStreamer> _streamer;
   std::unique_ptr<AsyncStreamer> _alt_streamer;
