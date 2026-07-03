@@ -378,9 +378,16 @@ void AppUi::draw_themes_section()
       ImGui::SameLine();
       int weight = entry ? static_cast<int>(entry->random_weight()) : 0;
       ImGui::SetNextItemWidth(120.f);
-      if (ImGui::SliderInt("##weight", &weight, 0, 10)) {
+      // Label the value INSIDE the bar -- a bare number here reads as "number of
+      // themes" or similar; it's the theme's rotation-lottery weight.
+      if (ImGui::SliderInt("##weight", &weight, 0, 10, "weight %d")) {
         ensure_entry()->set_random_weight(static_cast<uint32_t>(weight));
         changed = true;
+      }
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Rotation weight: each theme swap picks the next theme with\n"
+                          "chance weight/total across enabled themes. 0 = never picked.\n"
+                          "(The bank still only keeps its 4-slot window loaded.)");
       }
       ImGui::SameLine();
     }
