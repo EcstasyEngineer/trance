@@ -32,7 +32,9 @@ OpenVrRenderer::OpenVrRenderer(const trance_pb::System& system)
   _window->setVerticalSyncEnabled(system.enable_vsync());
   _window->setFramerateLimit(0);
   _window->setVisible(false);
-  _window->setActive(true);
+  if (!_window->setActive(true)) {
+    std::cerr << "couldn't activate hidden OpenVR OpenGL context" << std::endl;
+  }
 
   init_glew();
 

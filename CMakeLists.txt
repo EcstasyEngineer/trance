@@ -28,39 +28,29 @@ endif()
 find_package(Protobuf CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(SFML 3 COMPONENTS System Window Graphics Audio CONFIG REQUIRED)
-# On Windows, SFML's audio module pulls a bare `OpenAL` target whose config
-# selection is ambiguous under the multi-config generator; pin it to the
-# namespaced `OpenAL::OpenAL` (which carries proper per-config locations) so the
-# Release build links the Release openal-soft. Windows-only — Linux is unaffected.
 if(WIN32)
-  find_package(OpenAL CONFIG REQUIRED)
-  if(TARGET OpenAL AND TARGET OpenAL::OpenAL)
-    set_property(TARGET OpenAL PROPERTY
-      INTERFACE_LINK_LIBRARIES "$<LINK_ONLY:OpenAL::OpenAL>")
-  endif()
   if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
     set(_trance_vcpkg_lib_dir "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib")
     set(_trance_vcpkg_debug_lib_dir "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug/lib")
 
-    # SFML's audio config exposes bare VORBIS/FLAC targets whose library paths
-    # can resolve to debug libs under the Visual Studio multi-config generator.
-    # Pin them per config so Release does not pull MSVCRTD through audio deps.
-    if(TARGET VORBIS)
-      set_property(TARGET VORBIS PROPERTY INTERFACE_LINK_LIBRARIES
-        "$<$<CONFIG:Debug>:${_trance_vcpkg_debug_lib_dir}/vorbisfile.lib>"
-        "$<$<CONFIG:Debug>:${_trance_vcpkg_debug_lib_dir}/vorbisenc.lib>"
-        "$<$<CONFIG:Debug>:${_trance_vcpkg_debug_lib_dir}/vorbis.lib>"
-        "$<$<CONFIG:Debug>:${_trance_vcpkg_debug_lib_dir}/ogg.lib>"
-        "$<$<NOT:$<CONFIG:Debug>>:${_trance_vcpkg_lib_dir}/vorbisfile.lib>"
-        "$<$<NOT:$<CONFIG:Debug>>:${_trance_vcpkg_lib_dir}/vorbisenc.lib>"
-        "$<$<NOT:$<CONFIG:Debug>>:${_trance_vcpkg_lib_dir}/vorbis.lib>"
-        "$<$<NOT:$<CONFIG:Debug>>:${_trance_vcpkg_lib_dir}/ogg.lib>")
-    endif()
-    if(TARGET FLAC)
-      set_property(TARGET FLAC PROPERTY INTERFACE_LINK_LIBRARIES
-        "$<$<CONFIG:Debug>:${_trance_vcpkg_debug_lib_dir}/FLAC.lib>"
-        "$<$<NOT:$<CONFIG:Debug>>:${_trance_vcpkg_lib_dir}/FLAC.lib>")
-    endif()
+    # SFML's audio config uses module-style imported targets for Vorbis/Ogg/FLAC.
+    # The module search can cache debug .lib paths under the Visual Studio
+    # multi-config generator, so give the actual targets per-config locations.
+    function(trance_pin_imported_audio_dep target debug_lib release_lib)
+      if(TARGET ${target})
+        set_target_properties(${target} PROPERTIES
+          IMPORTED_CONFIGURATIONS "DEBUG;RELEASE;RELWITHDEBINFO;MINSIZEREL"
+          IMPORTED_LOCATION_DEBUG "${_trance_vcpkg_debug_lib_dir}/${debug_lib}"
+          IMPORTED_LOCATION_RELEASE "${_trance_vcpkg_lib_dir}/${release_lib}"
+          IMPORTED_LOCATION_RELWITHDEBINFO "${_trance_vcpkg_lib_dir}/${release_lib}"
+          IMPORTED_LOCATION_MINSIZEREL "${_trance_vcpkg_lib_dir}/${release_lib}")
+      endif()
+    endfunction()
+    trance_pin_imported_audio_dep(Ogg::ogg ogg.lib ogg.lib)
+    trance_pin_imported_audio_dep(Vorbis::vorbis vorbis.lib vorbis.lib)
+    trance_pin_imported_audio_dep(Vorbis::vorbisfile vorbisfile.lib vorbisfile.lib)
+    trance_pin_imported_audio_dep(Vorbis::vorbisenc vorbisenc.lib vorbisenc.lib)
+    trance_pin_imported_audio_dep(FLAC::FLAC FLAC.lib FLAC.lib)
   endif()
 endif()
 find_package(GLEW REQUIRED)
@@ -228,7 +218,7 @@ target_link_libraries(trance PRIVATE
   ${X264_TARGET})
 
 if(WIN32)
-  # avrt: required by openal-soft's WASAPI backend (AvSetMmThreadCharacteristics).
+  # avrt: used by WASAPI-backed audio paths on Windows.
   target_link_libraries(trance PRIVATE ws2_32 winmm shlwapi avrt)
 endif()
 
@@ -344,6 +334,9 @@ if(TRANCE_BUILD_TESTS)
   # the same dependency shape session.cpp itself has.
   add_executable(session_json_test tests/session_json_test.cpp)
   target_link_libraries(session_json_test PRIVATE common_lib trance_options)
+  if(MSVC)
+    target_compile_options(session_json_test PRIVATE /wd4267)
+  endif()
   add_test(NAME session_json_test COMMAND session_json_test)
 
   # #21 command channel protocol test (docs/spec-mcp-ambient-daemon.md sec 3/4). Bare
