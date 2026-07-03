@@ -215,7 +215,9 @@ ScreenRenderer::ScreenRenderer(const trance_pb::System& system, const OverlayCon
   _window->setVerticalSyncEnabled(system.enable_vsync());
   _window->setFramerateLimit(0);
   _window->setVisible(false);
-  _window->setActive(true);
+  if (!_window->setActive(true)) {
+    std::cerr << "couldn't activate window OpenGL context" << std::endl;
+  }
 
   if (overlay.enabled) {
 #if defined(__linux__)
@@ -261,7 +263,9 @@ float ScreenRenderer::eye_spacing_multiplier() const
 void ScreenRenderer::init()
 {
   _window->setVisible(true);
-  _window->setActive();
+  if (!_window->setActive()) {
+    std::cerr << "couldn't reactivate window OpenGL context" << std::endl;
+  }
   _window->display();
 }
 

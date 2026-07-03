@@ -36,7 +36,7 @@ namespace
   void write_file(const std::filesystem::path& path, const std::string& content)
   {
     std::filesystem::create_directories(path.parent_path());
-    std::ofstream f{path};
+    std::ofstream f{path, std::ios::binary};
     f << content;
   }
 

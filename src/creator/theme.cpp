@@ -245,7 +245,7 @@ private:
         std::make_unique<wxImage>((int) sf_image.getSize().x, (int) sf_image.getSize().y);
     for (unsigned y = 0; y < sf_image.getSize().y; ++y) {
       for (unsigned x = 0; x < sf_image.getSize().x; ++x) {
-        const auto& c = sf_image.getPixel(x, y);
+        const auto& c = sf_image.getPixel({x, y});
         wx->SetRGB(x, y, c.r, c.g, c.b);
       }
     }

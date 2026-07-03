@@ -19,8 +19,11 @@ VideoExportRenderer::VideoExportRenderer(const exporter_settings& settings)
 , _quad_buffer{0}
 {
   _window.reset(new sf::RenderWindow);
+  _window->create(sf::VideoMode({1, 1}), "trance export", sf::Style::None);
   _window->setVisible(false);
-  _window->setActive(true);
+  if (!_window->setActive(true)) {
+    std::cerr << "couldn't activate hidden export OpenGL context" << std::endl;
+  }
   init_glew();
 
   if (ext_is(settings.path, "jpg") || ext_is(settings.path, "png") ||

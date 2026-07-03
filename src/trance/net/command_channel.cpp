@@ -4,6 +4,7 @@
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
+#include <system_error>
 
 #if defined(_WIN32)
 // Winsock path: written to the same reader_loop contract as the POSIX path below, but
@@ -53,6 +54,15 @@ namespace
     return ::poll(&p, 1, 200) > 0 && (p.revents & POLLIN);
 #endif
   }
+
+  std::string socket_last_error_message()
+  {
+#if defined(_WIN32)
+    return std::system_category().message(WSAGetLastError());
+#else
+    return std::generic_category().message(errno);
+#endif
+  }
 }
 
 struct CommandChannel::Connection {
@@ -89,10 +99,11 @@ CommandChannel::CommandChannel(uint16_t port) : _running{true}
   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
   if (bind(listen_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+    const auto error = socket_last_error_message();
     close_socket(listen_fd);
     delete _connections;
     throw std::runtime_error("CommandChannel: bind(127.0.0.1:" + std::to_string(port) +
-                              ") failed: " + std::strerror(errno));
+                              ") failed: " + error);
   }
   if (listen(listen_fd, 8) != 0) {
     close_socket(listen_fd);
