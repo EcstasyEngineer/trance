@@ -190,6 +190,7 @@ add_executable(trance
   src/trance/media/font.cpp
   src/trance/net/command_channel.cpp
   src/trance/net/command_protocol.cpp
+  src/trance/platform/system_control.cpp
   src/trance/render/openvr.cpp
   src/trance/render/render.cpp
   src/trance/render/video_export.cpp
