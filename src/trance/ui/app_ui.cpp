@@ -64,14 +64,6 @@ AppUi::~AppUi()
   }
 }
 
-bool AppUi::available(bool overlay_enabled)
-{
-  // See the class comment in app_ui.h: overlay mode's window has an empty input
-  // shape (render.cpp's apply_x11_overlay_hints) and is click-through by design, so
-  // it structurally cannot receive the mouse/keyboard events an interactive UI needs.
-  return !overlay_enabled;
-}
-
 bool AppUi::init(sf::RenderWindow& window)
 {
   if (_initialized || _init_failed) {
@@ -508,14 +500,16 @@ void AppUi::draw_overlay_section()
   // change onto the actual window, so this panel and the command channel can never
   // disagree about the state.
   //
-  // The warning renders ALWAYS (before the user turns the overlay on), because once
-  // it's on this panel can no longer be clicked.
+  // The note renders ALWAYS (before the user turns the overlay on): engaging the
+  // overlay collapses this panel (the click-through window couldn't deliver it a
+  // click anyway -- see main.cpp's apply seam), so the user needs to know the way
+  // back BEFORE flipping the switch.
   ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.75f, 0.3f, 1.f));
   ImGui::TextWrapped(
-      "Warning: while the overlay is on, the window ignores the mouse entirely (that's "
-      "the point) -- this panel can't be clicked to turn it back off. Keyboard (F2/Esc) "
-      "keeps working only until focus moves to another window. Reliable off-switches: "
-      "`overlay off` over the command channel (--command_port), or Ctrl+C.");
+      "Turning the overlay on makes the window click-through and closes this panel. "
+      "To come back: Shift+F11 (global safety hotkey -- overlay off + pause; press "
+      "again to quit), the tray icon (Windows), `overlay off` over the command "
+      "channel (--command_port), or Ctrl+C.");
   ImGui::PopStyleColor();
 
   auto [on, opacity] = _get_overlay();

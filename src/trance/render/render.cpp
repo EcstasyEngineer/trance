@@ -163,9 +163,14 @@ void apply_overlay_hints(sf::WindowHandle handle, float opacity)
   // documented WS_EX_LAYERED | WS_EX_TRANSPARENT combination. SWP_FRAMECHANGED because
   // at runtime the ex-style just changed under a live window. Test on an actual
   // Windows machine before relying on this for #27 there.
+  //
+  // WS_EX_NOACTIVATE: an overlay must never take activation/focus -- without it the
+  // window can still be activated (e.g. via alt-tab or the taskbar) even though
+  // WS_EX_TRANSPARENT makes it mouse-invisible, which reads as "the overlay grabbed
+  // focus" (observed in the field as the F2-menu-stranded bug's second half).
   HWND hwnd = handle;
   LONG_PTR ex_style = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
-  ex_style |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW;
+  ex_style |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
   SetWindowLongPtr(hwnd, GWL_EXSTYLE, ex_style);
   SetLayeredWindowAttributes(
       hwnd, 0, static_cast<BYTE>(std::clamp(opacity, 0.f, 1.f) * 255.f), LWA_ALPHA);
@@ -199,7 +204,8 @@ void clear_overlay_hints(sf::WindowHandle handle)
   HWND hwnd = handle;
   SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
   LONG_PTR ex_style = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
-  ex_style &= ~static_cast<LONG_PTR>(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW);
+  ex_style &= ~static_cast<LONG_PTR>(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW |
+                                     WS_EX_NOACTIVATE);
   SetWindowLongPtr(hwnd, GWL_EXSTYLE, ex_style);
   SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
