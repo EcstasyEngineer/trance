@@ -65,6 +65,9 @@ private:
   std::atomic<bool> _overlay_on = false;
   std::atomic<bool> _paused = false;
   std::atomic<bool> _stop = false;
+  // Set by thread_main on the way out; the destructor polls it so teardown can't
+  // race a thread that is still starting up (see ~SystemControl).
+  std::atomic<bool> _thread_done = false;
 #if defined(_WIN32)
   // HWND of the hidden tray/hotkey window, stored as void* to keep <windows.h> out
   // of this header. Set by the thread once created; used by the destructor to post

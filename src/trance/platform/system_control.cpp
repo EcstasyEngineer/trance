@@ -1,4 +1,5 @@
 #include <trance/platform/system_control.h>
+#include <chrono>
 #include <iostream>
 
 #if defined(_WIN32)
@@ -7,6 +8,7 @@
 #include <shellapi.h>
 #pragma warning(pop)
 #elif defined(__linux__)
+#include <X11/XKBlib.h>
 #include <X11/Xlib.h>
 #include <X11/keysym.h>
 #include <sys/select.h>
@@ -15,7 +17,9 @@
 SystemControl::SystemControl()
 {
 #if defined(_WIN32) || defined(__linux__)
-  _thread = std::thread{[this] { thread_main(); }};
+  _thread = std::thread{[this] { _thread_done = false; thread_main(); _thread_done = true; }};
+#else
+  _thread_done = true;
 #endif
 }
 
@@ -24,9 +28,16 @@ SystemControl::~SystemControl()
   _stop = true;
 #if defined(_WIN32)
   // Wake the message loop: WM_CLOSE tears down the window, whose WM_DESTROY posts
-  // the quit message. If window creation failed the thread has already returned.
-  if (void* hwnd = _hwnd.load()) {
-    PostMessage(static_cast<HWND>(hwnd), WM_CLOSE, 0, 0);
+  // the quit message. The thread may still be STARTING UP here (window not created
+  // yet, _hwnd unset) -- a single fire-and-forget post could then be skipped and the
+  // join below would hang on GetMessage forever. Keep nudging until the thread
+  // reports done: either the window appears (post lands; the queue holds it even if
+  // GetMessage isn't running yet) or creation failed and the thread exits by itself.
+  while (!_thread_done) {
+    if (void* hwnd = _hwnd.load()) {
+      PostMessage(static_cast<HWND>(hwnd), WM_CLOSE, 0, 0);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 #endif
   // The Linux loop polls _stop every 200ms (select timeout); nothing to wake.
@@ -270,6 +281,14 @@ void SystemControl::thread_main()
     std::cout << "system control: global safety hotkey Shift+F11 registered" << std::endl;
   }
 
+  // Autorepeat suppression: holding the key must fire ONE safety request, not a
+  // repeat stream (the second request means quit -- see ControlRequest::kSafety).
+  // With detectable autorepeat, repeats arrive as KeyPress with no intervening
+  // KeyRelease, so gating on "released since the last press" filters them; the
+  // Windows path gets the same behaviour from MOD_NOREPEAT.
+  XkbSetDetectableAutoRepeat(display, True, nullptr);
+  bool key_down = false;
+
   int fd = ConnectionNumber(display);
   while (!_stop) {
     // 200ms select timeout so teardown (_stop) is honoured promptly even when no
@@ -284,7 +303,12 @@ void SystemControl::thread_main()
       XNextEvent(display, &event);
       if (event.type == KeyPress && event.xkey.keycode == keycode &&
           (event.xkey.state & ShiftMask)) {
-        push(ControlRequest::kSafety);
+        if (!key_down) {
+          push(ControlRequest::kSafety);
+        }
+        key_down = true;
+      } else if (event.type == KeyRelease && event.xkey.keycode == keycode) {
+        key_down = false;
       }
     }
   }
