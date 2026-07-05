@@ -254,7 +254,13 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
   case Verb::kUiOn:
   case Verb::kUiOff:
     if (!app_ui) {
-      return command_protocol::format_err("ui: unavailable in this mode (overlay/VR/export)");
+      return command_protocol::format_err("ui: unavailable in this mode (VR/export)");
+    }
+    // `ui on` implies overlay off, same as the tray's "Show control panel": a
+    // click-through window can't host an interactive panel, and showing one anyway
+    // recreates the stranded-unclickable-panel bug through the side door.
+    if (cmd.verb == Verb::kUiOn) {
+      state.overlay_on = false;
     }
     app_ui->set_visible(cmd.verb == Verb::kUiOn);
     return command_protocol::format_ok();
