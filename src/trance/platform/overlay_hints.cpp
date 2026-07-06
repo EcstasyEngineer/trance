@@ -110,6 +110,11 @@ namespace
     HWND hwnd = nullptr;
     RECT rect = {};
     bool valid = false;
+    // Latched on the first store attempt for this hwnd, success or not. Without it a
+    // failed initial GetWindowRect would retry on a later opacity re-apply -- by which
+    // point the window is already overscanned, and the overscanned rect would be
+    // captured as the "restore" target.
+    bool attempted = false;
   };
 
   Win32OverlayRestore g_win32_overlay_restore;
@@ -127,11 +132,12 @@ namespace
 
   void win32_store_overlay_rect(HWND hwnd)
   {
-    if (g_win32_overlay_restore.valid && g_win32_overlay_restore.hwnd == hwnd) {
+    if (g_win32_overlay_restore.attempted && g_win32_overlay_restore.hwnd == hwnd) {
       return;
     }
     g_win32_overlay_restore = {};
     g_win32_overlay_restore.hwnd = hwnd;
+    g_win32_overlay_restore.attempted = true;
     g_win32_overlay_restore.valid = GetWindowRect(hwnd, &g_win32_overlay_restore.rect) != FALSE;
     if (!g_win32_overlay_restore.valid) {
       std::cerr << "overlay mode: GetWindowRect failed (error " << GetLastError()
@@ -159,11 +165,17 @@ namespace
   {
     if (g_win32_overlay_restore.valid && g_win32_overlay_restore.hwnd == hwnd) {
       const RECT rect = g_win32_overlay_restore.rect;
-      SetWindowPos(hwnd, HWND_NOTOPMOST, rect.left, rect.top, rect.right - rect.left,
-                   rect.bottom - rect.top, SWP_NOACTIVATE | SWP_FRAMECHANGED);
+      if (!SetWindowPos(hwnd, HWND_NOTOPMOST, rect.left, rect.top, rect.right - rect.left,
+                        rect.bottom - rect.top, SWP_NOACTIVATE | SWP_FRAMECHANGED)) {
+        std::cerr << "overlay mode: restore SetWindowPos failed (error " << GetLastError()
+                  << "); window keeps the overscanned overlay bounds" << std::endl;
+      }
+      // Cleared even on failure: the next engage must capture a fresh rect rather
+      // than trust one that a failed restore may have left meaningless.
       g_win32_overlay_restore = {};
       return;
     }
+    g_win32_overlay_restore = {};
     SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
   }
