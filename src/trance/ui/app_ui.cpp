@@ -94,27 +94,7 @@ void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Au
     _save_status_ttl -= dt.asSeconds();
   }
 
-  // Hover-reveal corner icon (issue #24 item 1): a small always-on window sits in
-  // the bottom-right corner; hovering it reveals the full panel below. This keeps
-  // the UI out of the way of the visuals when not in active use, without needing
-  // persisted state (NONE this wave -- see app_ui.h).
-  const auto display_size = ImGui::GetIO().DisplaySize;
-  const float icon_size = 28.f;
-  const float margin = 10.f;
-  ImGui::SetNextWindowPos(
-      ImVec2(display_size.x - icon_size - margin, display_size.y - icon_size - margin));
-  ImGui::SetNextWindowSize(ImVec2(icon_size, icon_size));
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.f, 4.f));
-  ImGui::Begin("##ui_icon", nullptr,
-               ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
-                   ImGuiWindowFlags_NoBackground);
-  ImGui::TextUnformatted(_visible ? "x" : "u");
-  const bool icon_hovered = ImGui::IsWindowHovered();
-  ImGui::End();
-  ImGui::PopStyleVar();
-
-  if (!_visible && !icon_hovered) {
+  if (!_visible) {
     return;
   }
 

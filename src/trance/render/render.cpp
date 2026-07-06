@@ -137,6 +137,70 @@ namespace
     XFlush(display);
     XCloseDisplay(display);
   }
+#elif defined(_WIN32)
+  constexpr int kOverlayOverscanPixels = 1;
+
+  struct Win32OverlayRestore {
+    HWND hwnd = nullptr;
+    RECT rect = {};
+    bool valid = false;
+  };
+
+  Win32OverlayRestore g_win32_overlay_restore;
+
+  RECT win32_monitor_rect(HWND hwnd)
+  {
+    MONITORINFO info = {};
+    info.cbSize = sizeof(info);
+    HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    if (monitor && GetMonitorInfoW(monitor, &info)) {
+      return info.rcMonitor;
+    }
+    return RECT{0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)};
+  }
+
+  void win32_store_overlay_rect(HWND hwnd)
+  {
+    if (g_win32_overlay_restore.valid && g_win32_overlay_restore.hwnd == hwnd) {
+      return;
+    }
+    g_win32_overlay_restore = {};
+    g_win32_overlay_restore.hwnd = hwnd;
+    g_win32_overlay_restore.valid = GetWindowRect(hwnd, &g_win32_overlay_restore.rect) != FALSE;
+    if (!g_win32_overlay_restore.valid) {
+      std::cerr << "overlay mode: GetWindowRect failed (error " << GetLastError()
+                << "); overlay-off may not restore the previous window bounds" << std::endl;
+    }
+  }
+
+  void win32_apply_overlay_bounds(HWND hwnd)
+  {
+    win32_store_overlay_rect(hwnd);
+    const RECT monitor = win32_monitor_rect(hwnd);
+    const int overscan = kOverlayOverscanPixels;
+    const int x = monitor.left - overscan;
+    const int y = monitor.top - overscan;
+    const int width = (monitor.right - monitor.left) + 2 * overscan;
+    const int height = (monitor.bottom - monitor.top) + 2 * overscan;
+    if (!SetWindowPos(hwnd, nullptr, x, y, width, height,
+                      SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED)) {
+      std::cerr << "overlay mode: overscan SetWindowPos failed (error " << GetLastError()
+                << "); DWM may still treat the window as exact fullscreen" << std::endl;
+    }
+  }
+
+  void win32_restore_overlay_bounds(HWND hwnd)
+  {
+    if (g_win32_overlay_restore.valid && g_win32_overlay_restore.hwnd == hwnd) {
+      const RECT rect = g_win32_overlay_restore.rect;
+      SetWindowPos(hwnd, HWND_NOTOPMOST, rect.left, rect.top, rect.right - rect.left,
+                   rect.bottom - rect.top, SWP_NOACTIVATE | SWP_FRAMECHANGED);
+      g_win32_overlay_restore = {};
+      return;
+    }
+    SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+  }
 #endif
 }
 
@@ -176,8 +240,10 @@ void apply_overlay_hints(sf::WindowHandle handle, float opacity)
   // Mitigation shipped blind: strip WS_EX_LAYERED first and force a frame change, so
   // re-adding the styles + alpha is a fresh transition DWM must re-evaluate, and log
   // SetLayeredWindowAttributes failures instead of assuming they took. Deeper fixes
-  // (1px overscan de-promotion, DirectComposition) wait for hands-on Windows testing.
+  // now start with 1px overscan de-promotion; DirectComposition remains the next rung
+  // if this still fails on hardware.
   HWND hwnd = handle;
+  win32_apply_overlay_bounds(hwnd);
   LONG_PTR ex_style = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
   if (ex_style & WS_EX_LAYERED) {
     SetWindowLongPtr(hwnd, GWL_EXSTYLE, ex_style & ~static_cast<LONG_PTR>(WS_EX_LAYERED));
@@ -224,8 +290,7 @@ void clear_overlay_hints(sf::WindowHandle handle)
   ex_style &= ~static_cast<LONG_PTR>(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW |
                                      WS_EX_NOACTIVATE);
   SetWindowLongPtr(hwnd, GWL_EXSTYLE, ex_style);
-  SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
-               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+  win32_restore_overlay_bounds(hwnd);
 #else
   (void)handle;
 #endif
