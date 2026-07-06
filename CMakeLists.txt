@@ -190,6 +190,8 @@ add_executable(trance
   src/trance/media/font.cpp
   src/trance/net/command_channel.cpp
   src/trance/net/command_protocol.cpp
+  src/trance/platform/overlay_hints.cpp
+  src/trance/playlist_runner.cpp
   src/trance/platform/system_control.cpp
   src/trance/render/openvr.cpp
   src/trance/render/render.cpp
@@ -225,8 +227,8 @@ if(WIN32)
 endif()
 
 if(UNIX AND NOT APPLE)
-  # X11 + Xext (Shape extension): v0 click-through overlay mode (#27) --
-  # _NET_WM_WINDOW_OPACITY + XShapeCombineRectangles in src/trance/render/render.cpp.
+  # X11 + Xext (Shape extension): v0 click-through overlay mode --
+  # _NET_WM_WINDOW_OPACITY + XShapeCombineRectangles in src/trance/platform/overlay_hints.cpp.
   # System dev packages (libx11-dev/libxext-dev), not vcpkg -- SFML already links X11
   # transitively for window creation, but the Shape extension calls need it explicit.
   find_package(PkgConfig QUIET)
@@ -334,6 +336,15 @@ if(TRANCE_BUILD_TESTS)
   # SFML/window/GL/audio) but not "bare C++17" like v3_grammar_test above: it links
   # common_lib to exercise the real session_json.cpp against protobuf + nlohmann_json,
   # the same dependency shape session.cpp itself has.
+  # Playlist stack machine test. Same dependency shape as session_json_test: headless
+  # but links common_lib for the proto types the playlist map is made of.
+  add_executable(playlist_runner_test
+    src/trance/playlist_runner.cpp
+    tests/playlist_runner_test.cpp)
+  target_include_directories(playlist_runner_test PRIVATE src/)
+  target_link_libraries(playlist_runner_test PRIVATE common_lib trance_options)
+  add_test(NAME playlist_runner_test COMMAND playlist_runner_test)
+
   add_executable(session_json_test tests/session_json_test.cpp)
   target_link_libraries(session_json_test PRIVATE common_lib trance_options)
   if(MSVC)

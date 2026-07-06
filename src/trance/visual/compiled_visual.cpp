@@ -78,7 +78,7 @@ namespace
       break;
     case K::Themes:
       // Fire-and-forget by design: patterns request a swap, they don't depend on it
-      // landing (the bank may still be loading). Nothing branches on the bool (#25).
+      // landing (the bank may still be loading). Nothing branches on the bool.
       api.change_themes();
       break;
     case K::Font:

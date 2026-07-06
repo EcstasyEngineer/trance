@@ -2,17 +2,14 @@
 #define TRANCE_SRC_COMMON_SESSION_ARCHIVE_H
 #include <string>
 
-// SessionArchive (#15): portable session bundles as a plain zip.
+// SessionArchive: portable session bundles as a plain zip.
 //
 // Layout matches docs/session-json-format.md sec 9's "Archive wave" plan of record: the
 // zip holds the session JSON at its root as "session.json", plus every file the session
 // references (theme image/animation/font paths, custom_visual_pattern files, playlist
 // audio_event paths) stored under their existing root-relative paths -- i.e. archiving is
 // conceptually `zip -r` of the session root, per the sec 1 path contract (every reference
-// is already root-relative, forward-slash, no ".."). This supersedes the dead
-// `trance_pb::SessionArchive` proto message (offset/length table into a monolithic file --
-// subsumed here by the zip's own central directory; see trance.proto's SessionArchive and
-// sec 7 item 5 of the spec, which calls the old message dead).
+// is already root-relative, forward-slash, no "..").
 //
 // Import (unzip) is intentionally NOT implemented in C++. A `.trance` archive is a
 // standard zip -- any zip tool (Explorer, Archive Manager, `unzip`, 7-Zip, ...) extracts

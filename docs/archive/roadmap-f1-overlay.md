@@ -1,5 +1,7 @@
 # Roadmap — F1 debug overlay upgrade
 
+> **SUPERSEDED — v3 shipped instead; kept for history.**
+
 > **Status: design notes / opinions, not a spec.** Forward-looking. Describes what the
 > overlay shows today and how the now-existing pattern grammar lets it become both
 > *more legible* and *less code*. Pairs with [roadmap-grammar-v2.md](roadmap-grammar-v2.md).

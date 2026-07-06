@@ -1,6 +1,6 @@
 #ifndef TRANCE_SRC_TRANCE_PLATFORM_SYSTEM_CONTROL_H
 #define TRANCE_SRC_TRANCE_PLATFORM_SYSTEM_CONTROL_H
-// System tray icon + global safety hotkey (#27 follow-up).
+// System tray icon + global safety hotkey.
 //
 // Once the overlay engages, the window is click-through BY DESIGN, so no in-window
 // control (F2 UI, Escape) can ever reach it again -- every off-switch must live

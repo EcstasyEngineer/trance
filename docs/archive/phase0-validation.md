@@ -1,5 +1,7 @@
 # Phase 0 — paper validation of the v2 intent grammar
 
+> **SUPERSEDED — v3 shipped instead; kept for history.**
+
 **Status: validation pass, no code.** This is the go/no-go gate `q1-q2-next-steps.md` §8
 calls for: write all 8 built-ins in the proposed surface, check each against the *actual*
 source in `builtin_patterns.cpp`, and let the breakages become the spec. It also settles

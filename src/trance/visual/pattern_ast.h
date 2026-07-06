@@ -41,7 +41,7 @@ namespace pattern
       Pulse,     // bounded counter -> one-frame flag (see fields below)
       Copy,      // images[target] = images[src]
       SpiralSet, // deterministically set spiral type (ivalue) + width (mod_literal)
-      // Grammar-driven theme audio (issue #23): `audio <content> [loop]` pulls a
+      // Grammar-driven theme audio: `audio <content> [loop]` pulls a
       // precanned path from the theme's audio pool (slot semantics identical to
       // Image) and starts it playing on the engine's single dedicated theme-audio
       // channel. `force` doubles as the `loop` flag here. `audio stop` is AudioStop
@@ -83,7 +83,7 @@ namespace pattern
   // the statement to a VisualRender draw call. This replaces the per-pattern C++ presets.
   struct RenderStmt
   {
-    // AudioVolume: a per-frame curve-drivable theme-audio volume set (issue #23),
+    // AudioVolume: a per-frame curve-drivable theme-audio volume set,
     // the same shape as Spiral's speed axis -- `speed` field carries the [0,1]-scaled
     // expr, evaluated and applied every frame so `volume (curve ...)` reads like zoom.
     enum class Op { Image, Text, Subtext, SmallText, Spiral, Warp, AudioVolume };

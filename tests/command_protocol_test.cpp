@@ -1,4 +1,4 @@
-// Protocol test for the #21 command channel (docs/spec-mcp-ambient-daemon.md sec 3/4): pure
+// Protocol test for the command channel (docs/spec-mcp-ambient-daemon.md sec 3/4): pure
 // line -> Verb parsing, no socket/Director/Audio dependency (see command_protocol.h's header
 // comment for why that separation matters -- verb EXECUTION is command_channel.cpp/main.cpp's
 // job, not this pure function's).
@@ -154,7 +154,7 @@ int main()
   check(command_protocol::format_err("unknown verb: x") == "err unknown verb: x",
        "format_err(msg) prepends 'err '");
 
-  // ui / screenshot -- the debug/validation verbs (issue #28 finding 1 coverage).
+  // ui / screenshot -- the debug/validation verbs.
   {
     auto c = command_protocol::parse_command("ui on");
     check(c.ok && c.verb == Verb::kUiOn, "'ui on' parses");

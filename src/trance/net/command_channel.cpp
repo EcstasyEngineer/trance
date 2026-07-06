@@ -8,9 +8,8 @@
 
 #if defined(_WIN32)
 // Winsock path: written to the same reader_loop contract as the POSIX path below, but
-// UNVALIDATED -- this repo's only build/test box this wave is Linux (see CLAUDE.md build
-// gate). Compile-guarded so it never affects the Linux build; a Windows dev bringing up
-// --command_port is expected to shake this out.
+// untested on Windows. Compile-guarded so it never affects the Linux build; a Windows
+// dev bringing up --command_port is expected to shake this out.
 #pragma warning(push, 0)
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -42,8 +41,8 @@ namespace
 
   // Wait until `fd` is readable or ~200ms passes. Returns true iff readable. The reader
   // thread calls this before every accept()/recv() so it re-checks _running on a bounded
-  // cadence -- a bare blocking accept()/recv() would make ~CommandChannel's join() hang
-  // forever when shutdown races an idle socket (observed: destructor deadlock).
+  // cadence, keeping ~CommandChannel's join() bounded -- a bare blocking accept()/recv()
+  // couldn't be interrupted from another thread.
   bool poll_readable(socket_t fd)
   {
 #if defined(_WIN32)
@@ -119,9 +118,8 @@ CommandChannel::~CommandChannel()
   _running = false;
   // reader_loop never blocks indefinitely: every accept()/recv() is gated by a ~200ms
   // poll_readable() tick that re-checks _running, so the join below is bounded. (The
-  // original bare-blocking version deadlocked here whenever shutdown raced an idle
-  // accept/recv -- the listen fd lives on reader_loop's stack and cannot be closed from
-  // this thread to break the block.)
+  // listen fd lives on reader_loop's stack and cannot be closed from this thread to
+  // break a blocking call -- the poll gate is what makes shutdown safe.)
   if (_reader.joinable()) {
     _reader.join();
   }

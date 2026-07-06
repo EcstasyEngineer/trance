@@ -2,11 +2,12 @@
 #define TRANCE_SRC_TRANCE_NET_COMMAND_PROTOCOL_H
 #include <string>
 
-// Pure protocol layer for the #21 command channel (docs/spec-mcp-ambient-daemon.md sec 3/4):
+// Pure protocol layer for the command channel (docs/spec-mcp-ambient-daemon.md sec 3/4):
 // line -> Verb struct, and the couple of pure formatting helpers for reply lines. Deliberately
 // has ZERO dependency on sockets, Director, Audio, or any runtime state -- that's what makes
 // it headlessly unit-testable (tests/command_protocol_test.cpp) and keeps it separate from
-// verb EXECUTION, which lives in command_channel.cpp's drain/dispatch on the render thread.
+// verb EXECUTION, which lives in main.cpp's per-frame drain/dispatch (execute_command /
+// handle_commands) on the render thread.
 namespace command_protocol
 {
   enum class Verb {

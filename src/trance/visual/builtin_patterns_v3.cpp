@@ -5,10 +5,9 @@
 // clock). Patterns nest; crossfade EMERGES from copy + cur/prev + source-over fade-in (no baked
 // keyword); spiral speed / zoom / fade are one curve-drivable class; super_fast uses randomness
 // primitives instead of a hand-rolled FSM. These are faithful-in-feel, not frame-identical, to
-// the originals -- the project's "supersede, not parity" stance. Reference for "feel": the
-// pre-grammar hand-written visuals (visual.cpp at upstream ae7d94c), whose key texture is that
-// EVERY image zooms over its own on-screen life -- so zoom modulators here are `curve` rides on
-// the pulling cadence's clock, never constants (a constant zoom is a static magnification).
+// the pre-grammar hand-written visuals, whose key texture is that EVERY image zooms over its
+// own on-screen life -- so zoom modulators here are `curve` rides on the pulling cadence's
+// clock, never constants (a constant zoom is a static magnification).
 namespace
 {
   // 1 ACCELERATE -- a true accelerating cadence: one continuous ramp cutting from a 56f flash
@@ -109,7 +108,7 @@ pattern animation for 1024f {
 })";
 
   // 8 SUPER_FAST -- rapid 8f current/next cuts, occasionally interrupted by a short random
-  // ANIMATED burst with a cooldown (13.1, issue #26). The burst picks its animation ONCE on
+  // ANIMATED burst with a cooldown (13.1). The burst picks its animation ONCE on
   // entry (`enter { anim runtime }`) and then just renders it (`draw cur ... anim` -- a pure
   // render, no per-period re-roll); base cuts stay still images. Base and burst draws are
   // FSM-gated (rapid.index) so the burst's animation only paints during a burst -- an ungated

@@ -1,6 +1,6 @@
 #ifndef TRANCE_SRC_TRANCE_UI_APP_UI_H
 #define TRANCE_SRC_TRANCE_UI_APP_UI_H
-// ImGui in-app UI: the creator-replacement (v0 creator-parity buildout). Toggled with
+// ImGui in-app UI: the creator replacement. Toggled with
 // F2 (see main.cpp's handle_events); coexists with the pre-existing F1 text debug
 // overlay (Director::toggle_debug_overlay / draw_debug_overlay), which is untouched.
 // Exists in --overlay runs too (the overlay is runtime-toggleable now): while the
@@ -16,8 +16,7 @@
 //     (the same plumbing --visual/--pattern use).
 //   - Program: live edit of the ACTIVE program (global fps, per-visual-type weights,
 //     text/spiral colours). Mutates the in-memory session proto in place, then fires
-//     on_program_change so ThemeBank/Director pick it up -- replacing the old
-//     "zero every other weight in a text editor" workflow.
+//     on_program_change so ThemeBank/Director pick it up.
 //   - Themes: per-theme enable/weight rows (the program's enabled_theme entries;
 //     disable = weight 0, entries are kept -- matching ThemeBank::set_program's
 //     semantics) + per-theme image multiselect editing Theme::image_path. Content
@@ -25,16 +24,15 @@
 //   - Session: loaded path, Save (back to that path) and Save As, via
 //     save_session(session, path, sidecar) so pattern files / scan-dir themes
 //     round-trip instead of being frozen inline.
-//   - Overlay: live click-through overlay toggle + opacity slider (#27). Reads/writes
+//   - Overlay: live click-through overlay toggle + opacity slider. Reads/writes
 //     main.cpp's CommandRuntimeState via the get_overlay/set_overlay callbacks; the
-//     main loop's apply seam (shared with the #21 `overlay ...` verbs) pushes changes
+//     main loop's apply seam (shared with the `overlay ...` verbs) pushes changes
 //     onto the actual window.
 //   - Entrainment: mute toggle (Audio::ToggleMute). No volume slider: Audio exposes
 //     only a global mute (sf::Listener::setGlobalVolume 0/100 in ToggleMute), not a
-//     settable gain -- see the handoff note in draw_entrainment_section.
+//     settable gain -- see the note in draw_entrainment_section.
 //
-// Settings persistence: NONE this wave. TODO(settings-json chain): once JSON settings
-// land, persist last-forced-visual / mute state / UI-open across runs.
+// TODO: persist last-forced-visual / mute state / UI-open once JSON settings land.
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -53,6 +51,7 @@ namespace trance_pb
   class Program;
   class Session;
 }
+struct CommandRuntimeState;
 struct SessionJsonSidecar;
 class Audio;
 class Director;
@@ -65,21 +64,19 @@ public:
   // UI is available (see available() below) so overlay mode never pays ImGui's
   // per-frame Update/Render cost or touches the click-through window.
   //
-  // `session`/`sidecar` are play_session's live objects (outliving this AppUi); the
-  // Program/Themes sections mutate `session` in place and the Session section saves
-  // it back to disk. `on_program_change` must re-push the active program into
-  // ThemeBank/Director (the same pair the playlist-switch path calls) so live edits
-  // apply. `active_program` resolves the mutable active program in session's
-  // program_map, or nullptr when the built-in default fallback is playing (the
-  // Program section disables itself in that case). `get_overlay`/`set_overlay`
-  // read/write the live overlay state (on, opacity) -- main.cpp wires them to
-  // CommandRuntimeState's two overlay fields, and its per-frame apply seam pushes
-  // any change onto the actual window (#27).
+  // `session`/`sidecar`/`command_state` are play_session's live objects (outliving
+  // this AppUi); the Program/Themes sections mutate `session` in place, the Session
+  // section saves it back to disk, and the Overlay section reads/writes
+  // `command_state`'s overlay fields (main.cpp's per-frame apply seam pushes any
+  // change onto the actual window). `on_program_change` must re-push the active
+  // program into ThemeBank/Director (the same pair the playlist-switch path calls)
+  // so live edits apply. `active_program` resolves the mutable active program in
+  // session's program_map, or nullptr when the built-in default fallback is playing
+  // (the Program section disables itself in that case).
   AppUi(trance_pb::Session& session, const std::string& session_path,
-        SessionJsonSidecar& sidecar, std::function<void()> on_program_change,
-        std::function<trance_pb::Program*()> active_program,
-        std::function<std::pair<bool, float>()> get_overlay,
-        std::function<void(bool, float)> set_overlay);
+        SessionJsonSidecar& sidecar, CommandRuntimeState& command_state,
+        std::function<void()> on_program_change,
+        std::function<trance_pb::Program*()> active_program);
   ~AppUi();
 
   AppUi(const AppUi&) = delete;
@@ -92,7 +89,7 @@ public:
 
   bool visible() const { return _visible; }
   void toggle() { _visible = !_visible; }
-  // Remote-controlled visibility (#21 `ui on|off`) -- same state F2 toggles.
+  // Remote-controlled visibility (the `ui on|off` verbs) -- same state F2 toggles.
   void set_visible(bool visible) { _visible = visible; }
 
   // Forwarded from handle_events() so ImGui can see keyboard/mouse input while open.
@@ -123,10 +120,9 @@ private:
   trance_pb::Session& _session;
   const std::string _session_path;
   SessionJsonSidecar& _sidecar;
+  CommandRuntimeState& _command_state;
   std::function<void()> _on_program_change;
   std::function<trance_pb::Program*()> _active_program;
-  std::function<std::pair<bool, float>()> _get_overlay;
-  std::function<void(bool, float)> _set_overlay;
 
   bool _visible = false;
   bool _initialized = false;

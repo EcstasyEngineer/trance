@@ -3,7 +3,9 @@
 #include <common/session_json.h>
 #include <trance/director.h>
 #include <trance/media/audio.h>
+#include <trance/runtime_state.h>
 #include <trance/theme_bank.h>
+#include <trance/visual/builtin_visuals.h>
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
@@ -18,40 +20,16 @@
 #include <SFML/Graphics.hpp>
 #pragma warning(pop)
 
-namespace
-{
-  // Program::VisualType value -> v3 built-in name. Mirrors main.cpp's
-  // visual_name_table() (the --visual CLI table); kept local rather than shared
-  // because main.cpp's table is deliberately private to that TU and this is a
-  // different consumer (click-to-force + weight labels in the UI vs. a startup flag).
-  const std::vector<std::pair<uint32_t, std::string>>& builtin_visual_table()
-  {
-    static const std::vector<std::pair<uint32_t, std::string>> table = {
-        {1, "accelerate"},
-        {2, "slow_flash"},
-        {3, "sub_text"},
-        {4, "flash_text"},
-        {5, "simple"},
-        {6, "super_parallel"},
-        {7, "animation"},
-        {8, "super_fast"},
-    };
-    return table;
-  }
-}
-
 AppUi::AppUi(trance_pb::Session& session, const std::string& session_path,
-             SessionJsonSidecar& sidecar, std::function<void()> on_program_change,
-             std::function<trance_pb::Program*()> active_program,
-             std::function<std::pair<bool, float>()> get_overlay,
-             std::function<void(bool, float)> set_overlay)
+             SessionJsonSidecar& sidecar, CommandRuntimeState& command_state,
+             std::function<void()> on_program_change,
+             std::function<trance_pb::Program*()> active_program)
 : _session{session}
 , _session_path{session_path}
 , _sidecar{sidecar}
+, _command_state{command_state}
 , _on_program_change{std::move(on_program_change)}
 , _active_program{std::move(active_program)}
-, _get_overlay{std::move(get_overlay)}
-, _set_overlay{std::move(set_overlay)}
 {
   // Seed Save As with the loaded path so "tweak the filename" is the common case.
   std::snprintf(_save_as_buf, sizeof(_save_as_buf), "%s", session_path.c_str());
@@ -177,10 +155,7 @@ void AppUi::draw_status_section(Director& director, Audio* audio, const ThemeBan
   const auto& program = director.program();
   ImGui::Text("global fps (config): %u", program.global_fps());
   ImGui::Text("vr enabled: %s", director.vr_enabled() ? "yes" : "no");
-  // TODO(handoff): "current visual name" (F1's overlay prints it via the private
-  // _last_visual_selection/_custom_visual_name) has no public Director accessor.
-  // Adding one is a one-line getter, but director.h/.cpp aren't owned files this
-  // wave -- leaving it out rather than editing outside scope.
+  // TODO: no public Director accessor for the current visual name.
 
   auto snap = themes.debug_snapshot();
   ImGui::Text("theme primary  : %s", snap.slots[1].valid ? snap.slots[1].name.c_str() : "(empty)");
@@ -199,9 +174,9 @@ void AppUi::draw_status_section(Director& director, Audio* audio, const ThemeBan
 void AppUi::draw_visuals_section(Director& director)
 {
   ImGui::TextUnformatted("Built-ins (click to force now):");
-  for (const auto& entry : builtin_visual_table()) {
-    if (ImGui::Button(entry.second.c_str())) {
-      director.force_builtin_visual(entry.first);
+  for (const auto& visual : builtin_visuals()) {
+    if (ImGui::Button(visual.name)) {
+      director.force_builtin_visual(visual.type);
     }
   }
 
@@ -256,9 +231,9 @@ void AppUi::draw_program_section()
   for (int i = 0; i < program->visual_type_size(); ++i) {
     auto* config = program->mutable_visual_type(i);
     const char* label = nullptr;
-    for (const auto& entry : builtin_visual_table()) {
-      if (entry.first == static_cast<uint32_t>(config->type())) {
-        label = entry.second.c_str();
+    for (const auto& visual : builtin_visuals()) {
+      if (visual.type == static_cast<uint32_t>(config->type())) {
+        label = visual.name;
         break;
       }
     }
@@ -375,7 +350,7 @@ void AppUi::draw_themes_section()
     if (ImGui::TreeNode(name.c_str())) {
       // Scan themes: save_theme (session_json.cpp) deliberately omits their media
       // lists -- the scan directory is re-expanded on every load -- so image edits
-      // here would silently vanish on Save/restart (issue #28 finding 4). Offer the
+      // here would silently vanish on Save/restart. Offer the
       // honest path instead: converting drops the theme's scan sidecar entry, making
       // the current expansion an explicit (editable, persisted) image list.
       if (_sidecar.theme_scan.count(name)) {
@@ -474,11 +449,10 @@ void AppUi::save_session_to(const std::string& path)
 
 void AppUi::draw_overlay_section()
 {
-  // #27 live overlay toggle. This section only reads/writes main.cpp's
-  // CommandRuntimeState (via the constructor callbacks); the main loop's apply seam
-  // -- the same one the #21 `overlay on|off|opacity` verbs go through -- pushes the
-  // change onto the actual window, so this panel and the command channel can never
-  // disagree about the state.
+  // Live overlay toggle. This section only reads/writes CommandRuntimeState's two
+  // overlay fields; the main loop's apply seam -- the same one the
+  // `overlay on|off|opacity` verbs go through -- pushes the change onto the actual
+  // window, so this panel and the command channel can never disagree about the state.
   //
   // The note renders ALWAYS (before the user turns the overlay on): engaging the
   // overlay collapses this panel (the click-through window couldn't deliver it a
@@ -492,12 +466,14 @@ void AppUi::draw_overlay_section()
       "channel (--command_port), or Ctrl+C.");
   ImGui::PopStyleColor();
 
-  auto [on, opacity] = _get_overlay();
+  bool on = _command_state.overlay_on;
+  float opacity = _command_state.overlay_opacity;
   bool changed = ImGui::Checkbox("click-through overlay", &on);
   // Always shown; while the overlay is on, opacity changes apply live each frame.
   changed |= ImGui::SliderFloat("opacity", &opacity, 0.05f, 1.f, "%.2f");
   if (changed) {
-    _set_overlay(on, opacity);
+    _command_state.overlay_on = on;
+    _command_state.overlay_opacity = opacity;
   }
 }
 
@@ -508,13 +484,12 @@ void AppUi::draw_entrainment_section(Audio* audio)
     if (ImGui::Checkbox("Mute", &muted)) {
       audio->ToggleMute();
     }
-    // TODO(handoff): no volume slider. Audio only exposes a global on/off mute
+    // TODO: no volume slider. Audio only exposes a global on/off mute
     // (ToggleMute -> sf::Listener::setGlobalVolume(0/100)); per-channel volume is
     // driven by session AudioEvents / fades (audio.cpp), not a public setter. Add
     // Audio::SetMasterVolume(float) (or similar) if a continuous slider is wanted,
-    // then wire it here -- out of scope this wave (audio.{h,cpp} isn't an owned
-    // file).
-    ImGui::TextDisabled("(volume slider: no setter on Audio yet, see handoff)");
+    // then wire it here.
+    ImGui::TextDisabled("(volume slider: no setter on Audio yet)");
   } else {
     // Null in export/video-render mode (see Director::set_audio's doc comment).
     ImGui::TextDisabled("(no live audio -- export mode)");
