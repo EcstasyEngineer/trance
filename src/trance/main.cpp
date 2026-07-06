@@ -17,6 +17,7 @@
 #include <trance/render/video_export.h>
 #include <trance/theme_bank.h>
 #include <trance/ui/app_ui.h>
+#include <trance/visual/builtin_visuals.h>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -901,36 +902,17 @@ DEFINE_int32(command_port, 0,
 
 namespace
 {
-  // Program::VisualType enum values (trance.proto) keyed by their v3 built-in name
-  // (builtin_patterns_v3.cpp's `pattern NAME for ...` declarations). Kept local to
-  // main.cpp: this is the CLI-facing name table for --visual, not a runtime concept
-  // the rest of the program needs.
-  const std::vector<std::pair<std::string, uint32_t>>& visual_name_table()
-  {
-    static const std::vector<std::pair<std::string, uint32_t>> table = {
-        {"accelerate", 1},
-        {"slow_flash", 2},
-        {"sub_text", 3},
-        {"flash_text", 4},
-        {"simple", 5},
-        {"super_parallel", 6},
-        {"animation", 7},
-        {"super_fast", 8},
-    };
-    return table;
-  }
-
   // Fatal, startup-time error for a bad --visual name: lists every valid name so the
   // failure is immediately actionable instead of a runtime surprise later.
   [[noreturn]] void fatal_bad_visual_name(const std::string& name)
   {
     std::cerr << "error: --visual '" << name << "' is not a known built-in visual. Valid names: ";
     bool first = true;
-    for (const auto& pair : visual_name_table()) {
+    for (const auto& visual : builtin_visuals()) {
       if (!first) {
         std::cerr << ", ";
       }
-      std::cerr << pair.first;
+      std::cerr << visual.name;
       first = false;
     }
     std::cerr << std::endl;
@@ -979,9 +961,9 @@ int main(int argc, char** argv)
   // first selection -- a typo should never surface as a runtime surprise.
   uint32_t forced_visual_type = 0;
   if (!FLAGS_visual.empty()) {
-    for (const auto& pair : visual_name_table()) {
-      if (pair.first == FLAGS_visual) {
-        forced_visual_type = pair.second;
+    for (const auto& visual : builtin_visuals()) {
+      if (visual.name == FLAGS_visual) {
+        forced_visual_type = visual.type;
         break;
       }
     }
