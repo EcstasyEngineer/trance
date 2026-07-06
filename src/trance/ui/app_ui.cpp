@@ -4,6 +4,7 @@
 #include <trance/director.h>
 #include <trance/media/audio.h>
 #include <trance/theme_bank.h>
+#include <trance/visual/builtin_visuals.h>
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
@@ -17,28 +18,6 @@
 #include <imgui-SFML.h>
 #include <SFML/Graphics.hpp>
 #pragma warning(pop)
-
-namespace
-{
-  // Program::VisualType value -> v3 built-in name. Mirrors main.cpp's
-  // visual_name_table() (the --visual CLI table); kept local rather than shared
-  // because main.cpp's table is deliberately private to that TU and this is a
-  // different consumer (click-to-force + weight labels in the UI vs. a startup flag).
-  const std::vector<std::pair<uint32_t, std::string>>& builtin_visual_table()
-  {
-    static const std::vector<std::pair<uint32_t, std::string>> table = {
-        {1, "accelerate"},
-        {2, "slow_flash"},
-        {3, "sub_text"},
-        {4, "flash_text"},
-        {5, "simple"},
-        {6, "super_parallel"},
-        {7, "animation"},
-        {8, "super_fast"},
-    };
-    return table;
-  }
-}
 
 AppUi::AppUi(trance_pb::Session& session, const std::string& session_path,
              SessionJsonSidecar& sidecar, std::function<void()> on_program_change,
@@ -196,9 +175,9 @@ void AppUi::draw_status_section(Director& director, Audio* audio, const ThemeBan
 void AppUi::draw_visuals_section(Director& director)
 {
   ImGui::TextUnformatted("Built-ins (click to force now):");
-  for (const auto& entry : builtin_visual_table()) {
-    if (ImGui::Button(entry.second.c_str())) {
-      director.force_builtin_visual(entry.first);
+  for (const auto& visual : builtin_visuals()) {
+    if (ImGui::Button(visual.name)) {
+      director.force_builtin_visual(visual.type);
     }
   }
 
@@ -253,9 +232,9 @@ void AppUi::draw_program_section()
   for (int i = 0; i < program->visual_type_size(); ++i) {
     auto* config = program->mutable_visual_type(i);
     const char* label = nullptr;
-    for (const auto& entry : builtin_visual_table()) {
-      if (entry.first == static_cast<uint32_t>(config->type())) {
-        label = entry.second.c_str();
+    for (const auto& visual : builtin_visuals()) {
+      if (visual.type == static_cast<uint32_t>(config->type())) {
+        label = visual.name;
         break;
       }
     }
