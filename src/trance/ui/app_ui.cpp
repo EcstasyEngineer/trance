@@ -64,14 +64,6 @@ AppUi::~AppUi()
   }
 }
 
-bool AppUi::available(bool overlay_enabled)
-{
-  // See the class comment in app_ui.h: overlay mode's window has an empty input
-  // shape (render.cpp's apply_x11_overlay_hints) and is click-through by design, so
-  // it structurally cannot receive the mouse/keyboard events an interactive UI needs.
-  return !overlay_enabled;
-}
-
 bool AppUi::init(sf::RenderWindow& window)
 {
   if (_initialized || _init_failed) {
@@ -102,27 +94,7 @@ void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Au
     _save_status_ttl -= dt.asSeconds();
   }
 
-  // Hover-reveal corner icon (issue #24 item 1): a small always-on window sits in
-  // the bottom-right corner; hovering it reveals the full panel below. This keeps
-  // the UI out of the way of the visuals when not in active use, without needing
-  // persisted state (NONE this wave -- see app_ui.h).
-  const auto display_size = ImGui::GetIO().DisplaySize;
-  const float icon_size = 28.f;
-  const float margin = 10.f;
-  ImGui::SetNextWindowPos(
-      ImVec2(display_size.x - icon_size - margin, display_size.y - icon_size - margin));
-  ImGui::SetNextWindowSize(ImVec2(icon_size, icon_size));
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.f, 4.f));
-  ImGui::Begin("##ui_icon", nullptr,
-               ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
-                   ImGuiWindowFlags_NoBackground);
-  ImGui::TextUnformatted(_visible ? "x" : "u");
-  const bool icon_hovered = ImGui::IsWindowHovered();
-  ImGui::End();
-  ImGui::PopStyleVar();
-
-  if (!_visible && !icon_hovered) {
+  if (!_visible) {
     return;
   }
 
@@ -508,14 +480,16 @@ void AppUi::draw_overlay_section()
   // change onto the actual window, so this panel and the command channel can never
   // disagree about the state.
   //
-  // The warning renders ALWAYS (before the user turns the overlay on), because once
-  // it's on this panel can no longer be clicked.
+  // The note renders ALWAYS (before the user turns the overlay on): engaging the
+  // overlay collapses this panel (the click-through window couldn't deliver it a
+  // click anyway -- see main.cpp's apply seam), so the user needs to know the way
+  // back BEFORE flipping the switch.
   ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.75f, 0.3f, 1.f));
   ImGui::TextWrapped(
-      "Warning: while the overlay is on, the window ignores the mouse entirely (that's "
-      "the point) -- this panel can't be clicked to turn it back off. Keyboard (F2/Esc) "
-      "keeps working only until focus moves to another window. Reliable off-switches: "
-      "`overlay off` over the command channel (--command_port), or Ctrl+C.");
+      "Turning the overlay on makes the window click-through and closes this panel. "
+      "To come back: Shift+F11 (global safety hotkey -- overlay off + pause; press "
+      "again to quit), the tray icon (Windows), `overlay off` over the command "
+      "channel (--command_port), or Ctrl+C.");
   ImGui::PopStyleColor();
 
   auto [on, opacity] = _get_overlay();
