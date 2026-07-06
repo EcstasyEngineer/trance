@@ -4,9 +4,13 @@
 #include <memory>
 #include <string>
 
+// OverlayConfig + the overlay hint functions live in platform/ -- they are native
+// window management, not rendering. ScreenRenderer only takes the config and calls
+// the startup variant once.
+#include <trance/platform/overlay_hints.h>
+
 #pragma warning(push, 0)
 #include <GL/glew.h>
-#include <SFML/Window/WindowHandle.hpp>
 #pragma warning(pop)
 
 namespace sf
@@ -20,27 +24,6 @@ namespace trance_pb
 
 GLuint compile(const std::string& vertex_text, const std::string& fragment_text);
 void init_glew();
-
-// v0 click-through overlay mode.
-// SFML 2.6 cannot create an ARGB (per-pixel-alpha) visual, so this is a borderless
-// always-on-top window with UNIFORM window opacity (_NET_WM_WINDOW_OPACITY) and an
-// EMPTY input shape (XShapeCombineRectangles) so all clicks/keys pass through to the
-// desktop/apps beneath. Per-pixel transparency needs the SFML3 migration.
-struct OverlayConfig {
-  bool enabled = false;
-  // 0 (fully transparent) .. 1 (fully opaque). Applies to the whole window uniformly.
-  float opacity = 0.35f;
-};
-
-// Runtime overlay toggle: callable on a live, MAPPED window from the main loop.
-// apply_overlay_hints() turns the window into a click-through translucent always-on-top
-// overlay (idempotent -- calling it again while already on just rewrites the opacity,
-// which is the live opacity-change path); clear_overlay_hints() restores a normal
-// interactive window. The --overlay startup path (ScreenRenderer constructor) shares
-// the same underlying hint code but writes _NET_WM_STATE as a property because that
-// window isn't mapped yet.
-void apply_overlay_hints(sf::WindowHandle handle, float opacity);
-void clear_overlay_hints(sf::WindowHandle handle);
 
 class Renderer
 {

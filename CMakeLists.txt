@@ -190,6 +190,7 @@ add_executable(trance
   src/trance/media/font.cpp
   src/trance/net/command_channel.cpp
   src/trance/net/command_protocol.cpp
+  src/trance/platform/overlay_hints.cpp
   src/trance/platform/system_control.cpp
   src/trance/render/openvr.cpp
   src/trance/render/render.cpp
@@ -225,8 +226,8 @@ if(WIN32)
 endif()
 
 if(UNIX AND NOT APPLE)
-  # X11 + Xext (Shape extension): v0 click-through overlay mode (#27) --
-  # _NET_WM_WINDOW_OPACITY + XShapeCombineRectangles in src/trance/render/render.cpp.
+  # X11 + Xext (Shape extension): v0 click-through overlay mode --
+  # _NET_WM_WINDOW_OPACITY + XShapeCombineRectangles in src/trance/platform/overlay_hints.cpp.
   # System dev packages (libx11-dev/libxext-dev), not vcpkg -- SFML already links X11
   # transitively for window creation, but the Shape extension calls need it explicit.
   find_package(PkgConfig QUIET)
