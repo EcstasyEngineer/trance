@@ -1,6 +1,8 @@
 #include <trance/render/render.h>
 #include <algorithm>
+#include <cstdint>
 #include <iostream>
+#include <vector>
 
 #pragma warning(push, 0)
 #include <GL/glew.h>
@@ -90,6 +92,26 @@ void init_glew()
   if (!GLEW_EXT_framebuffer_object) {
     std::cerr << "OpenGL framebuffer objects not available" << std::endl;
   }
+}
+
+bool save_window_screenshot(sf::RenderWindow& window, const std::string& path)
+{
+  const auto size = window.getSize();
+  std::vector<std::uint8_t> pixels(std::size_t{size.x} * size.y * 4);
+  glReadPixels(0, 0, GLsizei(size.x), GLsizei(size.y), GL_RGBA, GL_UNSIGNED_BYTE,
+               pixels.data());
+  // GL reads bottom-up; sf::Image wants top-down.
+  std::vector<std::uint8_t> flipped(pixels.size());
+  const std::size_t stride = std::size_t{size.x} * 4;
+  for (std::size_t y = 0; y < size.y; ++y) {
+    std::copy_n(pixels.data() + (size.y - 1 - y) * stride, stride, flipped.data() + y * stride);
+  }
+  sf::Image image{sf::Vector2u{size.x, size.y}, flipped.data()};
+  if (!image.saveToFile(path)) {
+    std::cerr << "screenshot: couldn't write " << path << std::endl;
+    return false;
+  }
+  return true;
 }
 
 sf::RenderWindow& Renderer::window()

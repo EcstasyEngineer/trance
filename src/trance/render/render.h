@@ -25,6 +25,12 @@ namespace trance_pb
 GLuint compile(const std::string& vertex_text, const std::string& fragment_text);
 void init_glew();
 
+// glReadPixels the window's currently-bound back buffer (row-flipped for sf::Image)
+// and write it to `path`. Call from a pre-display hook so it sees the fully composited
+// frame -- works even when the physical display is locked or there's no compositor to
+// grab from. Logs and returns false on write failure.
+bool save_window_screenshot(sf::RenderWindow& window, const std::string& path);
+
 class Renderer
 {
 public:
