@@ -435,20 +435,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
     if (command_state.screenshot_path.empty()) {
       return;
     }
-    const auto size = renderer->window().getSize();
-    std::vector<std::uint8_t> pixels(std::size_t{size.x} * size.y * 4);
-    glReadPixels(0, 0, GLsizei(size.x), GLsizei(size.y), GL_RGBA, GL_UNSIGNED_BYTE,
-                 pixels.data());
-    // GL reads bottom-up; sf::Image wants top-down.
-    std::vector<std::uint8_t> flipped(pixels.size());
-    const std::size_t stride = std::size_t{size.x} * 4;
-    for (std::size_t y = 0; y < size.y; ++y) {
-      std::copy_n(pixels.data() + (size.y - 1 - y) * stride, stride, flipped.data() + y * stride);
-    }
-    sf::Image image{sf::Vector2u{size.x, size.y}, flipped.data()};
-    if (!image.saveToFile(command_state.screenshot_path)) {
-      std::cerr << "screenshot: couldn't write " << command_state.screenshot_path << std::endl;
-    }
+    save_window_screenshot(renderer->window(), command_state.screenshot_path);
     command_state.screenshot_path.clear();
   };
   const bool screenshot_supported = realtime && !director.vr_enabled();
