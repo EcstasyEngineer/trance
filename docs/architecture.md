@@ -1,46 +1,54 @@
 # Architecture
 
 A navigable map of the `trance` codebase: what the two executables are, how a
-`.session` becomes pixels on screen, and where to start reading for each
+`*.session.json` becomes pixels on screen, and where to start reading for each
 subsystem. For the feature list and build instructions, see the
 [README](../README.md).
 
 ## Two executables, one session model
 
-`trance` ships as two separate binaries that share the protobuf session schema
-(`src/common/trance.proto`) and the `common` support code, but otherwise have no
-runtime dependency on each other:
+`trance` ships as two separate binaries that share the in-memory session model
+(the `trance_pb::Session` protobuf, `src/common/trance.proto`) and the `common`
+support code, but otherwise have no runtime dependency on each other:
 
-- **`trance`** — the realtime player. Loads a `.session`, runs the frame loop,
+- **`trance`** — the realtime player. Loads a session, runs the frame loop,
   and renders to a window (or VR headset, or a video file). Entry point:
   `src/trance/main.cpp`.
-- **`creator`** — a wxWidgets GUI editor for building and saving `.session`
-  files. Separate executable, separate `main`. Entry point:
-  `src/creator/main.cpp`.
+- **`creator`** — a wxWidgets GUI session editor. **Deprecated** — the in-app F2
+  (ImGui) panel is the editor going forward. Separate executable, separate
+  `main`. Entry point: `src/creator/main.cpp`.
 
-The interchange format is the `trance_pb::Session` message. `creator` writes it,
-`trance` reads it. Neither knows anything about the other's internals.
+The **on-disk format is JSON**: `*.session.json`, spec in
+[session-json-format.md](session-json-format.md), loader
+`src/common/session_json.cpp`. The proto is the frozen *in-memory* model only —
+legacy protobuf `.session` files are no longer read directly and convert via
+`trance_convert`. (A third small binary, `trance_convert`, is that one-shot
+legacy-proto → JSON converter.)
 
-### The `creator` editor
+### The `creator` editor (deprecated)
 
 `creator` is a wxWidgets desktop app (`src/creator/`, ~17 files). `CreatorFrame`
 (`src/creator/main.cpp`) hosts a `wxNotebook` with one page per part of the data
 model — themes (`theme.{h,cpp}`), programs (`program.{h,cpp}`), the playlist
 (`playlist.{h,cpp}`), and session variables (`variables.{h,cpp}`) — plus a system
 settings dialog (`settings.{h,cpp}`). It edits an in-memory `trance_pb::Session`
-and serialises it with `save_session` (`src/common/session.cpp`). It can also
-launch the player (`launch.{h,cpp}`) and drive a video export (`export.{h,cpp}`).
-The editor has no rendering or visual-engine code of its own — it only produces
-the proto that the player consumes. (No deeper editor-internals doc exists yet;
-this paragraph is the whole map.)
+and serialises it with `save_session` (`src/common/session.cpp`, which now writes
+JSON). It can also launch the player (`launch.{h,cpp}`) and drive a video export
+(`export.{h,cpp}`). The editor has no rendering or visual-engine code of its own.
+It predates the JSON cut and the v3 grammar (no custom-pattern or entrainment
+editing) and is deprecated pending F2-panel parity. (No deeper editor-internals
+doc exists; this paragraph is the whole map.)
 
 ## Runtime data flow (the player)
 
-The player's lifecycle lives in `play_session()` (`src/trance/main.cpp:102`):
+The player's lifecycle lives in `play_session()` (`src/trance/main.cpp`):
 
-1. **Load.** `main()` calls `load_session()` (`src/common/session.cpp:465`) to
-   parse the `.session` proto, then `validate_session()` fills in defaults and
-   repairs dangling references. If the file is missing it falls back to
+1. **Load.** `main()` calls `load_session()` (`src/common/session.cpp`), which
+   requires a `*.session.json` path and parses it via `load_session_json()`
+   (`src/common/session_json.cpp`) into the in-memory `trance_pb::Session`; a
+   legacy `.session`/`.cfg` proto path is rejected with a fatal hint to run
+   `trance_convert`. `validate_session()` then fills in defaults and repairs
+   dangling references. If the file is missing it falls back to
    `get_default_session()` and `search_resources()` (auto-generates a session
    from media found next to the binary).
 2. **Theme bank.** A `ThemeBank` (`src/trance/theme_bank.{h,cpp}`) is constructed
@@ -65,8 +73,8 @@ The player's lifecycle lives in `play_session()` (`src/trance/main.cpp:102`):
    `play_session()` — see [sessions-and-playlists.md](sessions-and-playlists.md).
 
 ```
-.session (protobuf)
-   │  load_session + validate_session   (common/session.cpp)
+*.session.json
+   │  load_session (-> load_session_json) + validate_session   (common/session*.cpp)
    ▼
 trance_pb::Session ──► ThemeBank      (image/animation/text/font supply)
    │                       ▲
@@ -84,22 +92,24 @@ play_session frame loop ──► Director ──► Visual (cycler tree + effec
 
 | Path | What lives here |
 |---|---|
-| `src/common/` | Shared, executable-agnostic code: the `trance.proto` schema, session load/save/validate (`session.{h,cpp}`), small utilities (`util.h`, `common.h`). |
+| `src/common/` | Shared, executable-agnostic code: the `trance.proto` in-memory schema, the JSON loader/saver (`session_json.{h,cpp}`), session load/save/validate (`session.{h,cpp}`), the legacy-proto reader for `trance_convert` (`session_legacy.{h,cpp}`), small utilities (`util.h`, `common.h`). |
 | `src/common/media/` | Decoders shared by both binaries: `Image`, the `Streamer` animation interface (`streamer.{h,cpp}`). |
 | `src/trance/` | The realtime player: `main.cpp`, `director.{h,cpp}`, `theme_bank.{h,cpp}`, GLSL `shaders.h`. |
 | `src/trance/media/` | Player-side media: `audio.{h,cpp}`, `entrainment.{h,cpp}` (the synthesised bed), `font.{h,cpp}`, `async_streamer.{h,cpp}`, video `export.{h,cpp}`. |
-| `src/trance/render/` | The `Renderer` interface and its subclasses: `render.{h,cpp}` (screen), `openvr.{h,cpp}` (SteamVR), `video_export.{h,cpp}` (offline encode). |
+| `src/trance/render/` | The `Renderer` interface and its subclasses: `render.{h,cpp}` (screen — also home of the click-through overlay window hints, `apply_overlay_hints` / `clear_overlay_hints`), `openvr.{h,cpp}` (SteamVR), `video_export.{h,cpp}` (offline encode). |
 | `src/trance/visual/` | The visual engine: the cycler/pattern system (~23 files). The pattern DSL parser/compiler, the `Cycler` tree, compiled visuals, the data-driven render blocks (`render_eval`), and the headless tests. |
-| `src/creator/` | The wxWidgets `.session` editor (separate executable). |
+| `src/trance/ui/` | The ImGui in-app control panel (`app_ui.{h,cpp}`), toggled with F2. |
+| `src/trance/net/` | The `--command_port` control channel: line→verb protocol (`command_protocol.{h,cpp}`) and the socket/mailbox (`command_channel.{h,cpp}`). |
+| `src/trance/platform/` | Out-of-window controls (`system_control.{h,cpp}`): the system tray icon (Windows) and the global Shift+F11 safety hotkey (Win32/X11) — the control surface that keeps working while the overlay is click-through. |
+| `src/creator/` | The deprecated wxWidgets session editor (separate executable). |
 | `src/jpgd/` | Vendored JPEG decoder (third-party). |
 
 ## Where to start reading, per subsystem
 
 - **Player lifecycle / frame loop** → `src/trance/main.cpp`, function
-  `play_session()` (`:102`). The playlist state machine is the `while (true)`
-  block at `:223`.
+  `play_session()`. The playlist state machine is the per-frame loop inside it.
 - **Visual engine** → [visuals.md](visuals.md). Start at `Director::change_visual`
-  (`src/trance/director.cpp:384`) for selection, then `compiled_visual.{h,cpp}`
+  (`src/trance/director.cpp`) for selection, then `compiled_visual.{h,cpp}`
   and `cyclers.{h,cpp}`.
 - **Authoring a custom pattern** → [authoring-v3-patterns.md](authoring-v3-patterns.md);
   grammar in `src/trance/visual/pattern_parser_v3.cpp` (the only parser — v1 retired).
@@ -113,10 +123,26 @@ play_session frame loop ──► Director ──► Visual (cycler tree + effec
   `render_text` (`src/trance/director.cpp`) hold the actual GL draw calls.
 - **Theme supply** → `src/trance/theme_bank.h` (the class comment explains the
   two-active-plus-one-loading scheme).
-- **Editor** → `src/creator/main.cpp`.
+- **Overlay mode / out-of-window controls** → `apply_overlay_hints`
+  (`src/trance/render/render.h`) for the click-through window itself;
+  `src/trance/platform/system_control.h` for the tray icon + global Shift+F11
+  safety hotkey that control it.
+- **Command channel** → `src/trance/net/command_protocol.h`; verb reference in
+  [spec-mcp-ambient-daemon.md](spec-mcp-ambient-daemon.md).
+- **Editor (deprecated)** → `src/creator/main.cpp`.
 
 ## Controls (realtime)
 
-Handled in `handle_events()` (`src/trance/main.cpp:68`): **Escape**/window-close
-quits, **F1** toggles the debug overlay (`Director::draw_debug_overlay`,
-`director.cpp:743`), **M** toggles audio mute (`Audio::ToggleMute`).
+Full user-facing reference: [controls.md](controls.md).
+
+In-window keys are handled in `handle_events()` (`src/trance/main.cpp`):
+**Escape**/window-close quits, **F1** toggles the debug overlay
+(`Director::draw_debug_overlay`, `src/trance/director.cpp`), **F2** toggles the
+ImGui control panel (`src/trance/ui/app_ui.{h,cpp}`), **M** toggles audio mute
+(`Audio::ToggleMute`).
+
+Outside the window (works even when the overlay makes the window click-through):
+the global **Shift+F11** safety hotkey (first press: overlay off + pause + panel
+up; second press from that safe state: quit) and the Windows **system tray icon**
+menu — both in `src/trance/platform/system_control.{h,cpp}` — plus the
+`--command_port` channel and SIGINT/SIGTERM.

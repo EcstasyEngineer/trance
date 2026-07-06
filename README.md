@@ -7,9 +7,13 @@ randomly-generated patterns designed to aid induction and deepening.
 
 - Randomly-generated visuals — no two sessions are the same
 - Eight distinct visual modes (slow flash, subliminal text, parallel images, animation bursts, and more)
-- Graphical session editor (`creator.exe`) with full control over all settings
+- Authorable visual patterns via the v3 pattern grammar ([docs/spec-grammar-v3.md](docs/spec-grammar-v3.md))
+- In-app control panel (**F2**, ImGui) for live session editing and control
+- Click-through always-on-top overlay mode (`--overlay`)
+- System tray icon (Windows) + global **Shift+F11** safety hotkey — see [docs/controls.md](docs/controls.md)
+- Line-protocol control channel (`--command_port`) for external automation
 - Hardware-accelerated rendering via OpenGL
-- Audio support with multiple independent channels
+- Audio support with multiple independent channels, plus binaural/isochronic entrainment beds
 - Programmable playlist with conditionals and subroutines
 - Video export (`.webm`, `.h264`, frame-by-frame `.jpg`/`.png`/`.bmp`)
 - SteamVR (OpenVR) support
@@ -17,20 +21,21 @@ randomly-generated patterns designed to aid induction and deepening.
 ## Quick start
 
 1. Download the [latest release](../../releases/latest) and extract it anywhere.
-2. Run `creator.exe` to build a session, or drop a folder of images/GIFs into the same
-   directory and run `trance.exe` directly — it will auto-generate a default session
-   from whatever media it finds.
-3. Press **Escape** to exit fullscreen.
+2. Drop a folder of images/GIFs next to `trance.exe` and run it directly — it will
+   auto-generate a default session from whatever media it finds — or point it at a
+   `*.session.json` file ([docs/session-json-format.md](docs/session-json-format.md)).
+3. Press **F2** for the in-app control panel, **Escape** to quit. Full list of
+   controls: [docs/controls.md](docs/controls.md).
 
 ## Usage
 
 ```sh
 # play a session normally
-trance.exe some.session
+trance.exe some.session.json
 
 # force every visual selection to one built-in, by its v3 name -- for testing a single
 # visual without hand-editing weights in the session:
-trance.exe --visual=slow_flash some.session
+trance.exe --visual=slow_flash some.session.json
 # valid names: accelerate, slow_flash, sub_text, flash_text, simple, super_parallel,
 # animation, super_fast. An unknown name is a fatal error at startup listing the valid
 # ones -- it never falls through to "picked something else".
@@ -39,12 +44,16 @@ trance.exe --visual=slow_flash some.session
 # entrainment, and playlist still come from the session/program as normal, only the
 # visual schedule is overridden. A parse error prints the parser's line:col diagnostic
 # and exits instead of falling back to a built-in.
-trance.exe --pattern=my_pattern.v3 some.session
+trance.exe --pattern=my_pattern.v3 some.session.json
 
 # --visual and --pattern are mutually exclusive.
 
+# click-through always-on-top overlay over the desktop (see docs/controls.md for the
+# escape routes -- the window intentionally ignores clicks and keys once engaged):
+trance.exe --overlay some.session.json
+
 # video export instead of a window:
-trance.exe --export_path out.webm --export_length 60 some.session
+trance.exe --export_path out.webm --export_length 60 some.session.json
 ```
 
 ## Data model
@@ -54,9 +63,12 @@ trance.exe --export_path out.webm --export_length 60 some.session
 | **Theme** | A collection of images, animations, fonts, and text lines, usually grouped around a subject |
 | **Program** | A selection of themes plus display settings (speed, visual mode weights, etc.) |
 | **Playlist** | A sequence of programs with timing, transitions, audio triggers, and optional branching/subroutines |
-| **Session** | A complete file (`.session`) containing themes, programs, and a playlist |
+| **Session** | A complete file (`*.session.json`) containing themes, programs, and a playlist |
 
-All parts of a session are edited with `creator.exe`.
+Sessions are plain JSON ([docs/session-json-format.md](docs/session-json-format.md) is the
+normative spec) — edit them live from the in-app **F2** panel or in any text editor. Legacy
+protobuf `.session` files from older versions convert with `trance_convert`. (The old
+`creator.exe` graphical editor is deprecated.)
 
 ## Supported file formats
 

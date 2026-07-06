@@ -1,5 +1,7 @@
 # Roadmap — a v2 visual grammar
 
+> **SUPERSEDED — v3 shipped instead; kept for history.**
+
 > **Status: design notes / opinions, not a spec.** Forward-looking. The current
 > system (see [visuals.md](visuals.md)) is done and shipping. This doc captures *why*
 > the current grammar is shaped the way it is, where that shape is over-complex, and

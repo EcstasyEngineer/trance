@@ -188,7 +188,8 @@ dead binary.
 `spec-grammar-v3.md`, `engine-today.md`) is current and rigorous. But
 `sessions-and-playlists.md` and `architecture.md` still open with ".session is a
 protobuf" (false since the JSON cut), spec §9 labels shipped waves "future", and
-`docs-cleanup-plan.md` prescribes an archive structure that was never executed.
+`archive/docs-cleanup-plan.md` prescribes an archive structure that was never executed
+(since done — the plan itself now lives in `docs/archive/`).
 
 Actions: (1) close the loader exception gap (small, mechanical); (2) creator
 retirement — decision list below; (3) execute the docs cleanup plan (medium, mostly
