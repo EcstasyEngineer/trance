@@ -7,7 +7,7 @@
 #include <atomic>
 #include <vector>
 
-// In-process localhost command channel (issue #21, docs/spec-mcp-ambient-daemon.md).
+// In-process localhost command channel (docs/spec-mcp-ambient-daemon.md).
 //
 // Threading invariant (load-bearing, spec sec 2): the reader thread ONLY ever pushes raw
 // lines into the mutex-guarded queue below. It never touches Director/Audio/anything else
@@ -40,9 +40,8 @@ public:
   void reply(std::uint64_t conn_id, const std::string& line);
 
 private:
-  // The listen socket is passed as uintptr_t, NOT int: Win64 SOCKET is pointer-sized and
-  // truncating it through int corrupts the handle (audit finding). POSIX fds round-trip
-  // through uintptr_t losslessly.
+  // Pass the listen socket as uintptr_t, not int: Win64 SOCKET is pointer-sized and
+  // truncates through int; POSIX fds round-trip losslessly.
   void reader_loop(std::uintptr_t listen_fd);
 
   std::mutex _mutex;

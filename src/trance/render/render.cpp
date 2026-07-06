@@ -22,7 +22,7 @@
 namespace
 {
 #if defined(__linux__)
-  // Overlay wiring (#27) on top of the X11 groundwork from #20, now runtime-toggleable
+  // Overlay wiring, runtime-toggleable
   // (apply_overlay_hints/clear_overlay_hints below). All of this is a no-op (returns
   // without touching anything) if we're not actually on an X11 session (e.g. Wayland-
   // only, or DISPLAY unset) -- overlay mode then degrades gracefully to an always-on-top
@@ -204,8 +204,8 @@ namespace
 #endif
 }
 
-// Runtime overlay toggle (#27): both callable on a live, mapped window from the main
-// loop (main.cpp's apply seam, fed by the #21 `overlay ...` verbs and the F2 UI's
+// Runtime overlay toggle: both callable on a live, mapped window from the main
+// loop (main.cpp's apply seam, fed by the `overlay ...` verbs and the F2 UI's
 // Overlay section). apply_overlay_hints() is idempotent -- calling it again while
 // already on just rewrites the opacity, which is exactly the live-opacity-change path.
 void apply_overlay_hints(sf::WindowHandle handle, float opacity)
@@ -222,26 +222,22 @@ void apply_overlay_hints(sf::WindowHandle handle, float opacity)
   XFlush(display);
   XCloseDisplay(display);
 #elif defined(_WIN32)
-  // UNVALIDATED: no Windows box in this environment to test against. Mirrors the X11
-  // path's intent (always-on-top, uniform translucency, click-through) via the
-  // documented WS_EX_LAYERED | WS_EX_TRANSPARENT combination. Test on an actual
-  // Windows machine before relying on this for #27 there.
+  // UNVALIDATED on real Windows hardware. Mirrors the X11 path's intent -- always-on-
+  // top, uniform translucency, click-through -- via the documented WS_EX_LAYERED |
+  // WS_EX_TRANSPARENT combination.
   //
   // WS_EX_NOACTIVATE: an overlay must never take activation/focus -- without it the
   // window can still be activated (e.g. via alt-tab or the taskbar) even though
-  // WS_EX_TRANSPARENT makes it mouse-invisible, which reads as "the overlay grabbed
-  // focus" (observed in the field as the F2-menu-stranded bug's second half).
+  // WS_EX_TRANSPARENT makes it mouse-invisible.
   //
-  // Sequencing (opaque-overlay field bug): the alpha is intermittently NOT
-  // composited -- the window renders fully opaque while click-through keeps working.
-  // Leading hypothesis (Codex-concurred, untested on hardware): DWM promotes an
-  // exactly-fullscreen borderless TOPMOST GL window out of the composited/redirected
-  // path (fullscreen optimization / independent flip), where LWA_ALPHA has no effect.
-  // Mitigation shipped blind: strip WS_EX_LAYERED first and force a frame change, so
-  // re-adding the styles + alpha is a fresh transition DWM must re-evaluate, and log
-  // SetLayeredWindowAttributes failures instead of assuming they took. Deeper fixes
-  // now start with 1px overscan de-promotion; DirectComposition remains the next rung
-  // if this still fails on hardware.
+  // DWM can promote an exactly-fullscreen borderless TOPMOST GL window out of the
+  // composited/redirected path (fullscreen optimization / independent flip), where
+  // LWA_ALPHA has no effect -- the window renders fully opaque while click-through
+  // keeps working. Countermeasures: 1px overscan (win32_apply_overlay_bounds) so the
+  // window is never exactly fullscreen, plus stripping WS_EX_LAYERED and forcing a
+  // frame change so re-adding the styles + alpha is a fresh transition DWM must
+  // re-evaluate; SetLayeredWindowAttributes failures are logged instead of assumed to
+  // have taken. DirectComposition is the next rung if this still fails on hardware.
   HWND hwnd = handle;
   win32_apply_overlay_bounds(hwnd);
   LONG_PTR ex_style = GetWindowLongPtr(hwnd, GWL_EXSTYLE);

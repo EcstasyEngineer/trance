@@ -899,8 +899,8 @@ namespace
 
 std::string Director::status_visual_name() const
 {
-  // Same logic as draw_debug_overlay()'s "visual :" line (#21 status verb reuses what the
-  // F1 overlay already knows, per the owning task's brief).
+  // Same logic as draw_debug_overlay()'s "visual :" line -- the status verb reuses what
+  // the F1 overlay already knows.
   return _last_custom_index >= 0 ? _custom_visual_name : visual_type_name(_last_visual_selection);
 }
 

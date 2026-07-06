@@ -768,8 +768,7 @@ namespace
     // Scan-derived media lists (image/animation/font -- exactly what the theme-level
     // search_resources fills) are omitted for scanned themes: reloading re-derives them,
     // and writing them would duplicate entries on the next load. text_line and audio_path
-    // are NEVER scan-derived, so they must be written regardless -- the old early-return
-    // here silently dropped both for scanned themes (audit finding).
+    // are NEVER scan-derived, so they must be written regardless.
     if (!scanned) {
       if (theme.image_path_size()) {
         json arr = json::array();

@@ -86,7 +86,7 @@ bool export_session_archive(const std::string& session_path, const std::string& 
   // *where the saver looks things up*, not what's written to session.json itself.
   // Stage to the system temp dir, NEVER into the session root: the root may already
   // contain a real file named session.json (or the session itself may be one), and the
-  // stage-then-remove below would silently overwrite and then DELETE it (audit finding).
+  // stage-then-remove below would silently overwrite and then DELETE it.
   // `root` is still passed as the saver's lookup/pattern root -- only the session.json
   // location moves.
   auto staged_session_json = std::filesystem::temp_directory_path() /

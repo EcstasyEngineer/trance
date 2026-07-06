@@ -21,18 +21,18 @@ namespace trance_pb
 GLuint compile(const std::string& vertex_text, const std::string& fragment_text);
 void init_glew();
 
-// v0 click-through overlay mode (#27, on top of the X11 groundwork from #20).
+// v0 click-through overlay mode.
 // SFML 2.6 cannot create an ARGB (per-pixel-alpha) visual, so this is a borderless
 // always-on-top window with UNIFORM window opacity (_NET_WM_WINDOW_OPACITY) and an
 // EMPTY input shape (XShapeCombineRectangles) so all clicks/keys pass through to the
-// desktop/apps beneath. Per-pixel transparency needs the SFML3 migration (#20).
+// desktop/apps beneath. Per-pixel transparency needs the SFML3 migration.
 struct OverlayConfig {
   bool enabled = false;
   // 0 (fully transparent) .. 1 (fully opaque). Applies to the whole window uniformly.
   float opacity = 0.35f;
 };
 
-// Runtime overlay toggle (#27): callable on a live, MAPPED window from the main loop.
+// Runtime overlay toggle: callable on a live, MAPPED window from the main loop.
 // apply_overlay_hints() turns the window into a click-through translucent always-on-top
 // overlay (idempotent -- calling it again while already on just rewrites the opacity,
 // which is the live opacity-change path); clear_overlay_hints() restores a normal
