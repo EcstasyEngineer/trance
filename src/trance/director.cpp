@@ -1,4 +1,5 @@
 ﻿#include <trance/director.h>
+#include <trance/visual/builtin_visuals.h>
 #include <common/session.h>
 #include <common/util.h>
 #include <trance/media/audio.h>
@@ -630,31 +631,16 @@ float Director::eye_offset() const
 
 namespace
 {
-  // The proto VisualType enum value (see trance.proto) mapped to a human label.
-  // Note the enum name and the concrete Visual class don't always line up:
-  // PARALLEL is a single image, SUPER_PARALLEL is the 3-image overlay.
+  // Label a built-in by its v3 name + blurb (the shared catalog) -- the same name
+  // --visual accepts and the F2 Visuals section shows.
   std::string visual_type_name(uint32_t t)
   {
-    switch (t) {
-    case 1:
-      return "ACCELERATE [accelerating image + spiral]";
-    case 2:
-      return "SLOW_FLASH [slow then fast flash phases]";
-    case 3:
-      return "SUB_TEXT [image + scrolling subtext]";
-    case 4:
-      return "FLASH_TEXT [2-image crossfade + text]";
-    case 5:
-      return "PARALLEL [single image]";
-    case 6:
-      return "SUPER_PARALLEL [3-image overlay / triple fade]";
-    case 7:
-      return "ANIMATION [animation + crossfade image]";
-    case 8:
-      return "SUPER_FAST [rapid current/next cuts]";
-    default:
-      return "(none)";
+    for (const auto& visual : builtin_visuals()) {
+      if (visual.type == t) {
+        return std::string{visual.name} + " [" + visual.blurb + "]";
+      }
     }
+    return "(none)";
   }
 
   std::string bar(float frac, int width)
@@ -899,8 +885,8 @@ namespace
 
 std::string Director::status_visual_name() const
 {
-  // Same logic as draw_debug_overlay()'s "visual :" line (#21 status verb reuses what the
-  // F1 overlay already knows, per the owning task's brief).
+  // Same logic as draw_debug_overlay()'s "visual :" line -- the status verb reuses what
+  // the F1 overlay already knows.
   return _last_custom_index >= 0 ? _custom_visual_name : visual_type_name(_last_visual_selection);
 }
 

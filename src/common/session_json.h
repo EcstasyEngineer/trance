@@ -6,8 +6,8 @@
 
 // JSON <-> trance_pb mapping for session.json / system.json, per the normative spec
 // docs/session-json-format.md. The in-memory model stays trance_pb::Session /
-// trance_pb::System this wave (see spec "Scope of this wave"); only the on-disk format
-// is JSON. Everything here is exercised through session.{h,cpp}'s load_session /
+// trance_pb::System; only the on-disk format is JSON. Everything here is exercised
+// through session.{h,cpp}'s load_session /
 // load_system / save_session / save_system -- callers outside session.cpp shouldn't
 // need to include this header directly.
 
@@ -18,7 +18,7 @@ namespace trance_pb
 }
 
 // Per-session sidecar (spec sec 5): information the loader recovers from the JSON that
-// has no home in trance_pb (which is frozen this wave), needed so a subsequent save
+// has no home in trance_pb, needed so a subsequent save
 // writes pattern text back to its original file and re-emits theme `scan` keys instead
 // of freezing their expansion into explicit lists.
 struct SessionJsonSidecar

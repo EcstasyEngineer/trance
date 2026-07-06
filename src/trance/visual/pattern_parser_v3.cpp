@@ -12,10 +12,10 @@
 #include <vector>
 
 // v3 grammar lowering. See docs/spec-grammar-v3.md. The parser turns the two-nouns/one-rule
-// surface into the existing pattern::Node tree + RenderStmt block, with ZERO runtime change in
-// Phase 1: patterns nest onto Seq/Par/Rep cyclers, draws become Image/Text effects + render
-// statements, modulators become render [expr] strings reading a pattern's minted clock id, and
-// registers are lexically pattern-scoped via compile-time name qualification.
+// surface into the existing pattern::Node tree + RenderStmt block: patterns nest onto
+// Seq/Par/Rep cyclers, draws become Image/Text effects + render statements, modulators become
+// render [expr] strings reading a pattern's minted clock id, and registers are lexically
+// pattern-scoped via compile-time name qualification.
 namespace
 {
   using pattern::Effect;
@@ -217,8 +217,8 @@ namespace
       Node body = parse_pattern(/*top=*/true);
       out.name = _root_name;
 
-      // Top-level wrapper: an init Action (themes/font/spiral_new) then the pattern body, exactly
-      // as the v1/v2 front-ends do, so theme cycling + spiral creation happen once up front.
+      // Top-level wrapper: an init Action (themes/font/spiral_new) then the pattern body,
+      // so theme cycling + spiral creation happen once up front.
       Node init = action(1, {effect(Effect::Kind::Themes), effect(Effect::Kind::Font),
                              effect(Effect::Kind::SpiralNew)});
       Node root = group(Node::Type::One, {std::move(init), std::move(body)});
@@ -602,7 +602,7 @@ namespace
     }
 
     // `audio <content> [loop] [volume <modulator>]` / `audio stop` -- PRECANNED theme audio
-    // (issue #23, no TTS ever). Two nouns still apply: `content` is the same bi-thematic
+    // only (no TTS, ever). Two nouns still apply: `content` is the same bi-thematic
     // vocabulary as `image`/`word` (concept/reward/runtime); `volume` is an ordinary
     // modulator, not a bespoke keyword class. Lowers to Effect{Kind::Audio} (or AudioStop
     // for `audio stop`); a literal volume sets Effect::rate (fired once), a curve/[expr]
@@ -1080,7 +1080,7 @@ namespace
     }
 
     // `burst [-> NAME] period Nf chance 1/K cooldown Nf duration Amin..Amax { base {..} burst {..} }`
-    // -- surfaces the existing BurstCycler (spec-grammar-v3.md 13.1, issue #26): a base loop
+    // -- surfaces the existing BurstCycler (spec-grammar-v3.md 13.1): a base loop
     // randomly interrupted by a bounded burst, then a cooldown. Lowers to exactly one
     // Node::Burst; `length` is the enclosing pattern's span (like `every`, no separate `length`
     // keyword -- the runtime field is filled from `span`, not restated by the author). `base` and

@@ -1,5 +1,7 @@
 # v2 grammar — validated direction & next steps
 
+> **SUPERSEDED — v3 shipped instead; kept for history.**
+
 Fresh-eyes synthesis of the two GPT Pro responses (`q1 response.md`, `q2 response.md`),
 filtered and re-weighted against (a) the actual code as it stands today, (b) the
 git-history forensics on the original repo, and (c) the two things the framing under-served:

@@ -10,12 +10,16 @@
 #include <common/media/image.h>
 #include <trance/net/command_channel.h>
 #include <trance/net/command_protocol.h>
+#include <trance/platform/overlay_hints.h>
+#include <trance/playlist_runner.h>
 #include <trance/platform/system_control.h>
 #include <trance/render/openvr.h>
 #include <trance/render/render.h>
 #include <trance/render/video_export.h>
+#include <trance/runtime_state.h>
 #include <trance/theme_bank.h>
 #include <trance/ui/app_ui.h>
+#include <trance/visual/builtin_visuals.h>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -39,10 +43,10 @@
 #include <SFML/Window.hpp>
 #pragma warning(pop)
 
-// Overlay mode (#27): the window is click-through by design, so it can never receive
+// Overlay mode: the window is click-through by design, so it can never receive
 // its own quit hotkey (Escape, handled in handle_events() below never arrives). The
 // out-of-window escapes are SystemControl (global Shift+F11 safety hotkey + Windows
-// tray icon), the #21 command channel, and SIGINT/SIGTERM -- the signals handled here
+// tray icon), the command channel, and SIGINT/SIGTERM -- the signals handled here
 // as a clean flag flip (running = false), not abort/terminate, so the async thread/
 // audio/window all still tear down via the normal play_session() exit path.
 std::atomic<bool> g_overlay_stop_requested = false;
@@ -50,27 +54,6 @@ std::atomic<bool> g_overlay_stop_requested = false;
 extern "C" void overlay_signal_handler(int)
 {
   g_overlay_stop_requested = true;
-}
-
-std::string next_playlist_item(const std::map<std::string, std::string>& variables,
-                               const trance_pb::PlaylistItem* item)
-{
-  uint32_t total = 0;
-  for (const auto& next : item->next_item()) {
-    total += (is_enabled(next, variables) ? next.random_weight() : 0);
-  }
-  if (!total) {
-    return {};
-  }
-  auto r = random(total);
-  total = 0;
-  for (const auto& next : item->next_item()) {
-    total += (is_enabled(next, variables) ? next.random_weight() : 0);
-    if (r < total) {
-      return next.playlist_item_name();
-    }
-  }
-  return {};
 }
 
 static const std::string bad_alloc = "OUT OF MEMORY! TRY REDUCING USAGE IN SETTINGS...";
@@ -137,32 +120,29 @@ void print_info(double elapsed_seconds, uint64_t frames, uint64_t total_frames)
             << std::endl;
 }
 
-// #21 command channel runtime state (docs/spec-mcp-ambient-daemon.md): the mailbox is
-// drained and every verb dispatched from the main loop, right after handle_events(), per
-// the spec's threading invariant (sec 2) -- CommandChannel's reader thread only ever pushes
-// raw lines; only this function (running on the render thread) touches Director/Audio.
-// `paused` gates start/stop/pause/resume (director.update()/theme_bank->advance_frames()
-// simply don't run while paused -- "keep it boring" per the spec's own framing, sec 1).
-// `intensity` is still stub state: the spec (sec 4) explicitly scopes its actual wiring
-// as TBD, so the verb is protocol-complete and just stores the value here for a future
-// consumer. `overlay_on`/`overlay_opacity` are LIVE (#27): the verbs (and the F2 UI's
-// Overlay section) only write these two fields; play_session()'s per-frame apply seam
-// reconciles the real window against them via apply_overlay_hints/clear_overlay_hints.
-struct CommandRuntimeState {
-  bool paused = false;
-  float intensity = 1.f;
-  bool overlay_on = false;
-  float overlay_opacity = 0.35f;
-  // `screenshot PATH`: consumed by the renderer's pre-display hook (which sees the fully
-  // composited back buffer) on the next rendered frame; empty = nothing pending.
-  std::string screenshot_path;
-};
+// Command dispatch threading (docs/spec-mcp-ambient-daemon.md sec 2): CommandChannel's
+// reader thread only ever pushes raw lines; the mailbox is drained and every verb
+// dispatched from the main loop right after handle_events(), so only the render thread
+// touches Director/Audio. The shared state lives in trance/runtime_state.h.
 
-// pause/stop must actually SUSPEND playback, not just stop advancing visual frames:
-// the playlist clock is frozen separately in the main loop, and the audible side
-// (music channels + entrainment bed) pauses here (audit finding). Null audio =
-// export mode; the flag still flips. Shared by the #21 verbs and the SystemControl
-// (tray/hotkey) requests, so both control surfaces get identical pause semantics.
+// The one policy invariant shared by every "show the panel" path (`ui on` verb, the
+// tray's Show-control-panel, the safety hotkey): a click-through window can't host an
+// interactive panel, so showing the panel implies disengaging the overlay first --
+// showing one anyway strands it on-screen, drawn but unclickable (and on Windows, once
+// a click falls through and focus moves away, the window can never be re-focused by
+// clicking, so not even F2-the-key could close it).
+void show_control_panel(CommandRuntimeState& state, AppUi* app_ui)
+{
+  state.overlay_on = false;
+  if (app_ui) {
+    app_ui->set_visible(true);
+  }
+}
+
+// pause/stop suspends the audible side (music channels + entrainment bed); the
+// playlist clock is frozen separately in the main loop. Null audio (export mode)
+// just flips the flag. Shared by the command verbs and the SystemControl
+// (tray/hotkey) requests, so every control surface gets identical pause semantics.
 void set_paused(CommandRuntimeState& state, Audio* audio, bool paused)
 {
   if (paused == state.paused) {
@@ -209,9 +189,9 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
     state.intensity = cmd.number;
     return command_protocol::format_ok();
   case Verb::kSet:
-    // Settings surface is mid-migration (protobuf Program -> JSON, this sprint -- spec
-    // sec 4/9): no key is wired yet, so every key is "unknown" until that migration
-    // lands and picks the key names. Never a crash, per spec sec 3.
+    // Settings surface is mid-migration (protobuf Program -> JSON; spec sec 4/9): no
+    // key is wired yet, so every key is "unknown" until that migration lands and picks
+    // the key names. Never a crash, per spec sec 3.
     return command_protocol::format_err("unknown key: " + cmd.key);
   case Verb::kGet:
     return command_protocol::format_err("unknown key: " + cmd.key);
@@ -230,8 +210,7 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
   case Verb::kLoadSession:
     // No live session-swap path exists yet (play_session() binds one Session at startup;
     // the F2 UI mutates it in place but nothing can replace it wholesale) -- protocol-
-    // complete stub per the task brief's "implement the protocol + a stub wiring"
-    // instruction; see handoff note.
+    // complete stub until such a path exists.
     return command_protocol::format_err("load session: not yet supported (no live session "
                                         "reload path)");
   case Verb::kStatus: {
@@ -256,18 +235,15 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
     if (!app_ui) {
       return command_protocol::format_err("ui: unavailable in this mode (VR/export)");
     }
-    // `ui on` implies overlay off, same as the tray's "Show control panel": a
-    // click-through window can't host an interactive panel, and showing one anyway
-    // recreates the stranded-unclickable-panel bug through the side door.
     if (cmd.verb == Verb::kUiOn) {
-      state.overlay_on = false;
+      show_control_panel(state, app_ui);
+    } else {
+      app_ui->set_visible(false);
     }
-    app_ui->set_visible(cmd.verb == Verb::kUiOn);
     return command_protocol::format_ok();
   case Verb::kScreenshot:
     // Only ack when a hook that will actually consume the request is installed
-    // (realtime screen renderer) -- an `ok` that never writes a file is a lie
-    // (issue #28 finding 1).
+    // (realtime screen renderer) -- an `ok` that never writes a file is a lie.
     if (!screenshot_supported) {
       return command_protocol::format_err("screenshot: unavailable in this mode (VR/export)");
     }
@@ -308,7 +284,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
                   const std::function<void(Director&)>& visual_override = {},
                   const OverlayConfig& overlay = {}, uint16_t command_port = 0)
 {
-  // #21 command channel: constructed here, before ThemeBank/renderer/window, so the socket
+  // Command channel: constructed here, before ThemeBank/renderer/window, so the socket
   // is live and testable (netcat/pytest, spec sec 6) even in configurations where window
   // creation would fail headlessly (e.g. no X11/DISPLAY) -- the reader thread has no
   // dependency on SFML or Director. Verb EXECUTION against Director still only happens
@@ -330,20 +306,15 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   command_state.overlay_opacity = overlay.opacity;
   const auto command_start_time = std::chrono::steady_clock::now();
 
-  struct PlayStackEntry {
-    const trance_pb::PlaylistItem* item;
-    int subroutine_step;
-  };
-  std::vector<PlayStackEntry> stack;
-  stack.push_back({&session.playlist().find(session.first_playlist_item())->second, 0});
+  PlaylistRunner playlist{session, variables};
 
   auto program = [&]() -> const trance_pb::Program& {
     static const auto default_session = get_default_session();
     static const auto default_program = default_session.program_map().find("default")->second;
-    if (!stack.back().item->has_standard()) {
+    if (!playlist.current().has_standard()) {
       return default_program;
     }
-    auto it = session.program_map().find(stack.back().item->standard().program());
+    auto it = session.program_map().find(playlist.current().standard().program());
     if (it == session.program_map().end()) {
       return default_program;
     }
@@ -385,7 +356,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
               << std::endl;
   }
 
-  // ImGui in-app UI (task 18), F2-toggled. Stood up for every realtime screen window,
+  // ImGui in-app UI, F2-toggled. Stood up for every realtime screen window,
   // INCLUDING --overlay startup mode: while the overlay is engaged the click-through
   // window never delivers input (the panel is unreachable, and the apply seam below
   // collapses it on engage), but SystemControl's safety hotkey / tray can disengage
@@ -398,10 +369,10 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
     // sections: resolves the ACTIVE program in the session's program_map, or nullptr
     // when the built-in default fallback is playing (the panel disables itself).
     auto active_program = [&]() -> trance_pb::Program* {
-      if (!stack.back().item->has_standard()) {
+      if (!playlist.current().has_standard()) {
         return nullptr;
       }
-      auto it = session.mutable_program_map()->find(stack.back().item->standard().program());
+      auto it = session.mutable_program_map()->find(playlist.current().standard().program());
       if (it == session.mutable_program_map()->end()) {
         return nullptr;
       }
@@ -413,18 +384,8 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       theme_bank->set_program(program());
       director.set_program(program());
     };
-    // Overlay callbacks (#27): the UI's Overlay section reads/writes the same two
-    // CommandRuntimeState fields the `overlay ...` verbs use; the apply seam in the
-    // main loop below is the single place either path touches the actual window.
-    auto get_overlay = [&command_state] {
-      return std::make_pair(command_state.overlay_on, command_state.overlay_opacity);
-    };
-    auto set_overlay = [&command_state](bool on, float opacity) {
-      command_state.overlay_on = on;
-      command_state.overlay_opacity = opacity;
-    };
-    app_ui.reset(new AppUi(session, session_path, sidecar, on_program_change, active_program,
-                           get_overlay, set_overlay));
+    app_ui.reset(new AppUi(session, session_path, sidecar, command_state,
+                           on_program_change, active_program));
     if (!app_ui->init(renderer->window())) {
       std::cerr << "warning: ImGui-SFML init failed; F2 UI unavailable this run" << std::endl;
       app_ui.reset();
@@ -437,20 +398,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
     if (command_state.screenshot_path.empty()) {
       return;
     }
-    const auto size = renderer->window().getSize();
-    std::vector<std::uint8_t> pixels(std::size_t{size.x} * size.y * 4);
-    glReadPixels(0, 0, GLsizei(size.x), GLsizei(size.y), GL_RGBA, GL_UNSIGNED_BYTE,
-                 pixels.data());
-    // GL reads bottom-up; sf::Image wants top-down.
-    std::vector<std::uint8_t> flipped(pixels.size());
-    const std::size_t stride = std::size_t{size.x} * 4;
-    for (std::size_t y = 0; y < size.y; ++y) {
-      std::copy_n(pixels.data() + (size.y - 1 - y) * stride, stride, flipped.data() + y * stride);
-    }
-    sf::Image image{sf::Vector2u{size.x, size.y}, flipped.data()};
-    if (!image.saveToFile(command_state.screenshot_path)) {
-      std::cerr << "screenshot: couldn't write " << command_state.screenshot_path << std::endl;
-    }
+    save_window_screenshot(renderer->window(), command_state.screenshot_path);
     command_state.screenshot_path.clear();
   };
   const bool screenshot_supported = realtime && !director.vr_enabled();
@@ -479,14 +427,14 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   if (realtime) {
     async_thread = run_async_thread(running, *theme_bank);
     audio.reset(new Audio{root_path});
-    audio->TriggerEvents(*stack.back().item);
+    audio->TriggerEvents(playlist.current());
     audio->SetEntrainment(program().entrainment());
     director.set_audio(audio.get());
   }
   std::cout << std::endl << "-> " << session.first_playlist_item() << std::endl;
 
-  // #27 live overlay: what's actually applied to the window right now, seeded from the
-  // startup flags. The #21 `overlay` verbs and the F2 UI's Overlay section only write
+  // Live overlay: what's actually applied to the window right now, seeded from the
+  // startup flags. The `overlay` verbs and the F2 UI's Overlay section only write
   // command_state; the apply seam in the loop below diffs against these two and pushes
   // any change onto the native window.
   bool overlay_applied = overlay.enabled;
@@ -513,15 +461,29 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
     };
     const auto true_clock_start = true_clock_time();
     auto last_clock_time = clock_time();
-    auto last_playlist_switch = clock_time();
+    playlist.start(clock_time());
+    // Side effects per newly-entered playlist item: audio events, the program push
+    // into ThemeBank/Director, entrainment refresh. The runner owns only the
+    // stack/transition logic.
+    auto on_playlist_enter = [&](const std::string& name, const trance_pb::PlaylistItem& item) {
+      if (realtime) {
+        audio->TriggerEvents(item);
+      }
+      std::cout << "\n-> " << name << std::endl;
+      theme_bank->set_program(program());
+      director.set_program(program());
+      if (realtime) {
+        audio->SetEntrainment(program().entrainment());
+      }
+    };
 
     while (running && !g_overlay_stop_requested) {
-      // (running is also flipped below when the overlay stop fires, so the async
-      // ThemeBank thread's `while (running)` loop terminates and the join at the
-      // bottom of play_session is bounded -- audit finding: exiting this loop with
-      // running still true deadlocked shutdown in overlay mode.)
+      // (The overlay stop path exits via g_overlay_stop_requested with `running`
+      // still true; it is flipped after the loop so the async ThemeBank thread's
+      // `while (running)` loop terminates and the join at the bottom of
+      // play_session is bounded.)
       handle_events(running, renderer->window(), director, audio.get(), app_ui.get());
-      // #21 command channel: parse + dispatch every line received since last frame, right
+      // Command channel: parse + dispatch every line received since last frame, right
       // after handle_events (spec sec 3: "Parse + dispatch happens in the drain loop --
       // main.cpp's per-frame loop, right after handle_events").
       if (command_channel) {
@@ -529,7 +491,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
                         screenshot_supported, command_state, command_start_time);
       }
       // SystemControl requests (tray menu / global Shift+F11): drained on the render
-      // thread like the #21 mailbox above; both funnel into the same
+      // thread like the command mailbox above; both funnel into the same
       // CommandRuntimeState, and the apply seam below reconciles the window once.
       if (system_control) {
         for (auto request : system_control->drain()) {
@@ -542,11 +504,8 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
               running = false;
               break;
             }
-            command_state.overlay_on = false;
             set_paused(command_state, audio.get(), true);
-            if (app_ui) {
-              app_ui->set_visible(true);
-            }
+            show_control_panel(command_state, app_ui.get());
             break;
           }
           case ControlRequest::kOverlayToggle:
@@ -556,12 +515,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
             set_paused(command_state, audio.get(), !command_state.paused);
             break;
           case ControlRequest::kShowUi:
-            // A click-through window can't host an interactive panel; showing the
-            // panel implies disengaging the overlay first.
-            command_state.overlay_on = false;
-            if (app_ui) {
-              app_ui->set_visible(true);
-            }
+            show_control_panel(command_state, app_ui.get());
             break;
           case ControlRequest::kQuit:
             running = false;
@@ -570,7 +524,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
         }
         system_control->set_status(command_state.overlay_on, command_state.paused);
       }
-      // #27 live overlay apply seam: the single reconcile point for the #21
+      // Live overlay apply seam: the single reconcile point for the
       // `overlay on|off|opacity` verbs, the F2 UI's Overlay section, and the
       // SystemControl requests above (each only writes command_state). Realtime
       // only -- export mode has no real window to overlay.
@@ -626,75 +580,23 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
         theme_bank->async_update();
       }
 
-      // Paused (#21): freeze the playlist clock too. time_since_switch is wall-clock, so
+      // Paused: freeze the playlist clock too. time_since_switch is wall-clock, so
       // without this a paused session's items keep timing out and firing audio events /
-      // program switches underneath the frozen visuals (audit finding).
+      // program switches underneath the frozen visuals.
       if (command_state.paused) {
-        last_playlist_switch += elapsed_ms;
+        playlist.freeze(elapsed_ms);
       }
 
-      while (true) {
-        auto time_since_switch = clock_time() - last_playlist_switch;
-        auto& entry = stack.back();
-        // Continue if we're in a standard playlist item.
-        if (entry.item->has_standard() &&
-            time_since_switch < 1000 * entry.item->standard().play_time_seconds()) {
-          break;
-        }
-        // Trigger the next item of a subroutine.
-        if (entry.item->has_subroutine() &&
-            entry.subroutine_step < entry.item->subroutine().playlist_item_name_size()) {
-          if (stack.size() >= MAXIMUM_STACK) {
-            std::cerr << "error: subroutine stack overflow\n";
-            entry.subroutine_step = entry.item->subroutine().playlist_item_name_size();
-          } else {
-            last_playlist_switch = clock_time();
-            auto name = entry.item->subroutine().playlist_item_name(entry.subroutine_step);
-            stack.push_back({&session.playlist().find(name)->second, 0});
-            if (realtime) {
-              audio->TriggerEvents(*stack.back().item);
-            }
-            std::cout << "\n-> " << name << std::endl;
-            theme_bank->set_program(program());
-            director.set_program(program());
-            if (realtime) {
-              audio->SetEntrainment(program().entrainment());
-            }
-            ++stack[stack.size() - 2].subroutine_step;
-            continue;
-          }
-        }
-        auto next = next_playlist_item(variables, entry.item);
-        // Finish a subroutine.
-        if (next.empty() && stack.size() > 1) {
-          stack.pop_back();
-          continue;
-        } else if (next.empty()) {
-          break;
-        }
-        // Trigger the next item of a standard playlist item.
-        last_playlist_switch = clock_time();
-        stack.back().item = &session.playlist().find(next)->second;
-        stack.back().subroutine_step = 0;
-        if (realtime) {
-          audio->TriggerEvents(*entry.item);
-        }
-        std::cout << "\n-> " << next << std::endl;
-        theme_bank->set_program(program());
-        director.set_program(program());
-        if (realtime) {
-          audio->SetEntrainment(program().entrainment());
-        }
-      }
+      playlist.advance(clock_time(), on_playlist_enter);
       if (theme_bank->swaps_to_match_theme()) {
         // Fire-and-forget by design: a swap that isn't ready simply doesn't happen this
-        // frame; the next matching call retries. Nothing needs the success bool (#25).
+        // frame; the next matching call retries. Nothing needs the success bool.
         theme_bank->change_themes();
       }
 
       bool update = false;
       bool continue_playing = true;
-      // #21 `pause`/`stop`: freeze the current frame -- program state retained (spec sec 4)
+      // `pause`/`stop`: freeze the current frame -- program state retained (spec sec 4)
       // -- by simply not draining frames_this_loop while paused. The window still repaints
       // the last frame every iteration below (`!realtime` / event-driven), so a paused
       // process stays visibly alive, it just stops advancing.
@@ -708,15 +610,15 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
         break;
       }
       // With a live UI the window redraws every loop iteration (the panels must stay
-      // responsive even when no visual frame elapsed / playback is paused via #21);
-      // otherwise keep the old only-on-update behaviour. ImGui's frame starts here and
-      // the renderer's pre-display hook draws it inside director.render(), between the
-      // scene draw and the buffer swap -- exactly one display() per iteration. (The old
-      // shape displayed twice: UI strobed at half rate and the scene ping-ponged one
-      // frame back every other swap.)
+      // responsive even when no visual frame elapsed / playback is paused); otherwise
+      // keep the only-on-update behaviour. ImGui's frame starts here and the
+      // renderer's pre-display hook draws it inside director.render(), between the
+      // scene draw and the buffer swap -- exactly one display() per iteration (a
+      // second display() makes the UI strobe at half rate and the scene ping-pong
+      // one frame back every other swap).
       // A pending screenshot forces a render even when nothing else would repaint
       // (paused with no UI, e.g. overlay mode) -- the verb already ack'd, so the
-      // hook must get a frame to consume it (issue #28 finding 1).
+      // hook must get a frame to consume it.
       const bool do_render =
           update || !realtime || app_ui != nullptr || !command_state.screenshot_path.empty();
       if (app_ui && do_render) {
@@ -737,7 +639,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
 
   // The overlay signal path exits the loop via g_overlay_stop_requested with `running`
   // still true; flip it so the async ThemeBank thread (gated on `running`) terminates
-  // and the join below cannot hang (audit finding).
+  // and the join below cannot hang.
   running = false;
 
   if (realtime) {
@@ -862,7 +764,7 @@ int validate_session(const std::string& root_path, const trance_pb::Session& ses
   return broken_paths.empty() ? 0 : 1;
 }
 
-// SessionArchive (#15): bundles the session JSON and every file it references into a
+// SessionArchive: bundles the session JSON and every file it references into a
 // plain zip (src/common/session_archive.{h,cpp}). `session`/`root_path` (the already-
 // loaded/validated in-memory session and its media root) aren't reused here -- the
 // archive needs the pattern-file sidecar too (source_text alone can't recover a pattern's
@@ -891,15 +793,14 @@ DEFINE_uint64(export_quality, 2, "export video quality (0 to 4, 0 is best)");
 DEFINE_uint64(export_threads, 4, "export video threads");
 DEFINE_string(visual, "",
               "force every visual selection to this one built-in (by its v3 name: accelerate, "
-              "slow_flash, sub_text, flash_text, simple, super_parallel, animation, super_fast). "
-              "Replaces the old workflow of zeroing out every other weight in default.session.");
+              "slow_flash, sub_text, flash_text, simple, super_parallel, animation, super_fast).");
 DEFINE_string(pattern, "",
               "force every visual selection to a single v3 pattern loaded from this source file "
               "(parsed the same way as a program's custom_visual_pattern). Themes still come from "
               "the session/program as normal -- only the visual schedule is overridden. Mutually "
               "exclusive with --visual.");
 DEFINE_bool(overlay, false,
-           "v0 overlay click-through mode (#27): borderless fullscreen always-on-top "
+           "v0 overlay click-through mode: borderless fullscreen always-on-top "
            "window, translucent, with input passing through to the desktop beneath. "
            "Whole-window opacity only (see --overlay_opacity). The window can't receive "
            "its own quit hotkey; stop with Shift+F11 (global safety hotkey), the tray "
@@ -908,7 +809,7 @@ DEFINE_double(overlay_opacity, 0.35,
              "overlay window opacity, 0 (fully transparent) to 1 (fully opaque). Only "
              "meaningful with --overlay.");
 DEFINE_int32(command_port, 0,
-            "#21 command channel (docs/spec-mcp-ambient-daemon.md): TCP port to bind on "
+            "command channel (docs/spec-mcp-ambient-daemon.md): TCP port to bind on "
             "127.0.0.1 for the localhost line-protocol control socket (start/stop/pause/"
             "resume, overlay on|off|opacity, intensity, set/get, load pattern|session, "
             "status). 0 (default) disables the channel entirely -- no socket is opened. "
@@ -917,36 +818,17 @@ DEFINE_int32(command_port, 0,
 
 namespace
 {
-  // Program::VisualType enum values (trance.proto) keyed by their v3 built-in name
-  // (builtin_patterns_v3.cpp's `pattern NAME for ...` declarations). Kept local to
-  // main.cpp: this is the CLI-facing name table for --visual, not a runtime concept
-  // the rest of the program needs.
-  const std::vector<std::pair<std::string, uint32_t>>& visual_name_table()
-  {
-    static const std::vector<std::pair<std::string, uint32_t>> table = {
-        {"accelerate", 1},
-        {"slow_flash", 2},
-        {"sub_text", 3},
-        {"flash_text", 4},
-        {"simple", 5},
-        {"super_parallel", 6},
-        {"animation", 7},
-        {"super_fast", 8},
-    };
-    return table;
-  }
-
   // Fatal, startup-time error for a bad --visual name: lists every valid name so the
   // failure is immediately actionable instead of a runtime surprise later.
   [[noreturn]] void fatal_bad_visual_name(const std::string& name)
   {
     std::cerr << "error: --visual '" << name << "' is not a known built-in visual. Valid names: ";
     bool first = true;
-    for (const auto& pair : visual_name_table()) {
+    for (const auto& visual : builtin_visuals()) {
       if (!first) {
         std::cerr << ", ";
       }
-      std::cerr << pair.first;
+      std::cerr << visual.name;
       first = false;
     }
     std::cerr << std::endl;
@@ -995,9 +877,9 @@ int main(int argc, char** argv)
   // first selection -- a typo should never surface as a runtime surprise.
   uint32_t forced_visual_type = 0;
   if (!FLAGS_visual.empty()) {
-    for (const auto& pair : visual_name_table()) {
-      if (pair.first == FLAGS_visual) {
-        forced_visual_type = pair.second;
+    for (const auto& visual : builtin_visuals()) {
+      if (visual.name == FLAGS_visual) {
+        forced_visual_type = visual.type;
         break;
       }
     }
@@ -1037,8 +919,8 @@ int main(int argc, char** argv)
   } catch (std::runtime_error& e) {
     // An EXPLICITLY named session that fails to load (legacy .session needing
     // trance_convert, JSON typo, missing file) must be a fatal error -- silently playing
-    // default content instead of what was asked for is worse than exiting (audit
-    // finding). Same for an EXISTING ./default.json that fails to parse: overwriting a
+    // default content instead of what was asked for is worse than exiting.
+    // Same for an EXISTING ./default.json that fails to parse: overwriting a
     // hand-edited-but-broken file with a generated one would destroy the user's edits.
     if (argc >= 2 || std::filesystem::exists(DEFAULT_SESSION_PATH)) {
       std::cerr << "error: " << e.what() << std::endl;
