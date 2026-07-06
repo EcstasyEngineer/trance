@@ -30,7 +30,7 @@ public:
   virtual Image get_image(bool alternate = false) const = 0;
   virtual void maybe_upload_next() const = 0;
   // Random pick from the active theme's precanned audio pool (ThemeBank::get_audio),
-  // same shape as get_image -- the v3 `audio` effect (issue #23) resolves content
+  // same shape as get_image -- the v3 `audio` effect resolves content
   // (concept/reward/runtime) to a path with this before calling play_theme_audio.
   virtual const std::string& get_theme_audio(bool alternate = false) const = 0;
 
@@ -46,7 +46,7 @@ public:
   virtual void change_small_subtext(bool force = false, bool alternate = false) = 0;
   virtual bool change_themes() = 0;
 
-  // Grammar-driven theme audio (issue #23): bridges to Audio::play_theme_audio /
+  // Grammar-driven theme audio: bridges to Audio::play_theme_audio /
   // stop_theme_audio / set_theme_audio_volume via the director. Single-slot v0,
   // same shape as the single live text slot -- starting a new play stops
   // whatever grammar audio was already playing. No-op (graceful) when there is
@@ -94,7 +94,7 @@ public:
   // v3 wave warp: set the per-frame image-displacement state (amp 0 = disabled).
   virtual void set_warp(float amp, float wavelength, float speed) = 0;
   // Exposed on the render interface so a curve/expr `volume` modulator on the v3 `audio`
-  // effect can be applied every frame (issue #23), the same dual-declaration shape as
+  // effect can be applied every frame, the same dual-declaration shape as
   // rotate_spiral above: same method as VisualControl::set_theme_audio_volume;
   // VisualApiImpl's single override satisfies both.
   virtual void set_theme_audio_volume(float volume) = 0;

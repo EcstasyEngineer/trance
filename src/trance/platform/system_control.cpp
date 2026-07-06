@@ -68,9 +68,8 @@ void SystemControl::push(ControlRequest request)
 
 #if defined(_WIN32)
 
-// UNVALIDATED on real Windows (no Windows box in this environment) -- same status as
-// render.cpp's Win32 overlay-hint path. Standard-issue Shell_NotifyIcon +
-// RegisterHotKey plumbing; validate alongside #27's overlay hints.
+// Untested on real Windows -- same status as render.cpp's Win32 overlay-hint path.
+// Standard-issue Shell_NotifyIcon + RegisterHotKey plumbing.
 namespace
 {
   constexpr UINT kTrayCallbackMessage = WM_APP + 1;

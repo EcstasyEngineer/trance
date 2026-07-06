@@ -142,8 +142,8 @@ void EntrainmentStream::Configure(const trance_pb::Entrainment& config)
   _running_seconds = 0.0;
   for (const auto& l : config.layer()) {
     Layer layer{};
-    // No JSON-authored sweeps yet -- lift today's static fields into
-    // degenerate single-keyframe (constant) Tracks so playback is unchanged.
+    // Static fields are lifted into degenerate single-keyframe (constant)
+    // Tracks so playback is unchanged.
     layer.center_hz = trance::Track{double(l.center_hz())};
     layer.binaural_hz = trance::Track{double(l.binaural_hz())};
     layer.pulse_hz = trance::Track{double(l.pulse_hz())};

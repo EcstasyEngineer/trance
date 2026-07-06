@@ -300,7 +300,7 @@ pattern w for 240f {
           "resolution: `over nope` is a hard parse error");
   }
 
-  // 4b. Sampled ramp cadence (13.2 / Extension #3, issue #26): parses, lowers to a Seq of N
+  // 4b. Sampled ramp cadence (13.2 / Extension #3): parses, lowers to a Seq of N
   // fixed-length Action segments whose lengths are non-increasing (respecting `ease late` on a
   // shrinking A->B) and sum EXACTLY to the enclosing pattern's span -- no silent truncation.
   {
@@ -409,7 +409,7 @@ pattern ramped3 for 200f {
     check(!toosmall.ok, "ramp error: span too small for `steps` segments of >=1f is a parse error");
   }
 
-  // 4f. Burst surface (13.1, issue #26): parses, lowers to exactly one Node::Burst carrying the
+  // 4f. Burst surface (13.1): parses, lowers to exactly one Node::Burst carrying the
   // parsed params, base/burst effects land in the right lists, and `NAME.index` (1 during a
   // burst, else 0) is reachable from a render expr through the same NodeMap/resolve_ident path
   // every other named clock uses -- no bespoke plumbing for burst.
@@ -445,7 +445,7 @@ pattern burster for 512f {
         check(burst_node->burst_period == 8, "burst: period param");
         check(burst_node->burst_chance_den == 24, "burst: chance 1/24 -> chance_den 24");
         // Authored in frames, stored in period TICKS (BurstCycler's FSM only steps on
-        // period boundaries): 32f/8f = 4 ticks, 96f/8f = 12 ticks -- issue #28 finding 2.
+        // period boundaries): 32f/8f = 4 ticks, 96f/8f = 12 ticks.
         check(burst_node->burst_cooldown == 4, "burst: cooldown 32f -> 4 ticks at period 8f");
         check(burst_node->burst_dur_min == 4 && burst_node->burst_dur_max == 12,
               "burst: duration 32f..96f -> 4..12 ticks at period 8f");
@@ -546,7 +546,7 @@ pattern beat_locked for beats 8 {
           "beats error: bare `locked` with locked=0 (no pulsed bed) is also a hard parse error");
   }
 
-  // 4i. `audio` (issue #23, §4.14): parses and lowers to Effect::Kind::Audio carrying the
+  // 4i. `audio` (§4.14): parses and lowers to Effect::Kind::Audio carrying the
   // content slot + loop flag; a LITERAL volume folds to Effect::rate (fire-once), not a
   // render-side op.
   {
@@ -783,7 +783,7 @@ pattern mantra_pulse for beats 16 {
     }
   }
 
-  // 6. Behavioral parity regressions (the 2026-07-02 display-validation batch). Each of these
+  // 6. Behavioral regressions. Each of these
   //    encodes one user-visible regression against the original hand-written visuals, at the
   //    level that broke: pacing distribution, zoom ranges, layer alphas, burst render gating.
   {
@@ -952,7 +952,7 @@ pattern mantra_pulse for beats 16 {
     }
   }
 
-  // 7. Runtime-unit regressions (issue #28 findings 2 + 3).
+  // 7. Runtime-unit regressions.
   {
     // 7a. Burst cooldown/duration are authored in FRAMES but BurstCycler counts period
     //     TICKS -- the parser must convert (`duration 16f` at period 8f = 2 ticks = 16

@@ -177,10 +177,7 @@ void AppUi::draw_status_section(Director& director, Audio* audio, const ThemeBan
   const auto& program = director.program();
   ImGui::Text("global fps (config): %u", program.global_fps());
   ImGui::Text("vr enabled: %s", director.vr_enabled() ? "yes" : "no");
-  // TODO(handoff): "current visual name" (F1's overlay prints it via the private
-  // _last_visual_selection/_custom_visual_name) has no public Director accessor.
-  // Adding one is a one-line getter, but director.h/.cpp aren't owned files this
-  // wave -- leaving it out rather than editing outside scope.
+  // TODO: no public Director accessor for the current visual name.
 
   auto snap = themes.debug_snapshot();
   ImGui::Text("theme primary  : %s", snap.slots[1].valid ? snap.slots[1].name.c_str() : "(empty)");
@@ -375,7 +372,7 @@ void AppUi::draw_themes_section()
     if (ImGui::TreeNode(name.c_str())) {
       // Scan themes: save_theme (session_json.cpp) deliberately omits their media
       // lists -- the scan directory is re-expanded on every load -- so image edits
-      // here would silently vanish on Save/restart (issue #28 finding 4). Offer the
+      // here would silently vanish on Save/restart. Offer the
       // honest path instead: converting drops the theme's scan sidecar entry, making
       // the current expansion an explicit (editable, persisted) image list.
       if (_sidecar.theme_scan.count(name)) {
@@ -474,9 +471,9 @@ void AppUi::save_session_to(const std::string& path)
 
 void AppUi::draw_overlay_section()
 {
-  // #27 live overlay toggle. This section only reads/writes main.cpp's
+  // Live overlay toggle. This section only reads/writes main.cpp's
   // CommandRuntimeState (via the constructor callbacks); the main loop's apply seam
-  // -- the same one the #21 `overlay on|off|opacity` verbs go through -- pushes the
+  // -- the same one the `overlay on|off|opacity` verbs go through -- pushes the
   // change onto the actual window, so this panel and the command channel can never
   // disagree about the state.
   //
@@ -508,13 +505,12 @@ void AppUi::draw_entrainment_section(Audio* audio)
     if (ImGui::Checkbox("Mute", &muted)) {
       audio->ToggleMute();
     }
-    // TODO(handoff): no volume slider. Audio only exposes a global on/off mute
+    // TODO: no volume slider. Audio only exposes a global on/off mute
     // (ToggleMute -> sf::Listener::setGlobalVolume(0/100)); per-channel volume is
     // driven by session AudioEvents / fades (audio.cpp), not a public setter. Add
     // Audio::SetMasterVolume(float) (or similar) if a continuous slider is wanted,
-    // then wire it here -- out of scope this wave (audio.{h,cpp} isn't an owned
-    // file).
-    ImGui::TextDisabled("(volume slider: no setter on Audio yet, see handoff)");
+    // then wire it here.
+    ImGui::TextDisabled("(volume slider: no setter on Audio yet)");
   } else {
     // Null in export/video-render mode (see Director::set_audio's doc comment).
     ImGui::TextDisabled("(no live audio -- export mode)");

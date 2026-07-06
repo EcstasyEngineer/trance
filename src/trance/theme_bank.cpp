@@ -513,7 +513,7 @@ void ThemeBank::do_load(ThemeInfo& theme)
     image.image.reset(new Image{load_image(_root_path + "/" + image.path)});
     if (!*image.image) {
       // Mark it dead: never retry the file, and never put the blank image in
-      // the draw shuffler (it used to poison the slot with a black texture).
+      // the draw shuffler.
       // Also strip the base priority every theme image gets in image_shuffler
       // at construction -- otherwise the dead index still competes with
       // recently-drawn healthy images and starves rotation on small themes.
