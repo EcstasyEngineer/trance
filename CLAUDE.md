@@ -9,7 +9,8 @@ A fullscreen visual hypnosis / media player (C++17, SFML 3). It plays **sessions
 convert via `trance_convert`) that drive a stream of timed visuals — flashing images/text,
 spirals, animations — over audio with optional binaural/isochronic entrainment beds and
 theme audio. Also: a video **export** path, an X11 click-through `--overlay` mode, an
-ImGui F2 in-app UI, and a `--command_port` line-protocol control channel. The legacy
+ImGui F2 in-app UI, a system tray icon (Windows) + global Shift+F11 safety hotkey, and a
+`--command_port` line-protocol control channel. The legacy
 wxWidgets **creator** (Windows-only, still proto-based) is deprecated pending ImGui parity.
 
 ## Build & run
@@ -96,7 +97,7 @@ editor), `docs/`, `tests/`.
 - **Bi-thematic engine.** ThemeBank holds exactly **two live themes** (primary + alternate);
   every accessor is a `bool alternate`, not an index. The grammar exposes only `concept`
   (theme 0) and `reward` (theme 1). 3+ simultaneous themes is a **decided non-goal**
-  (`docs/spec-grammar-v3.md` §8 / `spec-grammar-v2.md` §7) — not deferred work.
+  (`docs/spec-grammar-v3.md` §8 / `docs/archive/spec-grammar-v2.md` §7) — not deferred work.
 - **Supersede, not parity.** The v3 grammar *improves on* the original 8 built-ins rather than
   matching them byte-for-byte ("same effect, not the same frames"). Do not add tests that freeze
   the originals' compiled-tree shape; parity-locking is what kept dragging the design back to

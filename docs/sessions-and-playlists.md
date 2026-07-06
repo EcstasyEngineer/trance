@@ -1,14 +1,20 @@
 # Sessions and playlists
 
-A `.session` is a single serialized `trance_pb::Session` protobuf
-(`src/common/trance.proto`). It holds everything a session needs except the media
-files themselves (which it references by relative path). This document tours the
+A session is a `*.session.json` file — plain JSON, spec in
+[session-json-format.md](session-json-format.md) (normative), loaded by
+`src/common/session_json.cpp`. It holds everything a session needs except the
+media files themselves (which it references by relative path). In memory it
+becomes a `trance_pb::Session` — the protobuf (`src/common/trance.proto`) is the
+**frozen in-memory model only**; legacy protobuf `.session` files are no longer
+read directly and convert via `trance_convert`. This document tours the
 schema, the load path, theme shuffling, and — in detail — the playlist "VM" that
 the README mentions but doesn't explain.
 
-## Proto schema tour
+## Schema tour (the in-memory model)
 
-The schema lives in `src/common/trance.proto`. The four headline concepts:
+The in-memory schema lives in `src/common/trance.proto`; the JSON on-disk shape
+mirrors it (see [session-json-format.md](session-json-format.md) for the exact
+key-by-key mapping). The four headline concepts:
 
 - **`Theme`** (`:255`) — a bag of media: `image_path`, `animation_path`,
   `font_path`, and `text_line`s. Paths are relative to the session's root
@@ -47,10 +53,12 @@ shipping a self-contained bundle. (Archive export is currently a stub —
 
 ## Load path
 
-`main()` (`src/trance/main.cpp:442`) loads the session:
+`main()` (`src/trance/main.cpp`) loads the session:
 
-1. `load_session(path)` (`src/common/session.cpp:465`) parses the proto, then runs
-   `validate_session()`.
+1. `load_session(path)` (`src/common/session.cpp`) requires a `*.session.json`
+   path (a legacy `.session`/`.cfg` proto path is a fatal error with a
+   `trance_convert` hint), parses it via `load_session_json()`
+   (`src/common/session_json.cpp`), then runs `validate_session()`.
 2. `validate_session()` (`session.cpp:486`) is the repair pass: it fills empty
    maps with defaults, migrates deprecated fields (`enabled_theme_name` →
    `enabled_theme`, the old flat `program`/`play_time_seconds` →
@@ -61,7 +69,7 @@ shipping a self-contained bundle. (Archive export is currently a stub —
 3. On a load failure, `main()` falls back to `get_default_session()` plus
    `search_resources()`, which walks the directory next to the binary and builds a
    theme per subfolder (a `wildcards/` folder is merged into all themes). That is
-   how `trance.exe` runs against a bare folder of images with no `.session`.
+   how `trance.exe` runs against a bare folder of images with no session file.
 
 The session's root directory is the parent of the session path; all media paths
 resolve against it.
