@@ -10,6 +10,7 @@
 #include <common/media/image.h>
 #include <trance/net/command_channel.h>
 #include <trance/net/command_protocol.h>
+#include <trance/platform/overlay_hints.h>
 #include <trance/platform/system_control.h>
 #include <trance/render/openvr.h>
 #include <trance/render/render.h>
