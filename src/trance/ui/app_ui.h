@@ -3,7 +3,10 @@
 // ImGui in-app UI: the creator-replacement (v0 creator-parity buildout). Toggled with
 // F2 (see main.cpp's handle_events); coexists with the pre-existing F1 text debug
 // overlay (Director::toggle_debug_overlay / draw_debug_overlay), which is untouched.
-// Unavailable in --overlay click-through mode -- see AppUi::available().
+// Exists in --overlay runs too (the overlay is runtime-toggleable now): while the
+// overlay is engaged the click-through window delivers no input and the panel is
+// collapsed by main.cpp's apply seam; SystemControl (Shift+F11 / tray) disengages
+// the overlay and brings the panel back.
 //
 // One window ("trance", top-left) with collapsing sections:
 //   - Status: fps / themes / bed summary, reused from the same accessors
@@ -81,12 +84,6 @@ public:
 
   AppUi(const AppUi&) = delete;
   AppUi& operator=(const AppUi&) = delete;
-
-  // Overlay mode's window is click-through by design (render.cpp's
-  // apply_x11_overlay_hints installs an empty input shape) -- it can never receive
-  // mouse/keyboard events, so an interactive ImGui UI is structurally unusable there
-  // (and F2 is still wired but is a silent no-op; see main.cpp's handle_events).
-  static bool available(bool overlay_enabled);
 
   // Initializes ImGui + the SFML backend against `window`. Must be called once,
   // after the window is created, before the first process_event/update/render call.

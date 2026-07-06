@@ -10,6 +10,7 @@
 #include <common/media/image.h>
 #include <trance/net/command_channel.h>
 #include <trance/net/command_protocol.h>
+#include <trance/platform/system_control.h>
 #include <trance/render/openvr.h>
 #include <trance/render/render.h>
 #include <trance/render/video_export.h>
@@ -39,11 +40,11 @@
 #pragma warning(pop)
 
 // Overlay mode (#27): the window is click-through by design, so it can never receive
-// its own quit hotkey (Escape, handled in handle_events() below never arrives). SIGINT/
-// SIGTERM are the only way to stop it -- handled here as a clean flag flip (running =
-// false), not abort/terminate, so the async thread/audio/window all still tear down via
-// the normal play_session() exit path. The #21 command channel will eventually own
-// runtime control (pause/stop/etc) generally; this is the stopgap for #27 specifically.
+// its own quit hotkey (Escape, handled in handle_events() below never arrives). The
+// out-of-window escapes are SystemControl (global Shift+F11 safety hotkey + Windows
+// tray icon), the #21 command channel, and SIGINT/SIGTERM -- the signals handled here
+// as a clean flag flip (running = false), not abort/terminate, so the async thread/
+// audio/window all still tear down via the normal play_session() exit path.
 std::atomic<bool> g_overlay_stop_requested = false;
 
 extern "C" void overlay_signal_handler(int)
@@ -97,9 +98,9 @@ void handle_events(std::atomic<bool>& running, sf::RenderWindow& window, Directo
 {
   while (const std::optional event = window.pollEvent()) {
     // ImGui gets first look at input so clicks/typing inside its panels don't also
-    // fall through to the F-key/Escape handling below. Null (or unavailable, see
-    // AppUi::available) in --overlay mode -- the click-through window never
-    // delivers events to this loop in the first place, but guard anyway.
+    // fall through to the F-key/Escape handling below. Null in VR/export mode; in
+    // overlay mode the click-through window simply never delivers events to this
+    // loop while the overlay is engaged.
     if (app_ui) {
       app_ui->process_event(window, *event);
     }
@@ -157,6 +158,22 @@ struct CommandRuntimeState {
   std::string screenshot_path;
 };
 
+// pause/stop must actually SUSPEND playback, not just stop advancing visual frames:
+// the playlist clock is frozen separately in the main loop, and the audible side
+// (music channels + entrainment bed) pauses here (audit finding). Null audio =
+// export mode; the flag still flips. Shared by the #21 verbs and the SystemControl
+// (tray/hotkey) requests, so both control surfaces get identical pause semantics.
+void set_paused(CommandRuntimeState& state, Audio* audio, bool paused)
+{
+  if (paused == state.paused) {
+    return;
+  }
+  state.paused = paused;
+  if (audio) {
+    paused ? audio->PauseAll() : audio->ResumeAll();
+  }
+}
+
 std::string execute_command(const command_protocol::ParsedCommand& cmd, Director& director,
                             Audio* audio, const ThemeBank& themes, AppUi* app_ui,
                             bool screenshot_supported, CommandRuntimeState& state,
@@ -166,31 +183,18 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
   if (!cmd.ok) {
     return command_protocol::format_err(cmd.error);
   }
-  // pause/stop must actually SUSPEND playback, not just stop advancing visual frames:
-  // the playlist clock is frozen separately in the main loop, and the audible side
-  // (music channels + entrainment bed) pauses here (audit finding). Null audio =
-  // export mode; the verbs still flip the flag and reply ok.
-  auto set_paused = [&](bool paused) {
-    if (paused == state.paused) {
-      return;
-    }
-    state.paused = paused;
-    if (audio) {
-      paused ? audio->PauseAll() : audio->ResumeAll();
-    }
-  };
   switch (cmd.verb) {
   case Verb::kStart:
-    set_paused(false);
+    set_paused(state, audio, false);
     return command_protocol::format_ok();
   case Verb::kStop:
-    set_paused(true);
+    set_paused(state, audio, true);
     return command_protocol::format_ok();
   case Verb::kPause:
-    set_paused(true);
+    set_paused(state, audio, true);
     return command_protocol::format_ok();
   case Verb::kResume:
-    set_paused(false);
+    set_paused(state, audio, false);
     return command_protocol::format_ok();
   case Verb::kOverlayOn:
     state.overlay_on = true;
@@ -250,7 +254,13 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
   case Verb::kUiOn:
   case Verb::kUiOff:
     if (!app_ui) {
-      return command_protocol::format_err("ui: unavailable in this mode (overlay/VR/export)");
+      return command_protocol::format_err("ui: unavailable in this mode (VR/export)");
+    }
+    // `ui on` implies overlay off, same as the tray's "Show control panel": a
+    // click-through window can't host an interactive panel, and showing one anyway
+    // recreates the stranded-unclickable-panel bug through the side door.
+    if (cmd.verb == Verb::kUiOn) {
+      state.overlay_on = false;
     }
     app_ui->set_visible(cmd.verb == Verb::kUiOn);
     return command_protocol::format_ok();
@@ -365,23 +375,25 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   }
 
   // Overlay mode is click-through, so it can never receive its own quit hotkey (see
-  // overlay_signal_handler above) -- SIGINT/SIGTERM are the only way out.
+  // overlay_signal_handler above) -- the ways out all live outside the window:
+  // SystemControl's global Shift+F11 / tray icon, the command channel, or signals.
   if (overlay.enabled) {
     g_overlay_stop_requested = false;
     std::signal(SIGINT, overlay_signal_handler);
     std::signal(SIGTERM, overlay_signal_handler);
-    std::cout << "overlay mode: stop with Ctrl+C / pkill trance" << std::endl;
+    std::cout << "overlay mode: stop with Shift+F11, the tray icon (Windows), or Ctrl+C"
+              << std::endl;
   }
 
-  // ImGui in-app UI (task 18), F2-toggled. Only stood up for a real interactive
-  // screen window: unavailable in --overlay mode (click-through, see AppUi::available
-  // and handle_events above), and not wired for VR (per-eye render path, no single
-  // flat 2D pass to composite onto -- out of scope this wave) or video-export mode
-  // (no interactive window loop). director.vr_enabled() is the existing accessor;
-  // no new Director surface added.
+  // ImGui in-app UI (task 18), F2-toggled. Stood up for every realtime screen window,
+  // INCLUDING --overlay startup mode: while the overlay is engaged the click-through
+  // window never delivers input (the panel is unreachable, and the apply seam below
+  // collapses it on engage), but SystemControl's safety hotkey / tray can disengage
+  // the overlay at runtime, and the panel must exist to serve as the control surface
+  // afterwards. Still not wired for VR (per-eye render path, no single flat 2D pass
+  // to composite onto) or video-export mode (no interactive window loop).
   std::unique_ptr<AppUi> app_ui;
-  if (realtime && !overlay.enabled && !director.vr_enabled() &&
-      AppUi::available(overlay.enabled)) {
+  if (realtime && !director.vr_enabled()) {
     // Mutable mirror of the program() lambda above, for the UI's Program/Themes
     // sections: resolves the ACTIVE program in the session's program_map, or nullptr
     // when the built-in default fallback is playing (the panel disables itself).
@@ -452,6 +464,15 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   }
   sf::Clock ui_clock;
 
+  // System tray icon (Windows) + global Shift+F11 safety hotkey (Win32/X11): the
+  // out-of-window control surface -- the only kind that keeps working while the
+  // overlay is click-through. Realtime only; export mode has no window and no need
+  // for a panic switch.
+  std::unique_ptr<SystemControl> system_control;
+  if (realtime) {
+    system_control.reset(new SystemControl);
+  }
+
   std::thread async_thread;
   std::atomic<bool> running = true;
   std::unique_ptr<Audio> audio;
@@ -507,10 +528,52 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
         handle_commands(*command_channel, director, audio.get(), *theme_bank, app_ui.get(),
                         screenshot_supported, command_state, command_start_time);
       }
-      // #27 live overlay apply seam: the single reconcile point for BOTH the #21
-      // `overlay on|off|opacity` verbs and the F2 UI's Overlay section (each only
-      // writes command_state above). Realtime only -- export mode has no real
-      // window to overlay.
+      // SystemControl requests (tray menu / global Shift+F11): drained on the render
+      // thread like the #21 mailbox above; both funnel into the same
+      // CommandRuntimeState, and the apply seam below reconciles the window once.
+      if (system_control) {
+        for (auto request : system_control->drain()) {
+          switch (request) {
+          case ControlRequest::kSafety: {
+            // Panic switch: overlay off, playback paused, control panel up. A second
+            // press from that safe state quits outright.
+            const bool already_safe = !command_state.overlay_on && command_state.paused;
+            if (already_safe) {
+              running = false;
+              break;
+            }
+            command_state.overlay_on = false;
+            set_paused(command_state, audio.get(), true);
+            if (app_ui) {
+              app_ui->set_visible(true);
+            }
+            break;
+          }
+          case ControlRequest::kOverlayToggle:
+            command_state.overlay_on = !command_state.overlay_on;
+            break;
+          case ControlRequest::kPlayPauseToggle:
+            set_paused(command_state, audio.get(), !command_state.paused);
+            break;
+          case ControlRequest::kShowUi:
+            // A click-through window can't host an interactive panel; showing the
+            // panel implies disengaging the overlay first.
+            command_state.overlay_on = false;
+            if (app_ui) {
+              app_ui->set_visible(true);
+            }
+            break;
+          case ControlRequest::kQuit:
+            running = false;
+            break;
+          }
+        }
+        system_control->set_status(command_state.overlay_on, command_state.paused);
+      }
+      // #27 live overlay apply seam: the single reconcile point for the #21
+      // `overlay on|off|opacity` verbs, the F2 UI's Overlay section, and the
+      // SystemControl requests above (each only writes command_state). Realtime
+      // only -- export mode has no real window to overlay.
       if (realtime &&
           (command_state.overlay_on != overlay_applied ||
            (command_state.overlay_on &&
@@ -518,6 +581,14 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
         if (command_state.overlay_on) {
           apply_overlay_hints(renderer->window().getNativeHandle(),
                               command_state.overlay_opacity);
+          // Engaging makes the window click-through: collapse the F2 panel on the
+          // way in. Leaving it up strands it on-screen -- drawn but unclickable
+          // (and on Windows, once a click falls through and focus moves away, the
+          // window can never be re-focused by clicking, so not even F2-the-key can
+          // close it).
+          if (app_ui && !overlay_applied) {
+            app_ui->set_visible(false);
+          }
         } else {
           clear_overlay_hints(renderer->window().getNativeHandle());
         }
@@ -828,11 +899,11 @@ DEFINE_string(pattern, "",
               "the session/program as normal -- only the visual schedule is overridden. Mutually "
               "exclusive with --visual.");
 DEFINE_bool(overlay, false,
-           "v0 overlay click-through mode (#27, X11 only): borderless fullscreen "
-           "always-on-top window, translucent, with input passing through to the desktop "
-           "beneath. Whole-window opacity only (see --overlay_opacity) -- no per-pixel "
-           "alpha until the SFML3 migration (#20). Stop with Ctrl+C / pkill trance, since "
-           "the window can't receive its own quit hotkey.");
+           "v0 overlay click-through mode (#27): borderless fullscreen always-on-top "
+           "window, translucent, with input passing through to the desktop beneath. "
+           "Whole-window opacity only (see --overlay_opacity). The window can't receive "
+           "its own quit hotkey; stop with Shift+F11 (global safety hotkey), the tray "
+           "icon (Windows), or Ctrl+C.");
 DEFINE_double(overlay_opacity, 0.35,
              "overlay window opacity, 0 (fully transparent) to 1 (fully opaque). Only "
              "meaningful with --overlay.");
