@@ -11,6 +11,7 @@
 #include <trance/net/command_channel.h>
 #include <trance/net/command_protocol.h>
 #include <trance/platform/overlay_hints.h>
+#include <trance/playlist_runner.h>
 #include <trance/platform/system_control.h>
 #include <trance/render/openvr.h>
 #include <trance/render/render.h>
@@ -53,27 +54,6 @@ std::atomic<bool> g_overlay_stop_requested = false;
 extern "C" void overlay_signal_handler(int)
 {
   g_overlay_stop_requested = true;
-}
-
-std::string next_playlist_item(const std::map<std::string, std::string>& variables,
-                               const trance_pb::PlaylistItem* item)
-{
-  uint32_t total = 0;
-  for (const auto& next : item->next_item()) {
-    total += (is_enabled(next, variables) ? next.random_weight() : 0);
-  }
-  if (!total) {
-    return {};
-  }
-  auto r = random(total);
-  total = 0;
-  for (const auto& next : item->next_item()) {
-    total += (is_enabled(next, variables) ? next.random_weight() : 0);
-    if (r < total) {
-      return next.playlist_item_name();
-    }
-  }
-  return {};
 }
 
 static const std::string bad_alloc = "OUT OF MEMORY! TRY REDUCING USAGE IN SETTINGS...";
@@ -326,20 +306,15 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   command_state.overlay_opacity = overlay.opacity;
   const auto command_start_time = std::chrono::steady_clock::now();
 
-  struct PlayStackEntry {
-    const trance_pb::PlaylistItem* item;
-    int subroutine_step;
-  };
-  std::vector<PlayStackEntry> stack;
-  stack.push_back({&session.playlist().find(session.first_playlist_item())->second, 0});
+  PlaylistRunner playlist{session, variables};
 
   auto program = [&]() -> const trance_pb::Program& {
     static const auto default_session = get_default_session();
     static const auto default_program = default_session.program_map().find("default")->second;
-    if (!stack.back().item->has_standard()) {
+    if (!playlist.current().has_standard()) {
       return default_program;
     }
-    auto it = session.program_map().find(stack.back().item->standard().program());
+    auto it = session.program_map().find(playlist.current().standard().program());
     if (it == session.program_map().end()) {
       return default_program;
     }
@@ -394,10 +369,10 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
     // sections: resolves the ACTIVE program in the session's program_map, or nullptr
     // when the built-in default fallback is playing (the panel disables itself).
     auto active_program = [&]() -> trance_pb::Program* {
-      if (!stack.back().item->has_standard()) {
+      if (!playlist.current().has_standard()) {
         return nullptr;
       }
-      auto it = session.mutable_program_map()->find(stack.back().item->standard().program());
+      auto it = session.mutable_program_map()->find(playlist.current().standard().program());
       if (it == session.mutable_program_map()->end()) {
         return nullptr;
       }
@@ -452,7 +427,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   if (realtime) {
     async_thread = run_async_thread(running, *theme_bank);
     audio.reset(new Audio{root_path});
-    audio->TriggerEvents(*stack.back().item);
+    audio->TriggerEvents(playlist.current());
     audio->SetEntrainment(program().entrainment());
     director.set_audio(audio.get());
   }
@@ -486,7 +461,21 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
     };
     const auto true_clock_start = true_clock_time();
     auto last_clock_time = clock_time();
-    auto last_playlist_switch = clock_time();
+    playlist.start(clock_time());
+    // Side effects per newly-entered playlist item: audio events, the program push
+    // into ThemeBank/Director, entrainment refresh. The runner owns only the
+    // stack/transition logic.
+    auto on_playlist_enter = [&](const std::string& name, const trance_pb::PlaylistItem& item) {
+      if (realtime) {
+        audio->TriggerEvents(item);
+      }
+      std::cout << "\n-> " << name << std::endl;
+      theme_bank->set_program(program());
+      director.set_program(program());
+      if (realtime) {
+        audio->SetEntrainment(program().entrainment());
+      }
+    };
 
     while (running && !g_overlay_stop_requested) {
       // (The overlay stop path exits via g_overlay_stop_requested with `running`
@@ -595,62 +584,10 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       // without this a paused session's items keep timing out and firing audio events /
       // program switches underneath the frozen visuals.
       if (command_state.paused) {
-        last_playlist_switch += elapsed_ms;
+        playlist.freeze(elapsed_ms);
       }
 
-      while (true) {
-        auto time_since_switch = clock_time() - last_playlist_switch;
-        auto& entry = stack.back();
-        // Continue if we're in a standard playlist item.
-        if (entry.item->has_standard() &&
-            time_since_switch < 1000 * entry.item->standard().play_time_seconds()) {
-          break;
-        }
-        // Trigger the next item of a subroutine.
-        if (entry.item->has_subroutine() &&
-            entry.subroutine_step < entry.item->subroutine().playlist_item_name_size()) {
-          if (stack.size() >= MAXIMUM_STACK) {
-            std::cerr << "error: subroutine stack overflow\n";
-            entry.subroutine_step = entry.item->subroutine().playlist_item_name_size();
-          } else {
-            last_playlist_switch = clock_time();
-            auto name = entry.item->subroutine().playlist_item_name(entry.subroutine_step);
-            stack.push_back({&session.playlist().find(name)->second, 0});
-            if (realtime) {
-              audio->TriggerEvents(*stack.back().item);
-            }
-            std::cout << "\n-> " << name << std::endl;
-            theme_bank->set_program(program());
-            director.set_program(program());
-            if (realtime) {
-              audio->SetEntrainment(program().entrainment());
-            }
-            ++stack[stack.size() - 2].subroutine_step;
-            continue;
-          }
-        }
-        auto next = next_playlist_item(variables, entry.item);
-        // Finish a subroutine.
-        if (next.empty() && stack.size() > 1) {
-          stack.pop_back();
-          continue;
-        } else if (next.empty()) {
-          break;
-        }
-        // Trigger the next item of a standard playlist item.
-        last_playlist_switch = clock_time();
-        stack.back().item = &session.playlist().find(next)->second;
-        stack.back().subroutine_step = 0;
-        if (realtime) {
-          audio->TriggerEvents(*entry.item);
-        }
-        std::cout << "\n-> " << next << std::endl;
-        theme_bank->set_program(program());
-        director.set_program(program());
-        if (realtime) {
-          audio->SetEntrainment(program().entrainment());
-        }
-      }
+      playlist.advance(clock_time(), on_playlist_enter);
       if (theme_bank->swaps_to_match_theme()) {
         // Fire-and-forget by design: a swap that isn't ready simply doesn't happen this
         // frame; the next matching call retries. Nothing needs the success bool.
