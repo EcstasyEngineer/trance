@@ -15,6 +15,7 @@
 #include <trance/render/openvr.h>
 #include <trance/render/render.h>
 #include <trance/render/video_export.h>
+#include <trance/runtime_state.h>
 #include <trance/theme_bank.h>
 #include <trance/ui/app_ui.h>
 #include <trance/visual/builtin_visuals.h>
@@ -139,26 +140,24 @@ void print_info(double elapsed_seconds, uint64_t frames, uint64_t total_frames)
             << std::endl;
 }
 
-// Command channel runtime state (docs/spec-mcp-ambient-daemon.md): the mailbox is
-// drained and every verb dispatched from the main loop, right after handle_events(), per
-// the spec's threading invariant (sec 2) -- CommandChannel's reader thread only ever pushes
-// raw lines; only this function (running on the render thread) touches Director/Audio.
-// `paused` gates start/stop/pause/resume (director.update()/theme_bank->advance_frames()
-// simply don't run while paused -- "keep it boring" per the spec's own framing, sec 1).
-// `intensity` is still stub state: the spec (sec 4) explicitly scopes its actual wiring
-// as TBD, so the verb is protocol-complete and just stores the value here for a future
-// consumer. `overlay_on`/`overlay_opacity` are LIVE: the verbs (and the F2 UI's
-// Overlay section) only write these two fields; play_session()'s per-frame apply seam
-// reconciles the real window against them via apply_overlay_hints/clear_overlay_hints.
-struct CommandRuntimeState {
-  bool paused = false;
-  float intensity = 1.f;
-  bool overlay_on = false;
-  float overlay_opacity = 0.35f;
-  // `screenshot PATH`: consumed by the renderer's pre-display hook (which sees the fully
-  // composited back buffer) on the next rendered frame; empty = nothing pending.
-  std::string screenshot_path;
-};
+// Command dispatch threading (docs/spec-mcp-ambient-daemon.md sec 2): CommandChannel's
+// reader thread only ever pushes raw lines; the mailbox is drained and every verb
+// dispatched from the main loop right after handle_events(), so only the render thread
+// touches Director/Audio. The shared state lives in trance/runtime_state.h.
+
+// The one policy invariant shared by every "show the panel" path (`ui on` verb, the
+// tray's Show-control-panel, the safety hotkey): a click-through window can't host an
+// interactive panel, so showing the panel implies disengaging the overlay first --
+// showing one anyway strands it on-screen, drawn but unclickable (and on Windows, once
+// a click falls through and focus moves away, the window can never be re-focused by
+// clicking, so not even F2-the-key could close it).
+void show_control_panel(CommandRuntimeState& state, AppUi* app_ui)
+{
+  state.overlay_on = false;
+  if (app_ui) {
+    app_ui->set_visible(true);
+  }
+}
 
 // pause/stop suspends the audible side (music channels + entrainment bed); the
 // playlist clock is frozen separately in the main loop. Null audio (export mode)
@@ -256,13 +255,11 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
     if (!app_ui) {
       return command_protocol::format_err("ui: unavailable in this mode (VR/export)");
     }
-    // `ui on` implies overlay off, same as the tray's "Show control panel": a
-    // click-through window can't host an interactive panel, and showing one anyway
-    // recreates the stranded-unclickable-panel bug through the side door.
     if (cmd.verb == Verb::kUiOn) {
-      state.overlay_on = false;
+      show_control_panel(state, app_ui);
+    } else {
+      app_ui->set_visible(false);
     }
-    app_ui->set_visible(cmd.verb == Verb::kUiOn);
     return command_protocol::format_ok();
   case Verb::kScreenshot:
     // Only ack when a hook that will actually consume the request is installed
@@ -412,18 +409,8 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       theme_bank->set_program(program());
       director.set_program(program());
     };
-    // Overlay callbacks: the UI's Overlay section reads/writes the same two
-    // CommandRuntimeState fields the `overlay ...` verbs use; the apply seam in the
-    // main loop below is the single place either path touches the actual window.
-    auto get_overlay = [&command_state] {
-      return std::make_pair(command_state.overlay_on, command_state.overlay_opacity);
-    };
-    auto set_overlay = [&command_state](bool on, float opacity) {
-      command_state.overlay_on = on;
-      command_state.overlay_opacity = opacity;
-    };
-    app_ui.reset(new AppUi(session, session_path, sidecar, on_program_change, active_program,
-                           get_overlay, set_overlay));
+    app_ui.reset(new AppUi(session, session_path, sidecar, command_state,
+                           on_program_change, active_program));
     if (!app_ui->init(renderer->window())) {
       std::cerr << "warning: ImGui-SFML init failed; F2 UI unavailable this run" << std::endl;
       app_ui.reset();
@@ -528,11 +515,8 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
               running = false;
               break;
             }
-            command_state.overlay_on = false;
             set_paused(command_state, audio.get(), true);
-            if (app_ui) {
-              app_ui->set_visible(true);
-            }
+            show_control_panel(command_state, app_ui.get());
             break;
           }
           case ControlRequest::kOverlayToggle:
@@ -542,12 +526,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
             set_paused(command_state, audio.get(), !command_state.paused);
             break;
           case ControlRequest::kShowUi:
-            // A click-through window can't host an interactive panel; showing the
-            // panel implies disengaging the overlay first.
-            command_state.overlay_on = false;
-            if (app_ui) {
-              app_ui->set_visible(true);
-            }
+            show_control_panel(command_state, app_ui.get());
             break;
           case ControlRequest::kQuit:
             running = false;

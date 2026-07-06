@@ -51,6 +51,7 @@ namespace trance_pb
   class Program;
   class Session;
 }
+struct CommandRuntimeState;
 struct SessionJsonSidecar;
 class Audio;
 class Director;
@@ -63,21 +64,19 @@ public:
   // UI is available (see available() below) so overlay mode never pays ImGui's
   // per-frame Update/Render cost or touches the click-through window.
   //
-  // `session`/`sidecar` are play_session's live objects (outliving this AppUi); the
-  // Program/Themes sections mutate `session` in place and the Session section saves
-  // it back to disk. `on_program_change` must re-push the active program into
-  // ThemeBank/Director (the same pair the playlist-switch path calls) so live edits
-  // apply. `active_program` resolves the mutable active program in session's
-  // program_map, or nullptr when the built-in default fallback is playing (the
-  // Program section disables itself in that case). `get_overlay`/`set_overlay`
-  // read/write the live overlay state (on, opacity) -- main.cpp wires them to
-  // CommandRuntimeState's two overlay fields, and its per-frame apply seam pushes
-  // any change onto the actual window.
+  // `session`/`sidecar`/`command_state` are play_session's live objects (outliving
+  // this AppUi); the Program/Themes sections mutate `session` in place, the Session
+  // section saves it back to disk, and the Overlay section reads/writes
+  // `command_state`'s overlay fields (main.cpp's per-frame apply seam pushes any
+  // change onto the actual window). `on_program_change` must re-push the active
+  // program into ThemeBank/Director (the same pair the playlist-switch path calls)
+  // so live edits apply. `active_program` resolves the mutable active program in
+  // session's program_map, or nullptr when the built-in default fallback is playing
+  // (the Program section disables itself in that case).
   AppUi(trance_pb::Session& session, const std::string& session_path,
-        SessionJsonSidecar& sidecar, std::function<void()> on_program_change,
-        std::function<trance_pb::Program*()> active_program,
-        std::function<std::pair<bool, float>()> get_overlay,
-        std::function<void(bool, float)> set_overlay);
+        SessionJsonSidecar& sidecar, CommandRuntimeState& command_state,
+        std::function<void()> on_program_change,
+        std::function<trance_pb::Program*()> active_program);
   ~AppUi();
 
   AppUi(const AppUi&) = delete;
@@ -121,10 +120,9 @@ private:
   trance_pb::Session& _session;
   const std::string _session_path;
   SessionJsonSidecar& _sidecar;
+  CommandRuntimeState& _command_state;
   std::function<void()> _on_program_change;
   std::function<trance_pb::Program*()> _active_program;
-  std::function<std::pair<bool, float>()> _get_overlay;
-  std::function<void(bool, float)> _set_overlay;
 
   bool _visible = false;
   bool _initialized = false;
