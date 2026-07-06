@@ -3,6 +3,7 @@
 #include <common/session_json.h>
 #include <trance/director.h>
 #include <trance/media/audio.h>
+#include <trance/runtime_state.h>
 #include <trance/theme_bank.h>
 #include <trance/visual/builtin_visuals.h>
 #include <algorithm>
@@ -20,17 +21,15 @@
 #pragma warning(pop)
 
 AppUi::AppUi(trance_pb::Session& session, const std::string& session_path,
-             SessionJsonSidecar& sidecar, std::function<void()> on_program_change,
-             std::function<trance_pb::Program*()> active_program,
-             std::function<std::pair<bool, float>()> get_overlay,
-             std::function<void(bool, float)> set_overlay)
+             SessionJsonSidecar& sidecar, CommandRuntimeState& command_state,
+             std::function<void()> on_program_change,
+             std::function<trance_pb::Program*()> active_program)
 : _session{session}
 , _session_path{session_path}
 , _sidecar{sidecar}
+, _command_state{command_state}
 , _on_program_change{std::move(on_program_change)}
 , _active_program{std::move(active_program)}
-, _get_overlay{std::move(get_overlay)}
-, _set_overlay{std::move(set_overlay)}
 {
   // Seed Save As with the loaded path so "tweak the filename" is the common case.
   std::snprintf(_save_as_buf, sizeof(_save_as_buf), "%s", session_path.c_str());
@@ -450,11 +449,10 @@ void AppUi::save_session_to(const std::string& path)
 
 void AppUi::draw_overlay_section()
 {
-  // Live overlay toggle. This section only reads/writes main.cpp's
-  // CommandRuntimeState (via the constructor callbacks); the main loop's apply seam
-  // -- the same one the `overlay on|off|opacity` verbs go through -- pushes the
-  // change onto the actual window, so this panel and the command channel can never
-  // disagree about the state.
+  // Live overlay toggle. This section only reads/writes CommandRuntimeState's two
+  // overlay fields; the main loop's apply seam -- the same one the
+  // `overlay on|off|opacity` verbs go through -- pushes the change onto the actual
+  // window, so this panel and the command channel can never disagree about the state.
   //
   // The note renders ALWAYS (before the user turns the overlay on): engaging the
   // overlay collapses this panel (the click-through window couldn't deliver it a
@@ -468,12 +466,14 @@ void AppUi::draw_overlay_section()
       "channel (--command_port), or Ctrl+C.");
   ImGui::PopStyleColor();
 
-  auto [on, opacity] = _get_overlay();
+  bool on = _command_state.overlay_on;
+  float opacity = _command_state.overlay_opacity;
   bool changed = ImGui::Checkbox("click-through overlay", &on);
   // Always shown; while the overlay is on, opacity changes apply live each frame.
   changed |= ImGui::SliderFloat("opacity", &opacity, 0.05f, 1.f, "%.2f");
   if (changed) {
-    _set_overlay(on, opacity);
+    _command_state.overlay_on = on;
+    _command_state.overlay_opacity = opacity;
   }
 }
 
