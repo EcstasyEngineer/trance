@@ -146,13 +146,17 @@ namespace
   {
     if (s == "monitor") return trance_pb::System_Renderer_MONITOR;
     if (s == "openvr") return trance_pb::System_Renderer_OPENVR;
+    if (s == "openxr") return trance_pb::System_Renderer_OPENXR;
     throw std::runtime_error(json_path + ": unknown renderer '" + s + "'");
   }
 
   std::string save_renderer(trance_pb::System_Renderer r)
   {
-    // OCULUS is dead (spec sec 6); anything that isn't OPENVR saves as "monitor".
-    return r == trance_pb::System_Renderer_OPENVR ? "openvr" : "monitor";
+    // OCULUS is dead (spec sec 6); anything else that isn't a live VR backend
+    // saves as "monitor".
+    if (r == trance_pb::System_Renderer_OPENVR) return "openvr";
+    if (r == trance_pb::System_Renderer_OPENXR) return "openxr";
+    return "monitor";
   }
 
   trance_pb::AudioEvent_Type parse_audio_event_type(const std::string& s, const std::string& json_path)
@@ -964,8 +968,18 @@ void save_session_json(const trance_pb::Session& session, const std::string& pat
     root_json["variable_map"] = std::move(variables);
   }
 
+  // A silent failure here is worse than a throw: callers (F2 UI Save, legacy
+  // auto-convert) report "saved"/reload the file on a normal return, so a write
+  // that never landed (read-only dir, disk full) must surface as an error.
   std::ofstream f{path};
+  if (!f) {
+    throw std::runtime_error("couldn't open " + path + " for writing");
+  }
   f << root_json.dump(2);
+  f.flush();
+  if (!f) {
+    throw std::runtime_error("couldn't write " + path);
+  }
 }
 
 trance_pb::System load_system_json(const std::string& path)
@@ -1090,6 +1104,15 @@ void save_system_json(const trance_pb::System& system, const std::string& path)
     root_json["last_session_map"] = std::move(session_map);
   }
 
+  // Same stream checking as save_session_json above: a failed write must throw,
+  // not return normally (the F2 UI's System section reports "saved" on return).
   std::ofstream f{path};
+  if (!f) {
+    throw std::runtime_error("couldn't open " + path + " for writing");
+  }
   f << root_json.dump(2);
+  f.flush();
+  if (!f) {
+    throw std::runtime_error("couldn't write " + path);
+  }
 }
