@@ -10,7 +10,7 @@ randomly-generated patterns designed to aid induction and deepening.
 - Authorable visual patterns via the v3 pattern grammar ([docs/spec-grammar-v3.md](docs/spec-grammar-v3.md))
 - In-app control panel (**F2**, ImGui) for live session editing and control
 - Click-through always-on-top overlay mode (`--overlay`)
-- System tray icon (Windows) + global **Shift+F11** safety hotkey — see [docs/controls.md](docs/controls.md)
+- System tray icon (Windows) + global **Shift+F11** hide-everything hotkey — see [docs/controls.md](docs/controls.md)
 - Line-protocol control channel (`--command_port`) for external automation
 - Hardware-accelerated rendering via OpenGL
 - Audio support with multiple independent channels, plus binaural/isochronic entrainment beds
@@ -24,7 +24,8 @@ randomly-generated patterns designed to aid induction and deepening.
 2. Drop a folder of images/GIFs next to `trance.exe` and run it directly — it will
    auto-generate a default session from whatever media it finds — or point it at a
    `*.session.json` file ([docs/session-json-format.md](docs/session-json-format.md)).
-3. Press **F2** for the in-app control panel, **Escape** to quit. Full list of
+3. Press **F2** (or **Escape**) for the in-app control panel; quit via its
+   **Quit trance** button, the tray icon, or closing the window. Full list of
    controls: [docs/controls.md](docs/controls.md).
 
 ## Usage

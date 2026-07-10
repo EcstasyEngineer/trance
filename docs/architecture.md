@@ -55,9 +55,10 @@ The player's lifecycle lives in `play_session()` (`src/trance/main.cpp`):
    for the active program. It keeps two themes active in video memory and
    asynchronously loads a third on a background thread (`run_async_thread` in
    `main.cpp`) so themes can swap without a load stall.
-3. **Renderer.** One of three `Renderer` subclasses (`src/trance/render/`) is
-   chosen: `ScreenRenderer` (window), `OpenVrRenderer` (SteamVR), or
-   `VideoExportRenderer` (offline encode). See the renderer section below.
+3. **Renderer.** One of four `Renderer` subclasses (`src/trance/render/`) is
+   chosen: `ScreenRenderer` (window), `OpenVrRenderer` (SteamVR),
+   `OpenXrRenderer` (OpenXR quad layer), or `VideoExportRenderer` (offline
+   encode). See the renderer section below.
 4. **Director.** The `Director` (`src/trance/director.{h,cpp}`) owns the visual
    engine and the GL programs. It holds a `Visual` (the current pattern), the
    `VisualApiImpl` bridge to the theme bank and renderer, and the compiled
@@ -96,11 +97,11 @@ play_session frame loop ──► Director ──► Visual (cycler tree + effec
 | `src/common/media/` | Decoders shared by both binaries: `Image`, the `Streamer` animation interface (`streamer.{h,cpp}`). |
 | `src/trance/` | The realtime player: `main.cpp`, `director.{h,cpp}`, `theme_bank.{h,cpp}`, GLSL `shaders.h`. |
 | `src/trance/media/` | Player-side media: `audio.{h,cpp}`, `entrainment.{h,cpp}` (the synthesised bed), `font.{h,cpp}`, `async_streamer.{h,cpp}`, video `export.{h,cpp}`. |
-| `src/trance/render/` | The `Renderer` interface and its subclasses: `render.{h,cpp}` (screen — also home of the click-through overlay window hints, `apply_overlay_hints` / `clear_overlay_hints`), `openvr.{h,cpp}` (SteamVR), `video_export.{h,cpp}` (offline encode). |
+| `src/trance/render/` | The `Renderer` interface and its subclasses: `render.{h,cpp}` (screen — also home of the click-through overlay window hints, `apply_overlay_hints` / `clear_overlay_hints`), `openvr.{h,cpp}` (SteamVR), `openxr.{h,cpp}` (OpenXR head-locked quad-layer backend — Quest Link, any conformant runtime), `video_export.{h,cpp}` (offline encode). |
 | `src/trance/visual/` | The visual engine: the cycler/pattern system (~23 files). The pattern DSL parser/compiler, the `Cycler` tree, compiled visuals, the data-driven render blocks (`render_eval`), and the headless tests. |
 | `src/trance/ui/` | The ImGui in-app control panel (`app_ui.{h,cpp}`), toggled with F2. |
 | `src/trance/net/` | The `--command_port` control channel: line→verb protocol (`command_protocol.{h,cpp}`) and the socket/mailbox (`command_channel.{h,cpp}`). |
-| `src/trance/platform/` | Out-of-window controls (`system_control.{h,cpp}`): the system tray icon (Windows) and the global Shift+F11 safety hotkey (Win32/X11) — the control surface that keeps working while the overlay is click-through. |
+| `src/trance/platform/` | Out-of-window controls (`system_control.{h,cpp}`): the system tray icon (Windows) and the global Shift+F11 hide-everything hotkey (Win32/X11) — the control surface that keeps working while the overlay is click-through. |
 | `src/creator/` | The deprecated wxWidgets session editor (separate executable). |
 | `src/jpgd/` | Vendored JPEG decoder (third-party). |
 
@@ -126,7 +127,7 @@ play_session frame loop ──► Director ──► Visual (cycler tree + effec
 - **Overlay mode / out-of-window controls** → `apply_overlay_hints`
   (`src/trance/render/render.h`) for the click-through window itself;
   `src/trance/platform/system_control.h` for the tray icon + global Shift+F11
-  safety hotkey that control it.
+  hide-everything hotkey that control it.
 - **Command channel** → `src/trance/net/command_protocol.h`; verb reference in
   [spec-mcp-ambient-daemon.md](spec-mcp-ambient-daemon.md).
 - **Editor (deprecated)** → `src/creator/main.cpp`.
@@ -136,13 +137,14 @@ play_session frame loop ──► Director ──► Visual (cycler tree + effec
 Full user-facing reference: [controls.md](controls.md).
 
 In-window keys are handled in `handle_events()` (`src/trance/main.cpp`):
-**Escape**/window-close quits, **F1** toggles the debug overlay
-(`Director::draw_debug_overlay`, `src/trance/director.cpp`), **F2** toggles the
-ImGui control panel (`src/trance/ui/app_ui.{h,cpp}`), **M** toggles audio mute
-(`Audio::ToggleMute`).
+window-close quits, **Escape**/**F2** toggle the ImGui control panel
+(`src/trance/ui/app_ui.{h,cpp}`, which carries the "Quit trance" button), **F1**
+toggles the debug overlay (`Director::draw_debug_overlay`,
+`src/trance/director.cpp`), **M** toggles audio mute (`Audio::ToggleMute`).
 
 Outside the window (works even when the overlay makes the window click-through):
-the global **Shift+F11** safety hotkey (first press: overlay off + pause + panel
-up; second press from that safe state: quit) and the Windows **system tray icon**
-menu — both in `src/trance/platform/system_control.{h,cpp}` — plus the
-`--command_port` channel and SIGINT/SIGTERM.
+the global **Shift+F11** hide-everything toggle (first press: window hidden +
+paused + muted; next press restores the pre-hide state) and the Windows **system
+tray icon** menu (hide/show, overlay + opacity nudge, pause, panel, quit) — both
+in `src/trance/platform/system_control.{h,cpp}` — plus the `--command_port`
+channel (including `hide`/`show`) and SIGINT/SIGTERM.

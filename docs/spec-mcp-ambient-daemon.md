@@ -94,7 +94,7 @@ scriptable from the shell (`echo | nc`, no JSON library needed on the client end
 
 ```
 $ echo "status" | nc -q1 127.0.0.1 9191
-ok visual=spiral_bloom bed=on overlay=off uptime=142
+ok visual=spiral_bloom bed=on overlay=off hidden=off uptime=142 themes=nature|nature|space|words
 
 $ echo "intensity 0.6" | nc -q1 127.0.0.1 9191
 ok
@@ -133,6 +133,33 @@ Overlay (live, drives issue #27's click-through overlay on the running window):
 - **`overlay opacity VALUE`** — `VALUE` in `0..1`, clamped; applies live while the overlay
   is on.
 
+Silent running (the hide-everything primitive — **this is the switch an MCP agent flips to
+make trance vanish instantly without killing the process**):
+- **`hide`** — hide everything: the window becomes invisible (`setVisible(false)`), playback
+  pauses, audio mutes; the process — command channel, tray icon, Shift+F11 hotkey — stays
+  alive. Idempotent: `hide` while already hidden is an `ok` no-op.
+- **`show`** — restore: window visible again, and the pause/mute state that existed *before*
+  hiding comes back (a session that was playing unmuted resumes playing unmuted; one that
+  was already paused stays paused). A `pause`/`resume`/`start`/`stop` (or tray Paused
+  toggle) issued *while* hidden updates that restored pause state instead of being
+  discarded — playback stays idle for as long as the window is hidden, and on `show` the
+  last explicitly commanded pause state wins. Idempotent like `hide`.
+- Both verbs reply `err ... unavailable in this mode (export)` in video-export mode: there
+  is no window/seam to apply them to, and an `ok` that flips nothing (with `status`
+  reporting `hidden=on` forever) would be a lie — same capability gating as
+  `ui`/`screenshot` below.
+- Same state everywhere: `hide`/`show`, the global **Shift+F11** hotkey, and the tray's
+  Hide-everything/Show item all drive one `hidden` flag reconciled at the main loop's apply
+  seam, so the surfaces can never disagree. Hiding also forces the overlay off (clearing
+  the click-through hints), so no stuck click-through state can survive a hide/show cycle.
+- **Shift+F11 semantics (revised):** the hotkey is now a pure hide/show *toggle* — first
+  press hides everything instantly, next press restores. It no longer shows the control
+  panel and no longer quits on a second press; quitting is the tray's Quit item, the window
+  close button, or the F2/Escape panel's Quit button. One carve-out: in hotkey-only
+  configurations where none of those quit surfaces exist (Linux VR, or Linux fullscreen
+  after a failed ImGui init — no tray, no panel), a press while already hidden quits
+  instead of restoring, so an orderly exit always remains reachable.
+
 Intensity:
 - **`intensity VALUE`** — `VALUE` in `0..1`, clamped. A single global multiplier concept, not
   a per-effect control. Semantics are defined loosely on purpose: think "master zoom / alpha /
@@ -153,12 +180,15 @@ Loading:
 
 Status:
 - **`status`** — single-line, parseable reply: current visual name, entrainment-bed state,
-  overlay state, process uptime, and ThemeBank's four queue slots. Exact reply shape:
-  `ok visual=<name> bed=<on|off> overlay=<on|off> uptime=<seconds> themes=<a|b|c|d>`
+  overlay state, hidden state, process uptime, and ThemeBank's four queue slots. Exact
+  reply shape:
+  `ok visual=<name> bed=<on|off> overlay=<on|off> hidden=<on|off> uptime=<seconds> themes=<a|b|c|d>`
 
 Debug/validation (same line protocol, not part of the settings surface proper):
-- **`ui on|off`** — show/hide the F2 ImGui panels remotely (same state the F2 key toggles);
-  `err` in modes with no UI (overlay/VR/export).
+- **`ui on|off`** — show/hide the F2 ImGui panels remotely (same state the F2/Escape keys
+  toggle; `ui on` also un-hides and disengages the overlay, since a panel on an invisible
+  or click-through window is unreachable); `err` in modes with no UI (VR/export — the
+  panel exists in `--overlay` runs, where `ui on` disengages the overlay to reach it).
 - **`screenshot FILE.png`** — dump the next fully-composited rendered frame (scene + UI,
   pre-swap glReadPixels) to a PNG. Works when the physical display is locked/headless —
   this is what makes remote visual validation possible without keyboard access.
@@ -173,7 +203,7 @@ of commands "means."
 
 ## 5. State (`status` verb)
 
-`status` returns the single-line reply defined in §4 — deliberately minimal (four fields) so
+`status` returns the single-line reply defined in §4 — deliberately minimal so
 it's grep/parse-friendly from a shell script without a JSON library. If richer introspection
 is needed later, that's a `get` key or a new verb, not a change to `status`'s shape.
 
@@ -232,8 +262,11 @@ these verbs, indistinguishable on the wire from a shell script.
 - Protocol: **line-oriented plain text**, one command per line, one reply line per command —
   not JSON. Trivially scriptable with `echo`/`nc`.
 - **Fixed v0 verb set** (§4): `start`/`stop`/`pause`/`resume`, `overlay on|off`/
-  `overlay opacity`, `intensity`, `set`/`get`, `load pattern`/`load session`, `status`. No
-  verb is added speculatively.
+  `overlay opacity`, `hide`/`show`, `intensity`, `set`/`get`, `load pattern`/`load session`,
+  `status`. No verb is added speculatively.
+- **`hide`/`show` is the silent-running primitive for MCP agents** (§4): an external
+  controller that needs trance gone *now* (screen share starting, someone walks in) sends
+  `hide` — one round-trip, no process kill, instant restore later with `show`.
 - **Overlay verbs drive issue #27's click-through overlay live**: `overlay on|off` /
   `overlay opacity` apply/clear the hints on the running window at runtime (same seam the
   F2 UI's Overlay section uses).
