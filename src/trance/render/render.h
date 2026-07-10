@@ -39,6 +39,7 @@ public:
     NONE = 0,
     VR_LEFT = 1,
     VR_RIGHT = 2,
+    VR_MONO = 3,  // single head-locked pass (OpenXR quad layer); no eye offset.
   };
 
   virtual ~Renderer() = default;
@@ -54,6 +55,17 @@ public:
   virtual void init() = 0;
   virtual bool update() = 0;
   virtual void render(const std::function<void(State)>& render_fn) = 0;
+
+  // Frame-loop keep-alive for paused/hidden states where the main loop has nothing
+  // to draw. Returns true if the renderer performed its own frame pacing (so the
+  // caller must not add its own anti-spin sleep); the default no-op returns false.
+  // Only OpenXrRenderer overrides it: a running OpenXR session REQUIRES continuous
+  // xrWaitFrame/xrBeginFrame/xrEndFrame -- stalling the loop mid-session makes the
+  // runtime (Quest Link/SteamVR) flag the app unresponsive, and the compositor keeps
+  // showing the last submitted frame, so `hide` would never actually vanish in the
+  // headset. Submitting layerCount=0 frames keeps the handshake alive AND blanks
+  // the quad.
+  virtual bool render_idle() { return false; }
 
   // Pre-display UI hook: runs after the scene is drawn but BEFORE the buffer swap, so a
   // 2D UI (the F2 ImGui panels) composites onto the same frame it belongs to. Calling
