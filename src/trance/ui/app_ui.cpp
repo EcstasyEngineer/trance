@@ -8,7 +8,6 @@
 #include <trance/visual/builtin_visuals.h>
 #include <algorithm>
 #include <cstdio>
-#include <filesystem>
 #include <utility>
 #include <vector>
 
@@ -21,12 +20,15 @@
 #pragma warning(pop)
 
 AppUi::AppUi(trance_pb::Session& session, const std::string& session_path,
-             SessionJsonSidecar& sidecar, CommandRuntimeState& command_state,
+             SessionJsonSidecar& sidecar, trance_pb::System& system,
+             const std::string& system_path, CommandRuntimeState& command_state,
              std::function<void()> on_program_change,
              std::function<trance_pb::Program*()> active_program)
 : _session{session}
 , _session_path{session_path}
 , _sidecar{sidecar}
+, _system{system}
+, _system_path{system_path}
 , _command_state{command_state}
 , _on_program_change{std::move(on_program_change)}
 , _active_program{std::move(active_program)}
@@ -60,6 +62,12 @@ void AppUi::process_event(sf::RenderWindow& window, const sf::Event& event)
   ImGui::SFML::ProcessEvent(window, event);
 }
 
+bool AppUi::wants_text_input() const
+{
+  // Guarded: ImGui::GetIO() needs the context ImGui::SFML::Init created.
+  return _initialized && ImGui::GetIO().WantTextInput;
+}
+
 void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Audio* audio,
                    const ThemeBank& themes)
 {
@@ -70,6 +78,9 @@ void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Au
   _frame_started = true;
   if (_save_status_ttl > 0.f) {
     _save_status_ttl -= dt.asSeconds();
+  }
+  if (_system_status_ttl > 0.f) {
+    _system_status_ttl -= dt.asSeconds();
   }
 
   if (!_visible) {
@@ -101,6 +112,17 @@ void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Au
   }
   if (ImGui::CollapsingHeader("Entrainment")) {
     draw_entrainment_section(audio);
+  }
+  if (ImGui::CollapsingHeader("System")) {
+    draw_system_section();
+  }
+  // Quit lives at the very bottom, clearly separated from the sections above --
+  // Escape/F2 only ever toggle this panel now, so this button (plus the tray Quit
+  // and the window close button) is the deliberate way out.
+  ImGui::Separator();
+  ImGui::Spacing();
+  if (ImGui::Button("Quit trance")) {
+    _quit_requested = true;
   }
   ImGui::End();
 }
@@ -430,17 +452,12 @@ void AppUi::save_session_to(const std::string& path)
     // The sidecar overload so pattern files / scan-dir themes round-trip instead of
     // being frozen inline (session_json.cpp handles scan themes on save itself; no
     // UI special-casing beyond the restart note in the Themes section).
+    // save_session_json checks its output stream and throws on any failed write
+    // (unopenable path, read-only file, disk full), so a normal return really
+    // means the file landed.
     save_session(_session, path, _sidecar);
-    // save_session_json doesn't check its output stream -- verify the file landed
-    // so an unwritable path reports as an error instead of a silent "saved".
-    std::error_code ec;
-    if (!std::filesystem::exists(path, ec)) {
-      _save_status = "error: couldn't write " + path;
-      _save_error = true;
-    } else {
-      _save_status = "saved " + path;
-      _save_error = false;
-    }
+    _save_status = "saved " + path;
+    _save_error = false;
   } catch (const std::exception& e) {
     _save_status = std::string("error: ") + e.what();
     _save_error = true;
@@ -461,9 +478,10 @@ void AppUi::draw_overlay_section()
   ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.75f, 0.3f, 1.f));
   ImGui::TextWrapped(
       "Turning the overlay on makes the window click-through and closes this panel. "
-      "To come back: Shift+F11 (global safety hotkey -- overlay off + pause; press "
-      "again to quit), the tray icon (Windows), `overlay off` over the command "
-      "channel (--command_port), or Ctrl+C.");
+      "To come back: the tray icon's Show control panel (Windows), `overlay off` or "
+      "`show` over the command channel (--command_port), or Ctrl+C. Shift+F11 is the "
+      "global hide-everything toggle (window hidden + paused + muted; press again to "
+      "restore).");
   ImGui::PopStyleColor();
 
   bool on = _command_state.overlay_on;
@@ -493,5 +511,76 @@ void AppUi::draw_entrainment_section(Audio* audio)
   } else {
     // Null in export/video-render mode (see Director::set_audio's doc comment).
     ImGui::TextDisabled("(no live audio -- export mode)");
+  }
+}
+
+void AppUi::draw_system_section()
+{
+  // Edits main()'s live trance_pb::System in place and persists IMMEDIATELY to
+  // system.json (save_system_config below) -- there's no separate Apply/Save step.
+  // The renderer and window are constructed once at play_session startup, so
+  // renderer/windowed changes only land on the next launch; the note below makes
+  // that explicit so a radio click that visibly does nothing isn't read as a bug.
+  ImGui::TextUnformatted("Renderer:");
+  bool changed = false;
+  auto renderer_radio = [&](const char* label, trance_pb::System::Renderer value) {
+    bool selected = _system.renderer() == value;
+    if (ImGui::RadioButton(label, selected) && !selected) {
+      _system.set_renderer(value);
+      changed = true;
+    }
+  };
+  renderer_radio("Monitor", trance_pb::System::MONITOR);
+  renderer_radio("SteamVR (OpenVR)", trance_pb::System::OPENVR);
+  renderer_radio("OpenXR (Quest Link, any runtime)", trance_pb::System::OPENXR);
+  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.75f, 0.3f, 1.f));
+  ImGui::TextWrapped("Renderer and windowed mode take effect on next launch.");
+  ImGui::PopStyleColor();
+
+  bool windowed = _system.windowed();
+  if (ImGui::Checkbox("windowed", &windowed)) {
+    _system.set_windowed(windowed);
+    changed = true;
+  }
+
+  // Eye spacing only feeds the OpenVR per-eye camera offset today; grey it out
+  // elsewhere rather than hiding it, so the setting stays discoverable. mutable_ on
+  // an unset EyeSpacing materializes it zeroed -- same value the renderer reads
+  // through the const accessor, so no behaviour change until the user drags.
+  const bool openvr = _system.renderer() == trance_pb::System::OPENVR;
+  ImGui::BeginDisabled(!openvr);
+  float eye_spacing = _system.eye_spacing().eye_spacing();
+  if (ImGui::SliderFloat("eye spacing", &eye_spacing, 0.f, 1.f, "%.3f")) {
+    _system.mutable_eye_spacing()->set_eye_spacing(eye_spacing);
+    changed = true;
+  }
+  ImGui::EndDisabled();
+  if (!openvr) {
+    ImGui::TextDisabled("(eye spacing: only used by the SteamVR/OpenVR renderer)");
+  }
+
+  if (changed) {
+    save_system_config();
+  }
+  if (_system_status_ttl > 0.f && !_system_status.empty()) {
+    ImGui::TextColored(_system_error ? ImVec4(1.f, 0.4f, 0.4f, 1.f)
+                                     : ImVec4(0.4f, 1.f, 0.4f, 1.f),
+                       "%s", _system_status.c_str());
+  }
+}
+
+void AppUi::save_system_config()
+{
+  _system_status_ttl = 6.f;
+  try {
+    // save_system_json checks its output stream and throws on any failed write
+    // (same as save_session_json -- see save_session_to above), so a normal
+    // return really means the file landed; the catch is the single failure path.
+    save_system(_system, _system_path);
+    _system_status = "saved " + _system_path;
+    _system_error = false;
+  } catch (const std::exception& e) {
+    _system_status = std::string("error: ") + e.what();
+    _system_error = true;
   }
 }

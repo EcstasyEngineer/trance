@@ -9,8 +9,17 @@
 
 struct CommandRuntimeState {
   // Gates director.update()/theme_bank->advance_frames() in the main loop; the
-  // playlist clock is frozen there too, and Audio pauses via set_paused().
+  // playlist clock is frozen there too, and Audio pauses via set_paused(). While
+  // hidden this is only the user's pause INTENT (playback idles on `hidden` itself,
+  // and set_paused leaves the audio to the hide seam), so a pause/resume commanded
+  // while hidden survives the `show` restore.
   bool paused = false;
+  // Hide-everything (silent running): window invisible, playback idle, audio muted;
+  // the process (command channel + tray + hotkey) stays alive. Written by the `hide`/
+  // `show` verbs, the Shift+F11 toggle, and the tray's explicit Hide/Show item; the
+  // apply seam hides/shows the window, stashes/restores mute, and on show resumes
+  // audio iff `paused` says play.
+  bool hidden = false;
   // Protocol-complete stub: the spec scopes actual intensity wiring as TBD, so the
   // verb just stores the value here for a future consumer.
   float intensity = 1.f;

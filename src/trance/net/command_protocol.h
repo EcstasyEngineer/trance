@@ -25,6 +25,11 @@ namespace command_protocol
     kLoadPattern,
     kLoadSession,
     kStatus,
+    // Hide-everything / silent running (spec sec 4): window invisible + playback paused +
+    // audio muted, process alive. Idempotent -- `hide` while hidden and `show` while shown
+    // are both `ok` no-ops. Same state Shift+F11 and the tray's Hide/Show item toggle.
+    kHide,
+    kShow,
     // Debug/validation verbs (not in the ambient-daemon spec's settings surface, but shaped
     // the same): toggle the F2 ImGui panels remotely and dump the next rendered frame to a
     // PNG -- together they make headless/display-locked validation possible (a controller

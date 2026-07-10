@@ -1,8 +1,10 @@
 #ifndef TRANCE_SRC_TRANCE_UI_APP_UI_H
 #define TRANCE_SRC_TRANCE_UI_APP_UI_H
 // ImGui in-app UI: the creator replacement. Toggled with
-// F2 (see main.cpp's handle_events); coexists with the pre-existing F1 text debug
-// overlay (Director::toggle_debug_overlay / draw_debug_overlay), which is untouched.
+// F2 or Escape (see main.cpp's handle_events -- Escape no longer quits; quitting is
+// the panel's Quit button, the tray's Quit item, or closing the window); coexists
+// with the pre-existing F1 text debug overlay (Director::toggle_debug_overlay /
+// draw_debug_overlay), which is untouched.
 // Exists in --overlay runs too (the overlay is runtime-toggleable now): while the
 // overlay is engaged the click-through window delivers no input and the panel is
 // collapsed by main.cpp's apply seam; SystemControl (Shift+F11 / tray) disengages
@@ -31,6 +33,12 @@
 //   - Entrainment: mute toggle (Audio::ToggleMute). No volume slider: Audio exposes
 //     only a global mute (sf::Listener::setGlobalVolume 0/100 in ToggleMute), not a
 //     settable gain -- see the note in draw_entrainment_section.
+//   - System: renderer selection (Monitor / SteamVR / OpenXR), windowed mode, eye
+//     spacing -- edits trance_pb::System in place and persists immediately to
+//     system.json via save_system. Renderer/windowed take effect on next launch
+//     (the renderer/window are constructed once at startup).
+// Plus a separated "Quit trance" button at the bottom (polled by main.cpp via
+// quit_requested()).
 //
 // TODO: persist last-forced-visual / mute state / UI-open once JSON settings land.
 #include <cstdint>
@@ -50,6 +58,7 @@ namespace trance_pb
 {
   class Program;
   class Session;
+  class System;
 }
 struct CommandRuntimeState;
 struct SessionJsonSidecar;
@@ -72,9 +81,12 @@ public:
   // program into ThemeBank/Director (the same pair the playlist-switch path calls)
   // so live edits apply. `active_program` resolves the mutable active program in
   // session's program_map, or nullptr when the built-in default fallback is playing
-  // (the Program section disables itself in that case).
+  // (the Program section disables itself in that case). `system`/`system_path` are
+  // main()'s live System config + where it was loaded from: the System section edits
+  // the proto in place and persists straight back to `system_path` via save_system.
   AppUi(trance_pb::Session& session, const std::string& session_path,
-        SessionJsonSidecar& sidecar, CommandRuntimeState& command_state,
+        SessionJsonSidecar& sidecar, trance_pb::System& system,
+        const std::string& system_path, CommandRuntimeState& command_state,
         std::function<void()> on_program_change,
         std::function<trance_pb::Program*()> active_program);
   ~AppUi();
@@ -91,6 +103,17 @@ public:
   void toggle() { _visible = !_visible; }
   // Remote-controlled visibility (the `ui on|off` verbs) -- same state F2 toggles.
   void set_visible(bool visible) { _visible = visible; }
+
+  // True while an ImGui text field is active (io.WantTextInput). handle_events()
+  // checks this before the Escape/F2 panel toggle: Escape's standard ImGui meaning
+  // inside an active InputText (e.g. the Session section's Save As field) is
+  // "cancel the edit", and it must not also close the whole panel.
+  bool wants_text_input() const;
+
+  // Set (sticky) by the panel's "Quit trance" button; polled once per frame by
+  // main.cpp's loop, which flips `running` -- the same clean exit path as the tray
+  // Quit / window close.
+  bool quit_requested() const { return _quit_requested; }
 
   // Forwarded from handle_events() so ImGui can see keyboard/mouse input while open.
   void process_event(sf::RenderWindow& window, const sf::Event& event);
@@ -114,12 +137,17 @@ private:
   void draw_session_section();
   void draw_overlay_section();
   void draw_entrainment_section(Audio* audio);
+  void draw_system_section();
   // Save (with sidecar) to `path`, recording a transient status line either way.
   void save_session_to(const std::string& path);
+  // Persist the System proto back to _system_path, recording a transient status line.
+  void save_system_config();
 
   trance_pb::Session& _session;
   const std::string _session_path;
   SessionJsonSidecar& _sidecar;
+  trance_pb::System& _system;
+  const std::string _system_path;
   CommandRuntimeState& _command_state;
   std::function<void()> _on_program_change;
   std::function<trance_pb::Program*()> _active_program;
@@ -127,6 +155,7 @@ private:
   bool _visible = false;
   bool _initialized = false;
   bool _init_failed = false;
+  bool _quit_requested = false;
   // An ImGui frame is open (update() ran, render() hasn't) -- pairs Update/Render.
   bool _frame_started = false;
   // Last force_pattern_from_source() parse error, shown inline in the Visuals section
@@ -148,6 +177,11 @@ private:
   std::string _save_status;
   bool _save_error = false;
   float _save_status_ttl = 0.f;
+
+  // System section state: transient "saved system.json"/error status line.
+  std::string _system_status;
+  bool _system_error = false;
+  float _system_status_ttl = 0.f;
 };
 
 #endif

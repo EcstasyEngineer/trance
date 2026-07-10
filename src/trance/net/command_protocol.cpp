@@ -74,6 +74,10 @@ namespace command_protocol
       cmd.verb = Verb::kResume;
     } else if (verb == "status" && tokens.size() == 1) {
       cmd.verb = Verb::kStatus;
+    } else if (verb == "hide" && tokens.size() == 1) {
+      cmd.verb = Verb::kHide;
+    } else if (verb == "show" && tokens.size() == 1) {
+      cmd.verb = Verb::kShow;
     } else if (verb == "overlay" && tokens.size() == 2 && tokens[1] == "on") {
       cmd.verb = Verb::kOverlayOn;
     } else if (verb == "overlay" && tokens.size() == 2 && tokens[1] == "off") {

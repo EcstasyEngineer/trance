@@ -54,10 +54,11 @@ std::vector<ControlRequest> SystemControl::drain()
   return requests;
 }
 
-void SystemControl::set_status(bool overlay_on, bool paused)
+void SystemControl::set_status(bool overlay_on, bool paused, bool hidden)
 {
   _overlay_on = overlay_on;
   _paused = paused;
+  _hidden = hidden;
 }
 
 void SystemControl::push(ControlRequest request)
@@ -74,11 +75,17 @@ namespace
 {
   constexpr UINT kTrayCallbackMessage = WM_APP + 1;
   constexpr int kHotkeyId = 1;
-  constexpr UINT kMenuSafety = 1;
+  // Two distinct ids for the Hide/Show item (only one is ever on the menu at a
+  // time): the click must carry the ABSOLUTE action the label promised, not a
+  // toggle -- see ControlRequest::kHide/kShow.
+  constexpr UINT kMenuHide = 1;
   constexpr UINT kMenuOverlay = 2;
   constexpr UINT kMenuPause = 3;
   constexpr UINT kMenuShowUi = 4;
   constexpr UINT kMenuQuit = 5;
+  constexpr UINT kMenuOpacityUp = 6;
+  constexpr UINT kMenuOpacityDown = 7;
+  constexpr UINT kMenuShow = 8;
 
   // Re-broadcast by explorer.exe when the taskbar (re)starts; the icon must be
   // re-added then or it silently disappears after an explorer crash/restart. (This is
@@ -99,15 +106,24 @@ namespace
     return data;
   }
 
-  void show_tray_menu(HWND hwnd, bool overlay_on, bool paused)
+  void show_tray_menu(HWND hwnd, bool overlay_on, bool paused, bool hidden)
   {
     HMENU menu = CreatePopupMenu();
     if (!menu) {
       return;
     }
-    AppendMenuW(menu, MF_STRING, kMenuSafety, L"Safety stop\tShift+F11");
+    // Dynamic label naming the absolute action a click performs -- and the click
+    // pushes that EXPLICIT action (kHide/kShow), not a toggle: the state can flip
+    // underneath an open menu (Shift+F11 keeps dispatching in TrackPopupMenu's
+    // modal loop, and channel hide/show run concurrently), and a toggle would then
+    // invert what the stale label promised. Shift+F11 itself stays a toggle
+    // (kSafety); this item drives the same hidden flag through the same seam.
+    AppendMenuW(menu, MF_STRING, hidden ? kMenuShow : kMenuHide,
+                hidden ? L"Show\tShift+F11" : L"Hide everything\tShift+F11");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING | (overlay_on ? MF_CHECKED : 0u), kMenuOverlay, L"Overlay");
+    AppendMenuW(menu, MF_STRING, kMenuOpacityUp, L"Overlay opacity +");
+    AppendMenuW(menu, MF_STRING, kMenuOpacityDown, L"Overlay opacity -");
     AppendMenuW(menu, MF_STRING | (paused ? MF_CHECKED : 0u), kMenuPause, L"Paused");
     AppendMenuW(menu, MF_STRING, kMenuShowUi, L"Show control panel");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -131,7 +147,7 @@ namespace
     if (control) {
       if (msg == kTrayCallbackMessage) {
         if (lparam == WM_RBUTTONUP || lparam == WM_CONTEXTMENU) {
-          show_tray_menu(hwnd, control->overlay_on(), control->paused());
+          show_tray_menu(hwnd, control->overlay_on(), control->paused(), control->hidden());
         } else if (lparam == WM_LBUTTONDBLCLK) {
           control->push(ControlRequest::kShowUi);
         }
@@ -143,11 +159,20 @@ namespace
       }
       if (msg == WM_COMMAND) {
         switch (LOWORD(wparam)) {
-        case kMenuSafety:
-          control->push(ControlRequest::kSafety);
+        case kMenuHide:
+          control->push(ControlRequest::kHide);
+          break;
+        case kMenuShow:
+          control->push(ControlRequest::kShow);
           break;
         case kMenuOverlay:
           control->push(ControlRequest::kOverlayToggle);
+          break;
+        case kMenuOpacityUp:
+          control->push(ControlRequest::kOverlayOpacityUp);
+          break;
+        case kMenuOpacityDown:
+          control->push(ControlRequest::kOverlayOpacityDown);
           break;
         case kMenuPause:
           control->push(ControlRequest::kPlayPauseToggle);
@@ -203,10 +228,11 @@ void SystemControl::thread_main()
     std::cerr << "system control: couldn't add tray icon" << std::endl;
   }
 
-  // MOD_NOREPEAT: holding the key fires once, not an autorepeat stream of safety
-  // stops (the second press means quit -- autorepeat would trigger it instantly).
+  // MOD_NOREPEAT: holding the key fires once, not an autorepeat stream (kSafety is
+  // a hide/show TOGGLE -- an autorepeat stream would flap it every repeat interval).
   if (RegisterHotKey(hwnd, kHotkeyId, MOD_SHIFT | MOD_NOREPEAT, VK_F11)) {
-    std::cout << "system control: global safety hotkey Shift+F11 registered" << std::endl;
+    std::cout << "system control: global hide-everything hotkey Shift+F11 registered"
+              << std::endl;
   } else {
     std::cerr << "system control: couldn't register Shift+F11 (in use by another "
                  "application?); tray menu is the fallback"
@@ -249,15 +275,16 @@ void SystemControl::thread_main()
   // command channel / F2 UI remain the off-switches there.
   Display* display = XOpenDisplay(nullptr);
   if (!display) {
-    std::cerr << "system control: no X11 display; global Shift+F11 safety hotkey "
-                 "unavailable"
+    std::cerr << "system control: no X11 display; global Shift+F11 hide-everything "
+                 "hotkey unavailable"
               << std::endl;
     return;
   }
   Window root = DefaultRootWindow(display);
   KeyCode keycode = XKeysymToKeycode(display, XK_F11);
   if (!keycode) {
-    std::cerr << "system control: no keycode for F11; safety hotkey unavailable" << std::endl;
+    std::cerr << "system control: no keycode for F11; hide-everything hotkey unavailable"
+              << std::endl;
     XCloseDisplay(display);
     return;
   }
@@ -274,14 +301,16 @@ void SystemControl::thread_main()
   XSetErrorHandler(previous_handler);
   if (g_grab_failed) {
     std::cerr << "system control: Shift+F11 already grabbed by another application; "
-                 "safety hotkey may not fire"
+                 "hide-everything hotkey may not fire"
               << std::endl;
   } else {
-    std::cout << "system control: global safety hotkey Shift+F11 registered" << std::endl;
+    std::cout << "system control: global hide-everything hotkey Shift+F11 registered"
+              << std::endl;
   }
 
   // Autorepeat suppression: holding the key must fire ONE safety request, not a
-  // repeat stream (the second request means quit -- see ControlRequest::kSafety).
+  // repeat stream (kSafety is a hide/show toggle -- a stream would flap it; see
+  // ControlRequest::kSafety).
   // With detectable autorepeat, repeats arrive as KeyPress with no intervening
   // KeyRelease, so gating on "released since the last press" filters them; the
   // Windows path gets the same behaviour from MOD_NOREPEAT.
