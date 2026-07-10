@@ -72,6 +72,7 @@ if(TARGET unofficial::libwebm::libwebm)
     INTERFACE_INCLUDE_DIRECTORIES "${_webm_inc}/webm")
 endif()
 find_package(OpenVR REQUIRED)
+find_package(OpenXR CONFIG REQUIRED)
 
 # x264 ships pkg-config metadata, not a first-class CMake config. Prefer
 # pkg-config (Linux); fall back to cmake/Findx264.cmake (MSVC) — never hardcode.
@@ -194,6 +195,7 @@ add_executable(trance
   src/trance/playlist_runner.cpp
   src/trance/platform/system_control.cpp
   src/trance/render/openvr.cpp
+  src/trance/render/openxr.cpp
   src/trance/render/render.cpp
   src/trance/render/video_export.cpp
   src/trance/theme_bank.cpp
@@ -219,6 +221,7 @@ target_link_libraries(trance PRIVATE
   unofficial::libwebm::libwebm
   GIF::GIF
   OpenVR::OpenVR
+  OpenXR::openxr_loader
   ${X264_TARGET})
 
 if(WIN32)

@@ -11,6 +11,7 @@
     "giflib",
     "gflags",
     "openvr",
+    "openxr-loader",
     "sfml",
     "imgui-sfml",
     "nlohmann-json",

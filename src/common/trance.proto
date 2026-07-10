@@ -33,6 +33,7 @@ message System {
     MONITOR = 0;
     OCULUS = 1;  // LibOVR support removed; value reserved, do not reuse.
     OPENVR = 2;
+    OPENXR = 3;
   }
 
   // Enable vsync to eliminate tearing, but can cause stuttering.
