@@ -1,9 +1,11 @@
 #include <common/session.h>
 #include <common/session_json.h>
+#include <common/session_legacy.h>
 #include <common/util.h>
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <stdexcept>
 
 #pragma warning(push, 0)
@@ -231,20 +233,68 @@ namespace
 
   // JSON is the only on-disk format the player reads (docs/session-json-format.md sec
   // 8): "*.session.json" for sessions, "system.json" for system config. A legacy
-  // ".session" / ".cfg" textproto path is a full cut, not a fallback -- reject it with
-  // a hint to run the converter rather than silently misreading it as JSON.
+  // ".session" textproto path passed to load_session is auto-converted (see
+  // convert_legacy_session below); anything else non-JSON is rejected rather than
+  // silently misread as JSON.
   bool has_json_extension(const std::string& path)
   {
     return ext_is(path, "json");
   }
 
-  [[noreturn]] void fatal_legacy_proto_path(const std::string& path)
+  bool has_legacy_session_extension(const std::string& path)
   {
-    throw std::runtime_error(
-        path +
-        ": legacy protobuf session/config files are no longer read directly. Run "
-        "`trance_convert " +
-        path + "` to produce the JSON form (see docs/session-json-format.md), then load that.");
+    return ext_is(path, "session");
+  }
+
+  std::string sibling_with_extension(const std::string& path, const std::string& extension)
+  {
+    return std::filesystem::path{path}.replace_extension(extension).string();
+  }
+
+  [[noreturn]] void fatal_non_json_path(const std::string& path)
+  {
+    throw std::runtime_error(path +
+                             ": unrecognized extension -- the player only reads the JSON "
+                             "formats described in docs/session-json-format.md (legacy "
+                             ".session files are auto-converted when loaded)");
+  }
+
+  // Transparent legacy auto-convert: reads the legacy textproto `.session`, writes the
+  // same-stem `.json` next to it (the original is left untouched), then reloads from
+  // the written JSON. This mirrors main.cpp's cold-start migration for the same
+  // reasons: playback must come from what was WRITTEN, not the in-memory legacy proto
+  // (the JSON saver normalizes Windows backslash media paths to forward slashes, spec
+  // sec 1), and the sidecar is reset before the reload because save_session fills it
+  // with fresh pattern-file paths.
+  trance_pb::Session convert_legacy_session(const std::string& legacy_path,
+                                            const std::string& json_path,
+                                            SessionJsonSidecar& sidecar)
+  {
+    trance_pb::Session session;
+    try {
+      session = load_legacy_session(legacy_path);
+    } catch (const std::runtime_error& e) {
+      throw std::runtime_error("auto-convert of legacy " + legacy_path + " -> " + json_path +
+                               " failed: " + e.what());
+    }
+    validate_session(session);
+    try {
+      save_session(session, json_path, sidecar);
+    } catch (const std::runtime_error& save_error) {
+      // Failed write (read-only directory, disk full -- save_session_json checks its
+      // output stream and throws): still playable this run, just not persisted (the
+      // same tolerance as main.cpp's cold-start migration). This early return is
+      // load-bearing: falling through to the reload below with no .json on disk
+      // would send load_session straight back to the same legacy sibling and recurse
+      // here forever. The in-memory session is already validated; reset the sidecar
+      // in case save_session partially filled it.
+      std::cerr << "couldn't write " << json_path << ": " << save_error.what() << std::endl;
+      sidecar = SessionJsonSidecar{};
+      return session;
+    }
+    std::cout << "auto-converted " << legacy_path << " -> " << json_path << std::endl;
+    sidecar = SessionJsonSidecar{};
+    return load_session(json_path, sidecar);
   }
 
 } // anonymous namespace
@@ -411,7 +461,7 @@ void search_audio_files(std::vector<std::string>& files, const std::string& root
 trance_pb::System load_system(const std::string& path)
 {
   if (!has_json_extension(path)) {
-    fatal_legacy_proto_path(path);
+    fatal_non_json_path(path);
   }
   auto system = load_system_json(path);
   validate_system(system);
@@ -464,8 +514,31 @@ void validate_system(trance_pb::System& system)
 
 trance_pb::Session load_session(const std::string& path, SessionJsonSidecar& sidecar)
 {
+  if (has_legacy_session_extension(path)) {
+    auto json_path = sibling_with_extension(path, ".json");
+    if (std::filesystem::exists(json_path)) {
+      // A previous conversion (or hand-authored JSON) already sits next to the legacy
+      // file -- prefer it; a conversion never overwrites an existing .json.
+      std::cout << "using existing " << json_path << " for " << path << std::endl;
+      return load_session(json_path, sidecar);
+    }
+    return convert_legacy_session(path, json_path, sidecar);
+  }
   if (!has_json_extension(path)) {
-    fatal_legacy_proto_path(path);
+    fatal_non_json_path(path);
+  }
+  if (!std::filesystem::exists(path)) {
+    // A missing .json with a same-stem legacy .session sibling gets the same
+    // auto-convert ("foo.json" -> "foo.session", "foo.session.json" -> "foo.session");
+    // a missing .json with no sibling falls through to the ordinary missing-file error
+    // from load_session_json.
+    auto legacy_path = sibling_with_extension(path, "");
+    if (!has_legacy_session_extension(legacy_path)) {
+      legacy_path += ".session";
+    }
+    if (std::filesystem::exists(legacy_path)) {
+      return convert_legacy_session(legacy_path, path, sidecar);
+    }
   }
   auto root = std::filesystem::path{path}.parent_path().string();
   auto session = load_session_json(path, root, sidecar);
