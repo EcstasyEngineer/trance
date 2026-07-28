@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <functional>
 #include <iostream>
 #include <set>
 #include <string>
@@ -1095,38 +1096,132 @@ pattern extended for 256f {
   //    encodes one user-visible regression against the original hand-written visuals, at the
   //    level that broke: pacing distribution, zoom ranges, layer alphas, burst render gating.
   {
-    // 6a. accelerate pacing: the ramp must RUSH off the slow end and DWELL at the fast end
-    //     (original: count = 1 + d^6/56^5, ~40%+ of runtime at cut lengths <= 16f, ~100+ cuts).
+    // 6a. accelerate pacing: the ramp must RUSH off the slow end and DWELL at the fast end.
     //     The `ease late` authoring regression inverted this: 46 cuts, ~3% of time at fast.
+    //     Re-specified by the owner (issue #42) to supersede original-parity: a HARDER up-ramp
+    //     that arrives at the strobe around the middle of the run and then sustains it, rather
+    //     than the previous authoring's 2772f span that only touched fast cuts ~73% in.
     auto pr = parse(builtin::pattern_source_v3(1));
     check(pr.ok, std::string("builtin accelerate: parses") + (pr.ok ? "" : (" -- " + pr.error)));
     if (pr.ok) {
-      // Collect the ramp's sampled segment lengths: every Action leaf carrying an Image effect.
+      // Collect the ramp's sampled segment lengths IN ORDER: every Action leaf carrying an
+      // Image effect. Order matters here -- "when does the strobe arrive" is a prefix sum, so
+      // walk children front-to-back rather than through a LIFO stack.
       std::vector<uint32_t> segs;
-      std::vector<const pattern::Node*> stack{&pr.root};
-      while (!stack.empty()) {
-        const pattern::Node* n = stack.back();
-        stack.pop_back();
-        if (n->type == pattern::Node::Type::Action) {
-          for (const auto& e : n->effects) {
+      std::function<void(const pattern::Node&)> walk = [&](const pattern::Node& n) {
+        if (n.type == pattern::Node::Type::Action) {
+          for (const auto& e : n.effects) {
             if (e.kind == pattern::Effect::Kind::Image) {
-              segs.push_back(n->length);
+              segs.push_back(n.length);
               break;
             }
           }
         }
-        for (const auto& c : n->children) stack.push_back(&c);
-      }
+        for (const auto& c : n.children) walk(c);
+      };
+      walk(pr.root);
       uint64_t total = 0, fast = 0;
       for (uint32_t s : segs) {
         total += s;
         if (s <= 16) fast += s;
       }
-      check(segs.size() >= 80, "accelerate: at least 80 cuts (got " + std::to_string(segs.size()) + ")");
-      check(total == 2772, "accelerate: segment lengths sum to the 2772f span");
-      check(total > 0 && 100 * fast / total >= 22,
-            "accelerate: >= 22% of runtime at fast (<= 16f) cuts, matching the original's ~25% (got " +
+      check(segs.size() >= 120,
+            "accelerate: at least 120 cuts (got " + std::to_string(segs.size()) + ")");
+      check(total == 2048, "accelerate: segment lengths sum to the 2048f span (got " +
+                               std::to_string(total) + ")");
+      // The up-ramp titration: a big share of the run must be AT the strobe, not approaching
+      // it. The previous authoring sat at 27%.
+      check(total > 0 && 100 * fast / total >= 40,
+            "accelerate: >= 40% of runtime at fast (<= 16f) cuts -- the harder up-ramp (got " +
                 std::to_string(total ? 100 * fast / total : 0) + "%)");
+      // ARRIVAL: the frame at which the cut length first drops to <= 16f. The owner spec asks
+      // for arrival to FEEL like ~2048-2300f overall, which means the strobe has to land
+      // around the middle of the run and hold, not show up in the last quarter.
+      uint64_t arrival = total, elapsed = 0;
+      for (uint32_t s : segs) {
+        if (s <= 16) {
+          arrival = elapsed;
+          break;
+        }
+        elapsed += s;
+      }
+      check(total > 0 && 100 * arrival / total <= 60,
+            "accelerate: reaches <= 16f cuts by 60% of the run -- the strobe ARRIVES and then "
+            "sustains (got " +
+                std::to_string(total ? 100 * arrival / total : 100) + "%)");
+      // ...and once there it stays: the tail must be a run of fast cuts, not a single dip.
+      uint32_t tail_fast = 0;
+      for (auto it = segs.rbegin(); it != segs.rend() && *it <= 16; ++it) ++tail_fast;
+      check(tail_fast >= 60,
+            "accelerate: the run ENDS in a sustained strobe of >= 60 consecutive <= 16f cuts "
+            "(got " +
+                std::to_string(tail_fast) + ")");
+    }
+
+    // 6a-bis. animation's still layer must have a HOLD and a HOLE. This is the user-reported
+    //     anchor regression: the still was authored with `fade inout`, a whole-clock triangle
+    //     whose alpha is nonzero at nearly every frame and whose peak lasts an instant. Under
+    //     it the animation is never alone on screen, so "the animation is the subject" -- the
+    //     entire point of this visual -- stops being true. `env` restores both the plateau at
+    //     full alpha and the true absence. Evaluate the still's alpha across a whole 64f turn.
+    pr = parse(builtin::pattern_source_v3(7));
+    check(pr.ok, std::string("builtin animation: parses") + (pr.ok ? "" : (" -- " + pr.error)));
+    if (pr.ok) {
+      // The still lane is the one drawing the `still` register; the base lane draws `cur`.
+      const pattern::RenderStmt* still = nullptr;
+      for (const auto& st : pr.render_block) {
+        if (st.op == pattern::RenderStmt::Op::Image &&
+            st.image_reg.find("still") != std::string::npos) {
+          still = &st;
+        }
+      }
+      check(still != nullptr, "animation: the still layer draws its own `still` register");
+      if (still) {
+        check(!still->alpha.empty(),
+              "animation: the still layer carries an alpha envelope (not a bare full-alpha draw)");
+        pattern::NodeMap node_map;
+        Cycler* compiled = pattern::compile(pr.root, pattern::MakeAction{}, node_map);
+        pattern::Registers regs;
+        // Sample one steady-state 64f cycle from the middle of the 1024f run, so the reading is
+        // not contaminated by the first turn's offset ramp-up.
+        std::vector<double> a(64, 0.0);
+        for (uint32_t f = 0; f < 512; ++f) compiled->advance();
+        for (uint32_t f = 0; f < 64; ++f) {
+          compiled->advance();
+          a[f] = pattern::eval_expr(still->alpha, 1.0, regs, node_map, compiled);
+        }
+        delete compiled;
+
+        uint32_t absent = 0, full = 0;
+        double peak = 0.0;
+        for (double v : a) {
+          if (v <= 0.0) ++absent;
+          if (v > 0.99) ++full;
+          peak = std::max(peak, v);
+        }
+        // The HOLE: the whole reason to prefer `env` over `fade inout`. A triangle scores 1
+        // absent frame here; the restored envelope leaves the animation alone for 33.
+        check(absent >= 24,
+              "animation: the still is ABSENT for >= 24 frames of each 64f cycle, so the "
+              "animation holds the stage alone -- the hole `fade inout` cannot express (got " +
+                  std::to_string(absent) + ")");
+        // The HOLD: a plateau at full alpha, not an instantaneous peak. `fade inout` on a 64f
+        // clock touches 1.0 for exactly one frame.
+        check(full >= 8,
+              "animation: the still HOLDS at full alpha for >= 8 frames -- a plateau, not the "
+              "instantaneous peak of a triangle (got " +
+                  std::to_string(full) + ")");
+        check(peak > 0.99, "animation: the still's envelope actually reaches full alpha");
+        // And it is a genuine envelope, not a square gate: both legs must ramp through
+        // intermediate values rather than snapping on and off.
+        uint32_t partial = 0;
+        for (double v : a)
+          if (v > 0.01 && v < 0.99) ++partial;
+        check(partial >= 8,
+              "animation: the still RAMPS in and out (intermediate alphas on both legs), rather "
+              "than snapping on like a `show` gate (got " +
+                  std::to_string(partial) + ")");
+      }
     }
 
     // 6b. flash_text zoom cap: image zoom near 1.0 projects onto the near plane and the

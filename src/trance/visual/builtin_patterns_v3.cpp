@@ -10,19 +10,49 @@
 // clock, never constants (a constant zoom is a static magnification).
 namespace
 {
-  // 1 ACCELERATE -- a true accelerating cadence: one continuous ramp cutting from a 56f flash
-  // down to a 12f flash, eased `early` so the cut length rushes off the slow end and dwells at
-  // the fast end. This matches the original's repeat curve (count = 1 + d^6/56^5, i.e. the
-  // fastest cuts repeated ~14x, putting ~25% of the runtime at <=16f cuts and ~38% at <=20f):
-  // with cubic ease-early and 120 once-each sampled segments the sampled distribution matches
-  // that within a point or two, so the pattern both GETS fast quickly and STAYS fast. (The
-  // first authoring used `ease late` -- dwell at the SLOW end -- which took ~3x too long to
-  // accelerate and only touched 12f for the last ~3%: the exact regression reported against it.)
+  // 1 ACCELERATE -- the up-ramp: one continuous accelerating cadence that titrates HARD into a
+  // sustained strobe, churning theme every other image once it is up to speed. This is an
+  // OWNER-SPEC re-author (issue #42), not a port -- it supersedes original-parity deliberately.
+  //
+  // Pacing. The ramp samples `steps` segments off the ease curve and then SCALES them to fill
+  // the span, so A -> B sets the ramp's SHAPE and (span / steps) sets its absolute tempo --
+  // more steps in fewer frames is a harder up-ramp, independent of the 56 -> 12 endpoints.
+  // Both knobs moved: 2772f -> 2048f and 120 -> 140 steps. Against the previous authoring the
+  // sampled ramp now spends ~46% of its runtime at <=16f cuts (was 27%) and first reaches a
+  // <=16f cut at frame 1115 of 2048 -- 54% in, where it used to be 2034 of 2772, i.e. 73% in
+  // and nearly over. 88 of the 140 cuts are <=14f, so the fast end is a sustained strobe
+  // rather than a fly-by. 2048f was chosen over a tighter total because the arrival, not the
+  // outro, is what "feels" long: landing the strobe at ~1100f makes the last ~900f read as
+  // the payoff. `ease early` stays -- it is already the steepest ease the grammar has, and
+  // the tightening is carried by the step count instead.
+  //
+  // Theme churn. `image alternate chance 0.5` (4.18) -- the hidden toggle flips at p=0.5 per
+  // pull, so every new display is a coin flip between concept and reward. Unlike `runtime`
+  // (an independent re-roll each fire) this is a stateful walk, so the world holds and pivots
+  // rather than shimmering, and a lower chance would hold it longer.
+  //
+  // Lean-in. The original's macro-arc was a whole-run 0 -> 0.4 origin creep with only a small
+  // +0.1 zoom pop per cut; the first v3 authoring collapsed that into a violent 0 -> 0.5 zoom
+  // on EVERY cut, which reads as per-image punch with no sense of approach. Split back apart:
+  // `origin` rides the whole `accelerate` clock, `zoom` rides the cut.
+  //
+  // Animation bursts. `anim every 4th` restores the original's every-Nth live-motion cut
+  // (N was rolled 2/4/8/16 per pass; 4 is the middle of that range and the one that keeps
+  // motion present at both ends of the ramp without dominating the fast cuts).
+  //
+  // Word accents. `show 0..0.25` restores the original's stab duty -- text punches on for the
+  // first quarter of each cut and is gone for the rest, instead of painting continuously
+  // (27% of frames are inside the window; with `chance 0.5` on top the text actually paints
+  // ~13% of the run). Fractional (not `0f..8f`) on purpose: the ramp re-parses this body per
+  // sampled segment and the fast segments are as short as 7f, so a literal 8f window would be
+  // a hard parse error on those -- and one failed segment fails the whole pattern. The
+  // fraction also scales the stab with the tempo -- ~9 frames at the slow end tightening to
+  // ~2 at the strobe, which is the accent getting sharper as the ride tightens.
   const char* kAccelerate = R"(
-pattern accelerate for 2772f {
-  every ramp 56f -> 12f steps 120 ease early -> cut {
-    image concept zoom (curve 0 -> 0.5)
-    word concept chance 0.5
+pattern accelerate for 2048f {
+  every ramp 56f -> 12f steps 140 ease early -> cut {
+    image alternate chance 0.5 zoom (curve 0 -> 0.1) origin (curve 0 -> 0.4 over accelerate) anim every 4th
+    word concept show 0..0.25 chance 0.5
   }
   spiral speed (curve 1 -> 4 over accelerate)
 })";
@@ -97,12 +127,37 @@ pattern super_parallel for 1152f {
 })";
 
   // 7 ANIMATION -- animation-as-subject (a rolling always-animated layer), with a still image
-  // crossfading in and out above it on the offbeat -- the original drew BOTH (animation base +
-  // periodic render_image reveal), which is what separates this visual from a bare video player.
+  // that VISITS above it on the offbeat -- the original drew BOTH (animation base + periodic
+  // render_image reveal), which is what separates this visual from a bare video player.
+  //
+  // The still's envelope is the whole point and `fade inout` got it wrong. `fade inout` is a
+  // whole-clock triangle (1 - abs(2p-1)): nonzero at nearly every frame, peaking for an
+  // instant. Under it the animation is NEVER alone on screen, so "the animation is the
+  // subject" stops being true -- the visual reads as a permanent double-exposure. The original
+  // (ae7d94c) drew the still only on frames 48-63 (ramping up) and 0-15 (ramping down) of its
+  // 64f counter and drew NOTHING on frames 16-47: a genuine 32-frame hole where the animation
+  // holds the stage by itself. That absence is the visual's breathing.
+  //
+  // `env in 8f hold 16f out 8f` on the still lane restores it, with the lane's `offset 48f`
+  // setting the phase so the visit lands where the original's did. Per 64f base cycle
+  // (lane frame = base - 48, mod 64):
+  //   base 49-55  fade in      (alpha 0.125 .. 0.875)
+  //   base 56-63  HOLD at full -- and on across the wrap into
+  //   base  0- 8  HOLD at full  (17 full-alpha frames spanning the cycle boundary)
+  //   base  9-15  fade out     (alpha 0.875 .. 0.125)
+  //   base 16-48  ABSENT       (33f of animation alone -- the original's 32f hole)
+  // Those are measured off the compiled tree, not estimated; the animation case in
+  // tests/v3_grammar_test.cpp asserts the counts (33 absent / 17 full / 14 mid-ramp) and
+  // fails against `fade inout`, which scores 1 and 1.
+  //
+  // The legs are 8/16/8 rather than a literal 16/16/16 because the four legs of the intent
+  // (16 in + 16 hold + 16 out + 32 absent) sum to 80f and cannot fit one 64f turn. Trading the
+  // in/out ramps down to 8f is what buys BOTH a real hold and a real hole on a 64f clock --
+  // and the hold plus the absence, not the ramp duration, are what the shape is for.
   const char* kAnimation = R"(
 pattern animation for 1024f {
   every 64f { image runtime zoom (curve 0 -> 0.625) anim }
-  every 64f offset 32f { image reward -> still fade inout zoom (curve 0.5 -> 0.625) }
+  every 64f offset 48f { image reward -> still env in 8f hold 16f out 8f zoom (curve 0.5 -> 0.625) }
   every 32f { caption runtime }
   spiral speed 3
 })";
