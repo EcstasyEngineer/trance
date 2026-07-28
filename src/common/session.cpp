@@ -391,6 +391,38 @@ namespace
         return true;
       }
     }
+
+    // A junk DENYLIST, not a media allowlist -- the philosophy above is unchanged. Anything
+    // with a plausible real extension still falls through to image_path even if nothing here
+    // recognizes it (a .xyz stays content), and the decode-failure marking remains the safety
+    // net for those. What's listed below is only the stuff that RECURS in real media folders
+    // and is never content, because letting it through doesn't just cost one dead entry: junk
+    // sitting at the scan ROOT lands in the /wildcards/ pseudo-theme, which then merges the
+    // phantom into EVERY theme and disables scan persistence for folder themes at bootstrap.
+    const auto filename = relative_path.filename().string();
+    std::string lower = filename;
+    for (char& c : lower) {
+      c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+    }
+    // OS/shell droppings, by exact (case-insensitive) name.
+    if (lower == "thumbs.db" || lower == "desktop.ini") {
+      return true;
+    }
+    // Editor backups and partial downloads. These usually SHADOW a real media file
+    // (foo.png.bak, foo.webm.crdownload), so admitting them double-counts the content.
+    if (!lower.empty() && lower.back() == '~') {
+      return true;
+    }
+    if (ext_is(lower, "bak") || ext_is(lower, "tmp") || ext_is(lower, "swp") ||
+        ext_is(lower, "part") || ext_is(lower, "crdownload")) {
+      return true;
+    }
+    // Extensionless files (READMEs, LICENSE, Makefile, lock files): the classifier's
+    // fallthrough would call every one of them an image. Nothing trance can play is
+    // extensionless, so this costs no real media.
+    if (lower.find('.') == std::string::npos) {
+      return true;
+    }
     return false;
   }
 
