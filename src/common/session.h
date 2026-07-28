@@ -26,7 +26,18 @@ bool is_audio_file(const std::string& path);
 bool is_enabled(const trance_pb::PlaylistItem_NextItem& next_item,
                 const std::map<std::string, std::string>& variables);
 
+// Walks `root` and builds themes from its immediate subdirectories (loose files at the
+// root become the /wildcards/ pseudo-theme, merged into every other theme). Classification
+// is a dispatch, not a filter: known animation/font/text/audio extensions go to their own
+// lists and EVERYTHING ELSE is an image, since the decode layer marks undecodable files
+// dead once. Only session machinery (.json/.session/.pattern/.cfg/.trance) and dotfiles
+// are skipped. The `theme_scan` overload also reports {theme name -> subdirectory} for
+// themes that are pure folder references, so a caller saving the result can emit a
+// `scan` key instead of freezing the expansion (#36); it stays empty when loose root
+// files were merged in, since no single directory reproduces those themes.
 void search_resources(trance_pb::Session& session, const std::string& root);
+void search_resources(trance_pb::Session& session, const std::string& root,
+                      std::map<std::string, std::string>& theme_scan);
 void search_resources(trance_pb::Theme& theme, const std::string& root);
 void search_audio_files(std::vector<std::string>& files, const std::string& root);
 

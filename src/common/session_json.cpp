@@ -600,6 +600,13 @@ namespace
         for (const auto& p : scanned.font_path()) {
           theme.add_font_path(rebase(p));
         }
+        for (const auto& p : scanned.audio_path()) {
+          theme.add_audio_path(rebase(p));
+        }
+        // Text lines are content, not paths -- nothing to rebase.
+        for (const auto& t : scanned.text_line()) {
+          theme.add_text_line(t);
+        }
       }
     }
   }
@@ -791,10 +798,10 @@ namespace
     if (scanned) {
       obj["scan"] = normalize_path_for_save(scan_it->second);
     }
-    // Scan-derived media lists (image/animation/font -- exactly what the theme-level
-    // search_resources fills) are omitted for scanned themes: reloading re-derives them,
-    // and writing them would duplicate entries on the next load. text_line and audio_path
-    // are NEVER scan-derived, so they must be written regardless.
+    // A scanned theme's media is ENTIRELY scan-derived now (#36: the theme-level
+    // search_resources fills text_line and audio_path too), so a pure scan theme
+    // round-trips as just {"scan": dir}. Writing the expansion back would duplicate
+    // every entry on the next load.
     if (!scanned) {
       if (theme.image_path_size()) {
         json arr = json::array();
@@ -811,16 +818,16 @@ namespace
         for (const auto& p : theme.font_path()) arr.push_back(normalize_path_for_save(p));
         obj["font_path"] = std::move(arr);
       }
-    }
-    if (theme.text_line_size()) {
-      json arr = json::array();
-      for (const auto& t : theme.text_line()) arr.push_back(t);
-      obj["text_line"] = std::move(arr);
-    }
-    if (theme.audio_path_size()) {
-      json arr = json::array();
-      for (const auto& p : theme.audio_path()) arr.push_back(normalize_path_for_save(p));
-      obj["audio_path"] = std::move(arr);
+      if (theme.text_line_size()) {
+        json arr = json::array();
+        for (const auto& t : theme.text_line()) arr.push_back(t);
+        obj["text_line"] = std::move(arr);
+      }
+      if (theme.audio_path_size()) {
+        json arr = json::array();
+        for (const auto& p : theme.audio_path()) arr.push_back(normalize_path_for_save(p));
+        obj["audio_path"] = std::move(arr);
+      }
     }
     return obj;
   }

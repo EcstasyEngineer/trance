@@ -703,6 +703,120 @@ namespace
           "saved scan theme omits the expanded image list");
   }
 
+  // #36: a folder theme is COMPLETE content -- the theme-level walker gains text/audio
+  // branches, so dropping a .txt and a .wav into the scan dir yields text lines and theme
+  // audio, not just images.
+  void test_scan_theme_includes_text_and_audio()
+  {
+    auto root = make_scan_session("scan_complete");
+    write_file(root / "media" / "lines.txt", "sink deeper now\n\nobey\n");
+    write_file(root / "media" / "voice.wav", "not really a wav");
+
+    SessionJsonSidecar sidecar;
+    auto session = load_session_json((root / "s.session.json").string(), root.string(), sidecar);
+    const auto& theme = session.theme_map().at("all");
+
+    std::set<std::string> lines;
+    for (const auto& t : theme.text_line()) {
+      lines.insert(t);
+    }
+    check(lines.size() == 2, "scan reads every non-blank line of a .txt");
+    // Uppercased and split at the space nearest the middle, like the session-level walker.
+    check(lines.count("SINK\nDEEPER NOW") == 1, "scanned text is uppercased and mid-split");
+    check(lines.count("OBEY") == 1, "a single-word line has nothing to split");
+
+    std::set<std::string> audio;
+    for (const auto& p : theme.audio_path()) {
+      audio.insert(p);
+    }
+    check(audio.count("media/voice.wav") == 1, "scanned audio is root-relative theme audio");
+  }
+
+  // #36: "if it's in the folder, that's the content" -- no extension allowlist. An unknown
+  // extension becomes an image (the decode layer marks a bad file dead once), while session
+  // machinery and dotfiles are still skipped explicitly.
+  void test_scan_does_not_filter_on_extension()
+  {
+    auto root = make_scan_session("scan_no_filter");
+    write_file(root / "media" / "weird.tiff", "junk");
+    write_file(root / "media" / "no_extension_at_all", "junk");
+    write_file(root / "media" / "other.session.json", "{}");
+    write_file(root / "media" / "notes.pattern", "effect flash;");
+    write_file(root / "media" / ".hidden.png", "junk");
+    write_file(root / "media" / ".git" / "config", "junk");
+
+    SessionJsonSidecar sidecar;
+    auto session = load_session_json((root / "s.session.json").string(), root.string(), sidecar);
+
+    std::set<std::string> images;
+    for (const auto& p : session.theme_map().at("all").image_path()) {
+      images.insert(p);
+    }
+    check(images.count("media/weird.tiff") == 1, "an unknown extension is scanned as an image");
+    check(images.count("media/no_extension_at_all") == 1, "an extensionless file is an image");
+    check(images.count("media/other.session.json") == 0, "a session file is not content");
+    check(images.count("media/notes.pattern") == 0, "a pattern file is not content");
+    check(images.count("media/.hidden.png") == 0, "a dotfile is not content");
+    check(images.count("media/.git/config") == 0, "a dotted directory's contents are not content");
+  }
+
+  // #36: the no-arg cold start must preserve folder-ness. search_resources reports which
+  // themes are pure subdirectory references; seeding the sidecar with them makes the saved
+  // default.json hold {"scan": <subdir>} rather than a frozen media list.
+  void test_bootstrap_scan_writes_scan_themes()
+  {
+    auto root = scratch_root() / "bootstrap_scan";
+    std::filesystem::remove_all(root);
+    write_png(root / "ocean" / "a.png");
+    write_file(root / "ocean" / "lines.txt", "drift\n");
+    write_png(root / "fire" / "b.png");
+
+    trance_pb::Session session = get_default_session();
+    SessionJsonSidecar sidecar;
+    search_resources(session, root.string(), sidecar.theme_scan);
+
+    check(sidecar.theme_scan.size() == 2, "each subdirectory theme is reported as a scan");
+    check(sidecar.theme_scan.count("ocean") == 1, "the ocean subdirectory is a scan theme");
+    check(sidecar.theme_scan.count("fire") == 1, "the fire subdirectory is a scan theme");
+
+    save_session_json(session, (root / "default.json").string(), root.string(), sidecar);
+    auto saved = read_file(root / "default.json");
+    check(saved.find("\"scan\": \"ocean\"") != std::string::npos, "default.json holds a scan key");
+    check(saved.find("image_path") == std::string::npos,
+          "bootstrap does not freeze the media list into default.json");
+    check(saved.find("text_line") == std::string::npos,
+          "bootstrap does not freeze scanned text lines either");
+
+    // And the written file reloads to the same content it was scanned from.
+    SessionJsonSidecar reloaded_sidecar;
+    auto reloaded =
+        load_session_json((root / "default.json").string(), root.string(), reloaded_sidecar);
+    const auto& ocean = reloaded.theme_map().at("ocean");
+    check(ocean.image_path_size() == 1 && ocean.image_path(0) == "ocean/a.png",
+          "the reloaded scan theme re-derives its image");
+    check(ocean.text_line_size() == 1 && ocean.text_line(0) == "DRIFT",
+          "the reloaded scan theme re-derives its text");
+  }
+
+  // #36 guard: once loose files at the root are merged into every theme (the /wildcards/
+  // pseudo-theme), no single directory reproduces a theme's content -- so nothing may be
+  // reported as a scan and the explicit lists stay the faithful record.
+  void test_bootstrap_wildcards_suppresses_scan_themes()
+  {
+    auto root = scratch_root() / "bootstrap_wildcards";
+    std::filesystem::remove_all(root);
+    write_png(root / "ocean" / "a.png");
+    write_png(root / "loose.png");
+
+    trance_pb::Session session = get_default_session();
+    SessionJsonSidecar sidecar;
+    search_resources(session, root.string(), sidecar.theme_scan);
+
+    check(sidecar.theme_scan.empty(), "a merged wildcards theme suppresses scan reporting");
+    const auto& ocean = session.theme_map().at("ocean");
+    check(ocean.image_path_size() == 2, "the wildcards image still merges into the folder theme");
+  }
+
 } // namespace
 
 int main()
@@ -728,6 +842,10 @@ int main()
   test_scan_expands_to_root_relative_paths();
   test_archive_includes_scan_derived_media();
   test_scan_theme_saves_as_scan_key_only();
+  test_scan_theme_includes_text_and_audio();
+  test_scan_does_not_filter_on_extension();
+  test_bootstrap_scan_writes_scan_themes();
+  test_bootstrap_wildcards_suppresses_scan_themes();
 
   if (g_fail) {
     std::cout << g_fail << " check(s) failed\n";
