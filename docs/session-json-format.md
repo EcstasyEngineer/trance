@@ -173,7 +173,10 @@ There is **no inline pattern-source key** — `file` is the only form (§4).
 **`scan` semantics:** at load, the loader walks the directory with the existing
 `search_resources(trance_pb::Theme&, root)` (`session.cpp:372`) and **appends** the found
 images/animations/fonts to the explicit lists above (explicit entries first, scan results
-after, scan order = directory-walk order). The `scan` key itself never reaches trance_pb;
+after, scan order = directory-walk order). Scan results are rebased onto the scan
+directory before they land in trance_pb, so they are root-relative like every other
+reference (§1) — a `scan` of `media` holding `a.png` yields `media/a.png`, not `a.png`.
+The `scan` key itself never reaches trance_pb;
 the loader records it in the save sidecar (§5) so the editor re-emits `scan` rather than
 freezing the expansion into explicit lists. This is the drop-a-folder modding workflow:
 add `themes/ocean/` full of images, write a 1-line theme entry. Scanned themes are
