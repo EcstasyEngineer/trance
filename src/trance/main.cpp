@@ -1122,6 +1122,7 @@ int main(int argc, char** argv)
     // ./default.session played in the original trance.exe. A legacy ./default.session
     // sitting here is auto-migrated (converted in place, original left untouched);
     // otherwise generate the built-in default over whatever media the directory holds.
+    sidecar = SessionJsonSidecar{};
     if (std::filesystem::exists(LEGACY_DEFAULT_SESSION_PATH)) {
       std::cout << "migrating legacy ./" << LEGACY_DEFAULT_SESSION_PATH << " -> ./"
                 << DEFAULT_SESSION_PATH << std::endl;
@@ -1130,15 +1131,19 @@ int main(int argc, char** argv)
     } else {
       std::cerr << e.what() << std::endl;
       session = get_default_session();
-      search_resources(session, ".");
+      // #36: keep the folder-ness. search_resources reports which themes are pure
+      // subdirectory references; seeding the sidecar with them makes the saver write
+      // {"scan": <subdir>} per theme instead of freezing a media list that goes stale
+      // the moment the user drops another image in.
+      search_resources(session, ".", sidecar.theme_scan);
     }
     try {
-      save_session(session, "./" + DEFAULT_SESSION_PATH);
+      save_session(session, "./" + DEFAULT_SESSION_PATH, sidecar);
       std::cout << "wrote ./" << DEFAULT_SESSION_PATH << std::endl;
       // Play what was WRITTEN, not the in-memory legacy proto: the JSON saver
       // normalizes Windows backslash media paths to forward slashes (spec sec 1),
       // and the legacy-authored originals don't resolve on non-Windows. Reset the
-      // sidecar first -- the failed initial load may have partially filled it.
+      // sidecar first -- the reload rebuilds it from the file just written.
       sidecar = SessionJsonSidecar{};
       session = load_session("./" + DEFAULT_SESSION_PATH, sidecar);
     } catch (const std::runtime_error& save_error) {

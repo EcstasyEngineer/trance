@@ -371,6 +371,76 @@ bool is_audio_file(const std::string& path)
   return ext_is(path, "wav") || ext_is(path, "ogg") || ext_is(path, "flac") || ext_is(path, "aiff");
 }
 
+namespace
+{
+  bool is_scan_ignored(const std::filesystem::path& relative_path)
+  {
+    // "If it's in the folder, that's the content" (#36) -- classification below has no
+    // allowlist, so the only files a scan drops are the ones that are obviously session
+    // machinery rather than media. Without this, a session.json sitting next to its media
+    // becomes an "image" that fails to decode once and is then dead weight in the theme.
+    auto rel_str = relative_path.string();
+    if (ext_is(rel_str, "json") || ext_is(rel_str, "session") || ext_is(rel_str, "pattern") ||
+        ext_is(rel_str, "cfg") || ext_is(rel_str, "trance")) {
+      return true;
+    }
+    // Hidden files and anything under a dotted directory (.git, .DS_Store): never content.
+    for (const auto& component : relative_path) {
+      const auto& s = component.string();
+      if (s.length() > 1 && s[0] == '.') {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Classifies a scanned file into the theme list it belongs in. The extension checks are
+  // a dispatch, NOT a filter: anything that isn't a known animation/font/text/audio file
+  // is treated as an image, because the decode layer already tolerates junk (a file that
+  // won't decode is marked failed once and never retried -- theme_bank.cpp do_load).
+  enum class ScanKind { image, animation, font, text, audio };
+
+  ScanKind classify_scanned_file(const std::string& rel_str)
+  {
+    if (is_animation(rel_str)) {
+      return ScanKind::animation;
+    }
+    if (is_font(rel_str)) {
+      return ScanKind::font;
+    }
+    if (is_text_file(rel_str)) {
+      return ScanKind::text;
+    }
+    if (is_audio_file(rel_str)) {
+      return ScanKind::audio;
+    }
+    return ScanKind::image;
+  }
+
+  // Reads a scanned .txt into a theme's text lines, applying the same uppercasing and
+  // mid-split treatment the session-level walker has always used.
+  void add_text_lines_from_file(trance_pb::Theme& theme, const std::filesystem::path& path)
+  {
+    std::ifstream f(path);
+    std::string line;
+    while (std::getline(f, line)) {
+      if (!line.length()) {
+        continue;
+      }
+      for (auto& c : line) {
+        c = char(toupper(static_cast<unsigned char>(c)));
+      }
+      theme.add_text_line(split_text_line(line));
+    }
+  }
+
+  bool is_theme_empty(const trance_pb::Theme& theme)
+  {
+    return !theme.image_path_size() && !theme.animation_path_size() && !theme.font_path_size() &&
+        !theme.text_line_size() && !theme.audio_path_size();
+  }
+} // anonymous namespace
+
 bool is_enabled(const trance_pb::PlaylistItem_NextItem& next,
                 const std::map<std::string, std::string>& variables)
 {
@@ -387,6 +457,13 @@ bool is_enabled(const trance_pb::PlaylistItem_NextItem& next,
 
 void search_resources(trance_pb::Session& session, const std::string& root)
 {
+  std::map<std::string, std::string> ignored;
+  search_resources(session, root, ignored);
+}
+
+void search_resources(trance_pb::Session& session, const std::string& root,
+                      std::map<std::string, std::string>& theme_scan)
+{
   static const std::string wildcards = "/wildcards/";
   auto& themes = *session.mutable_theme_map();
 
@@ -399,30 +476,39 @@ void search_resources(trance_pb::Session& session, const std::string& root)
       if (jt == relative_path.end()) {
         continue;
       }
+      if (is_scan_ignored(relative_path)) {
+        continue;
+      }
       auto theme_name = jt == --relative_path.end() ? wildcards : jt->string();
 
       auto rel_str = relative_path.string();
-      if (is_font(rel_str)) {
-        themes[theme_name].add_font_path(rel_str);
-      } else if (is_text_file(rel_str)) {
-        std::ifstream f(it->path());
-        std::string line;
-        while (std::getline(f, line)) {
-          if (!line.length()) {
-            continue;
-          }
-          for (auto& c : line) {
-            c = toupper(c);
-          }
-          themes[theme_name].add_text_line(split_text_line(line));
-        }
-      } else if (is_animation(rel_str)) {
-        themes[theme_name].add_animation_path(rel_str);
-      } else if (is_image(rel_str)) {
-        themes[theme_name].add_image_path(rel_str);
+      auto& theme = themes[theme_name];
+      switch (classify_scanned_file(rel_str)) {
+      case ScanKind::animation:
+        theme.add_animation_path(rel_str);
+        break;
+      case ScanKind::font:
+        theme.add_font_path(rel_str);
+        break;
+      case ScanKind::text:
+        add_text_lines_from_file(theme, it->path());
+        break;
+      case ScanKind::audio:
+        theme.add_audio_path(rel_str);
+        break;
+      case ScanKind::image:
+        theme.add_image_path(rel_str);
+        break;
       }
     }
   }
+
+  // #36: report which themes are pure folder references, so a caller writing this session
+  // out (the cold-start bootstrap) can emit {"scan": <subdir>} instead of freezing the
+  // expansion into explicit lists. Only valid while nothing has been merged in from
+  // /wildcards/ -- once loose root files land in every theme, no single directory
+  // reproduces a theme's content and the explicit lists are the only faithful record.
+  const bool wildcards_empty = !themes.count(wildcards) || is_theme_empty(themes[wildcards]);
 
   // Merge wildcards theme into all others.
   for (auto& pair : themes) {
@@ -441,6 +527,9 @@ void search_resources(trance_pb::Session& session, const std::string& root)
     for (const auto& s : themes[wildcards].text_line()) {
       pair.second.add_text_line(s);
     }
+    for (const auto& s : themes[wildcards].audio_path()) {
+      pair.second.add_audio_path(s);
+    }
   }
 
   // Leave wildcards theme if there are no others.
@@ -453,6 +542,12 @@ void search_resources(trance_pb::Session& session, const std::string& root)
   auto& program = (*session.mutable_program_map())["default"];
   for (auto& pair : themes) {
     program.add_enabled_theme_name(pair.first);
+    // The synthesized "default" theme is the wildcards content (loose root files), whose
+    // scan directory would be the session root itself -- not a folder theme.
+    if (wildcards_empty && pair.first != "default" &&
+        std::filesystem::is_directory(root_path / pair.first)) {
+      theme_scan[pair.first] = pair.first;
+    }
   }
   session.set_first_playlist_item("default");
 }
@@ -468,13 +563,26 @@ void search_resources(trance_pb::Theme& theme, const std::string& root)
       if (jt == relative_path.end()) {
         continue;
       }
+      if (is_scan_ignored(relative_path)) {
+        continue;
+      }
       auto rel_str = relative_path.string();
-      if (is_font(rel_str)) {
-        theme.add_font_path(rel_str);
-      } else if (is_animation(rel_str)) {
+      switch (classify_scanned_file(rel_str)) {
+      case ScanKind::animation:
         theme.add_animation_path(rel_str);
-      } else if (is_image(rel_str)) {
+        break;
+      case ScanKind::font:
+        theme.add_font_path(rel_str);
+        break;
+      case ScanKind::text:
+        add_text_lines_from_file(theme, it->path());
+        break;
+      case ScanKind::audio:
+        theme.add_audio_path(rel_str);
+        break;
+      case ScanKind::image:
         theme.add_image_path(rel_str);
+        break;
       }
     }
   }

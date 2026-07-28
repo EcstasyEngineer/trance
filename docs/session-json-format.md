@@ -188,18 +188,50 @@ falls through to the normal lottery rather than freezing).
 | `text_line` | array of strings; embedded `\n` = pre-split lines, as today | `Theme.text_line` |
 | `audio_path` | array of root-relative paths; precanned audio (mantras/cues) this theme owns — the grammar decides when/volume (issue #23) | `Theme.audio_path` |
 
-**`scan` semantics:** at load, the loader walks the directory with the existing
-`search_resources(trance_pb::Theme&, root)` (`session.cpp:372`) and **appends** the found
-images/animations/fonts to the explicit lists above (explicit entries first, scan results
-after, scan order = directory-walk order). Scan results are rebased onto the scan
-directory before they land in trance_pb, so they are root-relative like every other
-reference (§1) — a `scan` of `media` holding `a.png` yields `media/a.png`, not `a.png`.
-The `scan` key itself never reaches trance_pb;
-the loader records it in the save sidecar (§5) so the editor re-emits `scan` rather than
-freezing the expansion into explicit lists. This is the drop-a-folder modding workflow:
-add `themes/ocean/` full of images, write a 1-line theme entry. Scanned themes are
-resolved per load — the manifest does not pin the media list; inside a `.trance` archive
-the zip contents define the scan result.
+**`scan` semantics:** at load, the loader walks the directory with
+`search_resources(trance_pb::Theme&, root)` (`session.cpp`) and **appends** what it finds
+to the explicit lists above (explicit entries first, scan results after, scan order =
+directory-walk order). Path results are rebased onto the scan directory before they land
+in trance_pb, so they are root-relative like every other reference (§1) — a `scan` of
+`media` holding `a.png` yields `media/a.png`, not `a.png`. The `scan` key itself never
+reaches trance_pb; the loader records it in the save sidecar (§5) so the editor re-emits
+`scan` rather than freezing the expansion into explicit lists. This is the drop-a-folder
+modding workflow: add `themes/ocean/` full of media, write a 1-line theme entry. Scanned
+themes are resolved per load — the manifest does not pin the media list; inside a
+`.trance` archive the zip contents define the scan result.
+
+**A scanned folder is COMPLETE content (#36).** The walk fills *every* theme list, not
+just the path ones: `.txt` files become `text_line` entries (one per non-blank line,
+uppercased and split at the space nearest the middle — the same treatment the cold-start
+directory scan has always applied), and audio files become `audio_path`. A theme whose
+content is entirely scan-derived therefore round-trips as just `{"scan": "<dir>"}` — the
+saver writes no `image_path`/`animation_path`/`font_path`/`text_line`/`audio_path` for it,
+because reloading re-derives all five and writing them would double every entry.
+
+**No filename filtering (#36).** "If it's in the folder, that's the content." Extensions
+are a *dispatch*, not an allowlist:
+
+| Extension | Goes to |
+|---|---|
+| `webm`, `gif` | `animation_path` |
+| `ttf` | `font_path` |
+| `txt` | `text_line` |
+| `wav`, `ogg`, `flac`, `aiff` | `audio_path` |
+| **everything else** | `image_path` |
+
+An unrecognized or extensionless file is scanned as an image on purpose: the decode layer
+already tolerates junk — a file that won't decode is marked `failed` once, dropped from
+the draw pool, and never retried — so an allowlist buys nothing but silently-missing
+media. The only files a scan skips are session machinery (`.json`, `.session`, `.pattern`,
+`.cfg`, `.trance`) and dotfiles / anything under a dotted directory (`.git`, `.DS_Store`),
+so a session file living next to its media never becomes a phantom image.
+
+**Cold start.** The no-arg bootstrap (no `./default.json`, no `./default.session`) scans
+the working directory, builds one theme per immediate subdirectory, and writes each as a
+`scan` theme — so `default.json` stays a folder reference and picks up media added later.
+Loose files at the root are the `/wildcards/` pseudo-theme and merge into every theme; when
+that happens no single directory reproduces a theme's content, so the bootstrap falls back
+to writing explicit lists.
 
 ### 3.4 Variable (`trance_pb::Variable`)
 
@@ -281,8 +313,13 @@ this wave), so the loader keeps a per-session **sidecar** alongside the loaded p
 - `theme name → scan directory` (when present)
 
 The saver consults the sidecar: pattern text is written back to its recorded file (not
-inlined), and `scan` keys are re-emitted (scan-derived media entries are NOT written into
-the explicit lists). A pattern created in the editor with no file yet gets
+inlined), and `scan` keys are re-emitted — a scanned theme's expansion is NOT written into
+the explicit lists at all (§3.3: the walk fills all five lists, so a pure scan theme saves
+as `{"scan": "<dir>"}` alone). *Known limitation:* the saver cannot tell a scanned theme's
+explicit entries apart from its expansion, so hand-written `image_path`/`text_line`/… next
+to a `scan` do not survive an editor save. Put the extra media in the folder, or drop the
+`scan`. This dissolves when `scan` becomes a real proto field (#36). A pattern created in
+the editor with no file yet gets
 `patterns/<slug>.pattern`, slug = lowercase name mapped to `[a-z0-9_-]` (other chars →
 `_`), collisions suffixed `-2`, `-3`, …
 
