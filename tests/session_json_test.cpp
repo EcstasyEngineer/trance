@@ -753,11 +753,85 @@ namespace
       images.insert(p);
     }
     check(images.count("media/weird.tiff") == 1, "an unknown extension is scanned as an image");
-    check(images.count("media/no_extension_at_all") == 1, "an extensionless file is an image");
+    // Reversed from the original #36 behaviour: extensionless files are now denylisted junk
+    // (READMEs, LICENSE, lock files), since nothing trance can play lacks an extension.
+    check(images.count("media/no_extension_at_all") == 0, "an extensionless file is not content");
     check(images.count("media/other.session.json") == 0, "a session file is not content");
     check(images.count("media/notes.pattern") == 0, "a pattern file is not content");
     check(images.count("media/.hidden.png") == 0, "a dotfile is not content");
     check(images.count("media/.git/config") == 0, "a dotted directory's contents are not content");
+  }
+
+  // #36: recurring junk must not become phantom media. The denylist is deliberately narrow --
+  // it names the files that actually recur in media folders and are never content -- while the
+  // "everything else is an image" philosophy is untouched, so a weird-but-real extension still
+  // classifies as content and relies on the decode-failure safety net.
+  void test_scan_excludes_junk_files()
+  {
+    auto root = make_scan_session("scan_junk");
+    // OS/shell droppings, including the case-insensitivity of the name match.
+    write_file(root / "media" / "Thumbs.db", "junk");
+    write_file(root / "media" / "desktop.ini", "junk");
+    write_file(root / "media" / "THUMBS.DB", "junk");
+    // Editor backups and partial downloads, which typically shadow a real media file.
+    write_file(root / "media" / "a.png~", "junk");
+    write_file(root / "media" / "a.png.bak", "junk");
+    write_file(root / "media" / "scratch.tmp", "junk");
+    write_file(root / "media" / ".a.png.swp", "junk");
+    write_file(root / "media" / "big.webm.part", "junk");
+    write_file(root / "media" / "big.webm.crdownload", "junk");
+    // Extensionless files.
+    write_file(root / "media" / "README", "junk");
+    write_file(root / "media" / "LICENSE", "junk");
+    // ...but a plausible-media extension nobody recognizes is still content (not an allowlist).
+    write_file(root / "media" / "odd.xyz", "junk");
+
+    SessionJsonSidecar sidecar;
+    auto session = load_session_json((root / "s.session.json").string(), root.string(), sidecar);
+
+    std::set<std::string> images;
+    for (const auto& p : session.theme_map().at("all").image_path()) {
+      images.insert(p);
+    }
+    check(images.count("media/Thumbs.db") == 0, "Thumbs.db is not content");
+    check(images.count("media/THUMBS.DB") == 0, "the Thumbs.db match is case-insensitive");
+    check(images.count("media/desktop.ini") == 0, "desktop.ini is not content");
+    check(images.count("media/a.png~") == 0, "an editor backup (~) is not content");
+    check(images.count("media/a.png.bak") == 0, "a .bak is not content");
+    check(images.count("media/scratch.tmp") == 0, "a .tmp is not content");
+    check(images.count("media/big.webm.part") == 0, "a .part partial download is not content");
+    check(images.count("media/big.webm.crdownload") == 0, "a .crdownload is not content");
+    check(images.count("media/README") == 0, "an extensionless README is not content");
+    check(images.count("media/LICENSE") == 0, "an extensionless LICENSE is not content");
+    check(images.count("media/odd.xyz") == 1,
+          "an unrecognized-but-real extension is still content (denylist, not allowlist)");
+    check(images.count("media/a.png") == 1, "the real image is untouched by the denylist");
+  }
+
+  // #36: the worst case for junk is at the scan ROOT, where it lands in the /wildcards/
+  // pseudo-theme. A nonempty wildcards theme both merges the phantom into EVERY theme and
+  // suppresses scan reporting -- so a stray Thumbs.db at the root would silently freeze every
+  // folder theme's media list into default.json. Denylisted junk must leave wildcards empty.
+  void test_bootstrap_root_junk_preserves_scan_themes()
+  {
+    auto root = scratch_root() / "bootstrap_root_junk";
+    std::filesystem::remove_all(root);
+    write_png(root / "ocean" / "a.png");
+    write_png(root / "fire" / "b.png");
+    write_file(root / "Thumbs.db", "junk");
+    write_file(root / "desktop.ini", "junk");
+    write_file(root / "README", "junk");
+    write_file(root / "notes.txt~", "junk");
+
+    trance_pb::Session session = get_default_session();
+    SessionJsonSidecar sidecar;
+    search_resources(session, root.string(), sidecar.theme_scan);
+
+    check(sidecar.theme_scan.size() == 2, "root junk does not suppress scan reporting");
+    check(sidecar.theme_scan.count("ocean") == 1, "the ocean subdirectory is still a scan theme");
+    check(sidecar.theme_scan.count("fire") == 1, "the fire subdirectory is still a scan theme");
+    const auto& ocean = session.theme_map().at("ocean");
+    check(ocean.image_path_size() == 1, "root junk is not merged into a folder theme");
   }
 
   // #36: the no-arg cold start must preserve folder-ness. search_resources reports which
@@ -844,6 +918,8 @@ int main()
   test_scan_theme_saves_as_scan_key_only();
   test_scan_theme_includes_text_and_audio();
   test_scan_does_not_filter_on_extension();
+  test_scan_excludes_junk_files();
+  test_bootstrap_root_junk_preserves_scan_themes();
   test_bootstrap_scan_writes_scan_themes();
   test_bootstrap_wildcards_suppresses_scan_themes();
 
