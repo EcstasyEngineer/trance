@@ -132,6 +132,15 @@ private:
   int _last_custom_index;
   std::string _custom_visual_name;
 
+  // The program's pinned visual, if any: a pin forces every selection to that one
+  // visual, skipping the weight lottery (the program-level equivalent of the
+  // --visual/--pattern overrides above, which still win over it). At most one is
+  // set -- validate_program enforces a single pin across built-ins and customs.
+  // _pinned_custom_index indexes _custom_patterns (post-skip), not the proto's
+  // repeated field; both are recomputed by rebuild_custom_patterns/set_program.
+  uint32_t _pinned_builtin_type = 0;
+  int _pinned_custom_index = -1;
+
   // Compiled built-in patterns by Program::VisualType value, for those that have been
   // ported off their hardcoded class. change_visual() prefers these over the C++
   // class when present.

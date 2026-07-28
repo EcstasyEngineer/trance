@@ -24,6 +24,23 @@
 #include <SFML/Graphics.hpp>
 #pragma warning(pop)
 
+namespace
+{
+  // How long the off button takes to walk a row's weight down to 0. Short enough to
+  // read as "the row switched off", long enough to see which row it was.
+  const float kWeightTweenSeconds = 0.2f;
+  // Weight a row comes back on at when it has no stashed previous value.
+  const uint32_t kDefaultRowWeight = 10;
+  // Sliders are 0..100 so a raw weight reads directly as "percent-ish" when the pool
+  // sums to 100; the EFFECTIVE share label next to it is the honest number.
+  const int kMaxRowWeight = 100;
+
+  const ImVec4 kActiveGreen{0.35f, 0.85f, 0.45f, 1.f};
+  const ImVec4 kActiveGreenDim{0.20f, 0.45f, 0.25f, 1.f};
+  const ImVec4 kWarnAmber{1.f, 0.75f, 0.3f, 1.f};
+  const ImVec4 kPinGold{0.95f, 0.8f, 0.3f, 1.f};
+}
+
 AppUi::AppUi(trance_pb::Session& session, const std::string& session_path,
              SessionJsonSidecar& sidecar, trance_pb::System& system,
              const std::string& system_path, CommandRuntimeState& command_state,
@@ -86,6 +103,32 @@ void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Au
   }
   if (_system_status_ttl > 0.f) {
     _system_status_ttl -= dt.asSeconds();
+  }
+  // Weight stashes are keyed by visual TYPE / pattern NAME / theme NAME, none of which
+  // are unique across programs: a playlist advance re-points _active_program at a
+  // program whose "slow_flash" row is a different row with a different weight, and a
+  // kept stash would restore the OLD program's weight onto it. Dropped here rather
+  // than in a section, since a collapsed CollapsingHeader never draws to notice.
+  const trance_pb::Program* current = _active_program ? _active_program() : nullptr;
+  if (current != _weight_stash_program) {
+    _weight_stash_program = current;
+    _visual_last_weight.clear();
+    _theme_last_weight.clear();
+    _weight_tweens.clear();
+  }
+
+  // Advance the off-button tweens. The MODEL weight already went to 0 when the button
+  // was clicked (and the section fired its on_program_change then), so this is purely
+  // cosmetic: the slider grab walking down to meet a value that already changed. Run
+  // here rather than in the sections because a collapsed CollapsingHeader doesn't draw
+  // its section at all, and a tween left un-advanced would freeze its row's slider.
+  for (auto it = _weight_tweens.begin(); it != _weight_tweens.end();) {
+    it->second.elapsed += dt.asSeconds();
+    if (it->second.elapsed >= kWeightTweenSeconds) {
+      it = _weight_tweens.erase(it);
+    } else {
+      ++it;
+    }
   }
 
   if (!_visible) {
@@ -198,6 +241,195 @@ void AppUi::draw_status_section(Director& director, Audio* audio, const ThemeBan
   }
 }
 
+uint64_t AppUi::visual_pool_total(const trance_pb::Program& program)
+{
+  uint64_t total = 0;
+  for (const auto& type : program.visual_type()) {
+    total += type.random_weight();
+  }
+  for (const auto& pattern : program.custom_visual_pattern()) {
+    // Disabled patterns are skipped by rebuild_custom_patterns, so they contribute
+    // nothing to the real lottery and must not dilute the percentages here either.
+    if (pattern.enabled()) {
+      total += pattern.random_weight();
+    }
+  }
+  return total;
+}
+
+bool AppUi::any_visual_pinned(const trance_pb::Program& program)
+{
+  for (const auto& type : program.visual_type()) {
+    if (type.pinned()) {
+      return true;
+    }
+  }
+  for (const auto& pattern : program.custom_visual_pattern()) {
+    if (pattern.pinned() && pattern.enabled()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void AppUi::clear_other_visual_pins(trance_pb::Program& program, bool is_custom, int builtin_index,
+                                    const std::string& custom_name)
+{
+  for (int i = 0; i < program.visual_type_size(); ++i) {
+    auto* config = program.mutable_visual_type(i);
+    // By ROW INDEX, not by type: nothing forbids two visual_type entries of the same
+    // type, and identifying by type would leave both of them pinned.
+    if (is_custom || i != builtin_index) {
+      config->set_pinned(false);
+    }
+  }
+  for (int i = 0; i < program.custom_visual_pattern_size(); ++i) {
+    auto* pattern = program.mutable_custom_visual_pattern(i);
+    if (!is_custom || pattern->name() != custom_name) {
+      pattern->set_pinned(false);
+    }
+  }
+}
+
+std::string AppUi::visual_row_key(bool is_custom, int builtin_index, const std::string& custom_name)
+{
+  // Built-ins key on their ROW INDEX, not their type: duplicate visual_type entries of
+  // the same type are legal, and a type-derived key would make the two rows share one
+  // stash slot and one tween (switching one off would animate the other).
+  return is_custom ? "c" + custom_name : "b" + std::to_string(builtin_index);
+}
+
+AppUi::WeightRowResult AppUi::draw_weight_row(const char* label, const std::string& key,
+                                              uint32_t* weight, bool* pinned, uint64_t pool_total,
+                                              std::map<std::string, uint32_t>& stash,
+                                              const char* slider_tooltip, bool pool_pinned)
+{
+  WeightRowResult result;
+  ImGui::PushID(key.c_str());
+
+  // A tween in flight owns the displayed weight: the model value is already 0 (set
+  // when the button was clicked, so the runtime switched the row off immediately),
+  // and the animation is purely the slider grab walking down to meet it.
+  auto tween = _weight_tweens.find(key);
+  const bool animating = tween != _weight_tweens.end();
+  int shown = static_cast<int>(*weight);
+  if (animating) {
+    float t = tween->second.elapsed / kWeightTweenSeconds;
+    shown = static_cast<int>(static_cast<float>(tween->second.from) * (1.f - t));
+  }
+  const bool on = *weight > 0;
+
+  // On/off button. Off stashes the current weight and starts the walk-to-0; on
+  // restores the stash (or a sensible default for a row that has never been on).
+  // "###" (not "##"): with ## the ID still hashes the WHOLE label, so a flipping
+  // "on"/"off" would hand the button a new identity on every toggle and drop
+  // keyboard/gamepad focus mid-interaction. ### takes the ID from the suffix alone,
+  // which is the only form that actually keeps it stable.
+  if (ImGui::Button(on ? "on###toggle" : "off###toggle", ImVec2(32.f, 0.f))) {
+    if (on) {
+      stash[key] = *weight;
+      _weight_tweens[key] = WeightTween{*weight, 0.f};
+      *weight = 0;
+    } else {
+      auto it = stash.find(key);
+      *weight = it != stash.end() && it->second ? it->second : kDefaultRowWeight;
+      _weight_tweens.erase(key);
+    }
+    result.weight_changed = true;
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Toggle this row off (weight 0) and back on at its previous weight.");
+  }
+  ImGui::SameLine();
+
+  // Pin. Single-pin across the pool is the CALLER's job (it owns the sibling rows);
+  // this only reports the click.
+  if (pinned) {
+    // Latched BEFORE the button: the click flips *pinned, so testing it again for the
+    // pop would pop a push that never happened (or skip one that did) and corrupt
+    // ImGui's style stack on every toggle.
+    const bool was_pinned = *pinned;
+    if (was_pinned) {
+      ImGui::PushStyleColor(ImGuiCol_Button, kPinGold);
+      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.f, 0.f, 0.f, 1.f));
+    }
+    if (ImGui::Button("pin", ImVec2(32.f, 0.f))) {
+      *pinned = !*pinned;
+      result.pin_changed = true;
+    }
+    if (was_pinned) {
+      ImGui::PopStyleColor(2);
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Pin: at most one per pool. Themes pin as always-resident (the\n"
+                        "weights then only pick the OTHER slot); visuals pin as\n"
+                        "force-this-one (the weight lottery is skipped).");
+    }
+    ImGui::SameLine();
+  }
+
+  // Green accent while the row is contributing; an animating row is on its way out,
+  // so it greys with the rest.
+  const bool accent = on && !animating;
+  if (accent) {
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab, kActiveGreen);
+    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, kActiveGreen);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, kActiveGreenDim);
+  }
+  ImGui::SetNextItemWidth(130.f);
+  // Disabled only for input: the bar still redraws each frame, which is what makes
+  // the animation visible.
+  ImGui::BeginDisabled(animating);
+  if (ImGui::SliderInt("##weight", &shown, 0, kMaxRowWeight, "weight %d")) {
+    *weight = static_cast<uint32_t>(std::max(0, std::min(kMaxRowWeight, shown)));
+  }
+  ImGui::EndDisabled();
+  // EndDisabled pushes no item of its own, so IsItem* here still refers to the slider.
+  // Committed on release, not per tick: a drag would otherwise re-parse every custom
+  // pattern in the program on every frame of the drag (Director::set_program).
+  if (ImGui::IsItemDeactivatedAfterEdit()) {
+    if (*weight) {
+      stash[key] = *weight;
+    }
+    result.weight_changed = true;
+  }
+  if (slider_tooltip && ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("%s", slider_tooltip);
+  }
+  if (accent) {
+    ImGui::PopStyleColor(3);
+  }
+  ImGui::SameLine();
+
+  // The honest number: the raw weight above is only meaningful against the pool total.
+  // pool_total 0 means the caller told us a pin owns the pool outright -- the lottery
+  // is skipped, so the weights no longer describe anything and a percentage would lie.
+  if (pool_pinned) {
+    const bool this_row = pinned && *pinned;
+    ImGui::TextColored(this_row ? kPinGold : ImGui::GetStyle().Colors[ImGuiCol_TextDisabled],
+                       this_row ? " 100%%" : "   0%%");
+  } else if (pool_total) {
+    float share = 100.f * static_cast<float>(*weight) / static_cast<float>(pool_total);
+    ImGui::TextColored(accent ? kActiveGreen : ImGui::GetStyle().Colors[ImGuiCol_TextDisabled],
+                       "%5.1f%%", share);
+  } else {
+    ImGui::TextDisabled("   --");
+  }
+  // Empty label = the caller draws the row's name itself (the Themes section puts a
+  // TreeNode there); don't emit a zero-width text item and its trailing spacing.
+  if (label && *label) {
+    ImGui::SameLine();
+    if (accent) {
+      ImGui::TextUnformatted(label);
+    } else {
+      ImGui::TextDisabled("%s", label);
+    }
+  }
+
+  ImGui::PopID();
+  return result;
+}
+
 void AppUi::draw_visuals_section(Director& director)
 {
   ImGui::TextUnformatted("Built-ins (click to force now):");
@@ -286,6 +518,16 @@ void AppUi::draw_visuals_section(Director& director)
     ImGui::TextDisabled("(none in this program)");
   }
 
+  // Shared with the Program section's built-in rows: one denominator for the whole
+  // visual pool. Sampled once for the frame so every row's percent is against the
+  // same total even while one of them is being dragged.
+  const uint64_t pool_total = visual_pool_total(*program);
+  // A pinned visual owns the pool: change_visual returns it every time and never runs
+  // the lottery, so the rows show 100%/0% rather than a share of a draw that no
+  // longer happens. Sampled with pool_total, for the same stability reason.
+  const bool pool_pinned = any_visual_pinned(*program);
+  bool pool_changed = false;
+
   // Index of a row the user asked to remove, applied after the loop: erasing from the
   // repeated field mid-iteration would invalidate the row we are still drawing.
   int remove_index = -1;
@@ -327,6 +569,55 @@ void AppUi::draw_visuals_section(Director& director)
       remove_index = i;
     }
 
+    // Weight/pin row, same widget and the same pool denominator the built-ins use in
+    // the Program section -- change_visual runs one lottery over both (director.cpp).
+    // `enabled` (the proto's own off switch, previously not editable here) is kept in
+    // step with the weight: rebuild_custom_patterns skips a disabled pattern outright,
+    // which is the truest "off", and a 0-weight row would never be picked anyway.
+    {
+      // A pattern saved as enabled:false is off no matter what weight it carries
+      // (rebuild_custom_patterns skips it), so the row must READ as off too -- show it
+      // at 0 rather than green-and-weighted. Its stored weight lives on in the stash,
+      // so the on button restores it rather than falling back to the default.
+      uint32_t weight = pattern->enabled() ? pattern->random_weight() : 0;
+      if (!pattern->enabled() && pattern->random_weight()) {
+        auto key = visual_row_key(true, 0, pattern->name());
+        _visual_last_weight.emplace(key, pattern->random_weight());
+      }
+      bool pinned = pattern->pinned();
+      // Empty label: the editable name InputText a line above already names the row.
+      auto row = draw_weight_row("", visual_row_key(true, 0, pattern->name()), &weight, &pinned,
+                                 pool_total, _visual_last_weight,
+                                 "Selection weight, shared with the built-in visuals in the\n"
+                                 "Program section (one combined lottery). 0 = never picked.\n"
+                                 "A PINNED visual is forced: the lottery is skipped entirely.",
+                                 pool_pinned);
+      // Only ever written on a real user edit. The pass-through case (drawing a
+      // disabled pattern, which the row shows at 0) must not clobber the weight the
+      // pattern was saved with, and must not switch it on just by being drawn.
+      if (row.weight_changed || weight != (pattern->enabled() ? pattern->random_weight() : 0)) {
+        pattern->set_random_weight(weight);
+        pattern->set_enabled(weight > 0);
+        // A pin on a disabled pattern is dead: rebuild_custom_patterns skips the
+        // pattern entirely, so the panel would draw an active force that does nothing
+        // and Save would persist a pin validate_program strips on the next load.
+        if (!pattern->enabled()) {
+          pattern->set_pinned(false);
+        }
+      }
+      if (row.weight_changed) {
+        pool_changed = true;
+      }
+      // Pinning is only meaningful for a pattern that is actually in the lottery.
+      if (row.pin_changed && pattern->enabled()) {
+        pattern->set_pinned(pinned);
+        if (pinned) {
+          clear_other_visual_pins(*program, true, 0, pattern->name());
+        }
+        pool_changed = true;
+      }
+    }
+
     if (ImGui::InputTextMultiline("##source", pattern->mutable_source_text(),
                                   ImVec2(-FLT_MIN, 160.f))) {
       _pattern_lint.erase(i);
@@ -366,14 +657,32 @@ void AppUi::draw_visuals_section(Director& director)
     ImGui::PopID();
   }
 
+  // Mirrors draw_program_section's warning: the reload rescue keys off the BUILT-IN
+  // weights (a custom can fail to parse and vanish from the lottery, so it is not
+  // evidence of a playable pool -- see validate_program), not off pool_total.
+  uint64_t builtin_total = 0;
+  bool builtin_pinned = false;
+  for (const auto& type : program->visual_type()) {
+    builtin_total += type.random_weight();
+    builtin_pinned = builtin_pinned || type.pinned();
+  }
+  if (!builtin_total && !builtin_pinned) {
+    ImGui::TextColored(kWarnAmber,
+                       "all built-in visual weights 0 -- resets to defaults on reload");
+  }
+
   if (remove_index >= 0) {
     // No swap-and-pop: order is user-visible here, and DeleteSubrange keeps it.
     program->mutable_custom_visual_pattern()->DeleteSubrange(remove_index, 1);
     // Every cached diagnostic is keyed by row index, and the rows just shifted.
     _pattern_lint.clear();
-    if (_on_program_change) {
-      _on_program_change();
-    }
+    pool_changed = true;
+  }
+  // One re-push for the whole section, on release/click only (see draw_weight_row):
+  // Director::set_program re-parses every custom pattern, so a per-drag-tick fire
+  // would recompile the program on every frame of a slider drag.
+  if (pool_changed && _on_program_change) {
+    _on_program_change();
   }
 
   if (!_last_pattern_error.empty()) {
@@ -422,28 +731,70 @@ void AppUi::draw_program_section()
   }
 
   ImGui::Separator();
-  ImGui::TextUnformatted("Visual weights:");
+  ImGui::TextUnformatted("Built-in visual weights:");
+  ImGui::TextDisabled("(share is against ALL visuals -- custom patterns included)");
+  // One denominator for built-ins and customs alike: change_visual runs a single
+  // lottery over both (director.cpp), so a built-in's share depends on the custom
+  // patterns edited over in the Visuals section too. A pin overrides the lottery
+  // outright, so the rows show 100%/0% instead (see draw_weight_row).
+  const uint64_t pool_total = visual_pool_total(*program);
+  const bool pool_pinned = any_visual_pinned(*program);
   for (int i = 0; i < program->visual_type_size(); ++i) {
     auto* config = program->mutable_visual_type(i);
+    const int type = static_cast<int>(config->type());
     const char* label = nullptr;
     for (const auto& visual : builtin_visuals()) {
-      if (visual.type == static_cast<uint32_t>(config->type())) {
+      if (visual.type == static_cast<uint32_t>(type)) {
         label = visual.name;
         break;
       }
     }
     char fallback[32];
     if (!label) {
-      std::snprintf(fallback, sizeof(fallback), "type %d", static_cast<int>(config->type()));
+      std::snprintf(fallback, sizeof(fallback), "type %d", type);
       label = fallback;
     }
-    int weight = static_cast<int>(config->random_weight());
+    // Nothing forbids two visual_type entries with the SAME type, and their labels are
+    // identical -- scope by row index so duplicates get distinct ImGui IDs instead of
+    // one row swallowing the other's clicks. (The row KEY is index-derived too, for
+    // the same reason; see visual_row_key.)
     ImGui::PushID(i);
-    if (ImGui::SliderInt(label, &weight, 0, 10)) {
-      config->set_random_weight(static_cast<uint32_t>(weight));
+    // Written through live so the slider tracks the drag and the percent label stays
+    // truthful; `changed` (the on_program_change trigger) only fires on release.
+    uint32_t weight = config->random_weight();
+    bool pinned = config->pinned();
+    auto row = draw_weight_row(label, visual_row_key(false, i, {}), &weight, &pinned, pool_total,
+                               _visual_last_weight,
+                               "Selection weight, shared with this program's custom patterns\n"
+                               "(one combined lottery). 0 = never picked.\n"
+                               "A PINNED visual is forced: the lottery is skipped entirely.",
+                               pool_pinned);
+    config->set_random_weight(weight);
+    if (row.weight_changed) {
+      changed = true;
+    }
+    if (row.pin_changed) {
+      // Set before the sweep so the sweep can leave this one alone; clearing is
+      // unconditional the other way (unpinning just leaves the pool unpinned).
+      config->set_pinned(pinned);
+      if (pinned) {
+        clear_other_visual_pins(*program, false, i, {});
+      }
       changed = true;
     }
     ImGui::PopID();
+  }
+  // The rescue validate_program does on reload is BUILT-IN weights only, and a pinned
+  // built-in suppresses it -- so warn on exactly that condition, not on the combined
+  // pool_total the percentages use.
+  uint64_t builtin_total = 0;
+  bool builtin_pinned = false;
+  for (const auto& type : program->visual_type()) {
+    builtin_total += type.random_weight();
+    builtin_pinned = builtin_pinned || type.pinned();
+  }
+  if (!builtin_total && !builtin_pinned) {
+    ImGui::TextColored(kWarnAmber, "all built-in weights 0 -- resets to defaults on reload");
   }
 
   ImGui::Separator();
@@ -483,6 +834,16 @@ void AppUi::draw_themes_section()
   }
   bool changed = false;
 
+  // Denominator for the rows' percent labels: the sum over the program's enabled_theme
+  // entries, which is exactly the total ThemeBank's rotation lottery divides by.
+  // Sampled once per frame so a drag doesn't make every OTHER row's number jitter.
+  uint64_t theme_pool_total = 0;
+  if (program) {
+    for (const auto& theme : program->enabled_theme()) {
+      theme_pool_total += theme.random_weight();
+    }
+  }
+
   // Protobuf map iteration order is unspecified (and can differ run to run); sort
   // the names so rows don't jump around.
   std::vector<std::string> names;
@@ -513,30 +874,39 @@ void AppUi::draw_themes_section()
         }
         return entry;
       };
-      bool enabled = entry && entry->random_weight() > 0;
-      if (ImGui::Checkbox("##enabled", &enabled)) {
-        if (enabled) {
-          auto it = _theme_last_weight.find(name);
-          ensure_entry()->set_random_weight(it != _theme_last_weight.end() ? it->second : 1);
-        } else if (entry) {
-          _theme_last_weight[name] = entry->random_weight();
-          entry->set_random_weight(0);
+      // Touching either control materializes the entry: a theme with no
+      // enabled_theme row is weight 0 / unpinned by definition, so the row can draw
+      // from those defaults and only commit an entry once the user actually acts.
+      uint32_t weight = entry ? entry->random_weight() : 0;
+      bool pinned = entry && entry->pinned();
+      const uint32_t before_weight = weight;
+      auto row = draw_weight_row("", "t" + name, &weight, &pinned, theme_pool_total,
+                                 _theme_last_weight,
+                                 "Rotation weight: each theme swap picks the next theme with\n"
+                                 "chance weight/total across enabled themes. 0 = never picked.\n"
+                                 "A PINNED theme stays resident even at weight 0 -- the weights\n"
+                                 "then only choose the other of the two live slots.\n"
+                                 "(The bank still only keeps its 4-slot window loaded.)");
+      if (weight != before_weight) {
+        ensure_entry()->set_random_weight(weight);
+      }
+      if (row.weight_changed) {
+        changed = true;
+      }
+      if (row.pin_changed) {
+        ensure_entry()->set_pinned(pinned);
+        if (pinned) {
+          // Single pin per program, the rule validate_program enforces on load
+          // (session.cpp) -- setting one here clears the rest so the UI and the
+          // loader never disagree about which theme is pinned.
+          for (int i = 0; i < program->enabled_theme_size(); ++i) {
+            auto* other = program->mutable_enabled_theme(i);
+            if (other->theme_name() != name) {
+              other->set_pinned(false);
+            }
+          }
         }
         changed = true;
-      }
-      ImGui::SameLine();
-      int weight = entry ? static_cast<int>(entry->random_weight()) : 0;
-      ImGui::SetNextItemWidth(120.f);
-      // Label the value INSIDE the bar -- a bare number here reads as "number of
-      // themes" or similar; it's the theme's rotation-lottery weight.
-      if (ImGui::SliderInt("##weight", &weight, 0, 10, "weight %d")) {
-        ensure_entry()->set_random_weight(static_cast<uint32_t>(weight));
-        changed = true;
-      }
-      if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Rotation weight: each theme swap picks the next theme with\n"
-                          "chance weight/total across enabled themes. 0 = never picked.\n"
-                          "(The bank still only keeps its 4-slot window loaded.)");
       }
       ImGui::SameLine();
     }
@@ -588,6 +958,13 @@ void AppUi::draw_themes_section()
       ImGui::TreePop();
     }
     ImGui::PopID();
+  }
+
+  // Allowed live (the user may be mid-rebalance), but validate_program rewrites an
+  // all-zero theme pool to "every theme at weight 1" on the next load -- so say so
+  // rather than letting a deliberate all-off silently come back on.
+  if (program && !theme_pool_total) {
+    ImGui::TextColored(kWarnAmber, "all weights 0 -- resets to defaults on reload");
   }
 
   if (changed && _on_program_change) {

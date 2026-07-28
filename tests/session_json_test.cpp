@@ -6,6 +6,7 @@
 // Headless: no SFML. Links common_lib (protobuf + nlohmann_json), same as session.cpp
 // itself; not "bare C++17 compiler" like v3_grammar_test but does not touch a window,
 // GL context, or audio device. Run via ctest.
+#include <common/session.h>
 #include <common/session_archive.h>
 #include <common/session_json.h>
 #include <common/trance.pb.h>
@@ -385,6 +386,220 @@ namespace
     check(read_file(slug_path) == "effect flash;\n", "slugged pattern file gets the source text");
   }
 
+  // #34: `pinned` on a built-in visual_type entry and on a custom_visual_pattern is
+  // additive and omitted-when-false, mirroring enabled_theme[].pinned. Round-trips the
+  // pin through save+reload, and checks the false case leaves no key behind (a session
+  // that never pins must not grow noise on every save).
+  void test_visual_pinned_round_trip()
+  {
+    auto root = scratch_root() / "visual_pinned";
+    std::filesystem::remove_all(root);
+    write_file(root / "s.session.json", R"json({
+      "format": "trance-session", "format_version": 1,
+      "first_playlist_item": "main",
+      "playlist": { "main": { "standard": { "program": "p" } } },
+      "program_map": { "p": {
+        "visual_type": [ { "type": "slow_flash", "random_weight": 3, "pinned": true },
+                         { "type": "animation", "random_weight": 1 } ],
+        "custom_visual_pattern": [
+          { "name": "a", "file": "patterns/a.pattern", "random_weight": 2, "enabled": true },
+          { "name": "b", "file": "patterns/b.pattern", "random_weight": 5, "enabled": true,
+            "pinned": true } ]
+      } }
+    })json");
+    write_file(root / "patterns" / "a.pattern", "# a\n");
+    write_file(root / "patterns" / "b.pattern", "# b\n");
+
+    SessionJsonSidecar sidecar;
+    auto session = load_session_json((root / "s.session.json").string(), root.string(), sidecar);
+    const auto& program = session.program_map().at("p");
+    check(program.visual_type(0).pinned(), "visual_type[].pinned loads");
+    check(!program.visual_type(1).pinned(), "absent visual_type[].pinned defaults false");
+    check(!program.custom_visual_pattern(0).pinned(),
+          "absent custom_visual_pattern[].pinned defaults false");
+    check(program.custom_visual_pattern(1).pinned(), "custom_visual_pattern[].pinned loads");
+
+    save_session_json(session, (root / "out.session.json").string(), root.string(), sidecar);
+    SessionJsonSidecar reload_sidecar;
+    auto reloaded =
+        load_session_json((root / "out.session.json").string(), root.string(), reload_sidecar);
+    const auto& rp = reloaded.program_map().at("p");
+    check(rp.visual_type(0).pinned() && !rp.visual_type(1).pinned(),
+          "visual_type[].pinned survives save+reload");
+    check(rp.custom_visual_pattern(1).pinned() && !rp.custom_visual_pattern(0).pinned(),
+          "custom_visual_pattern[].pinned survives save+reload");
+
+    // Exactly two "pinned" keys in the output: the unpinned rows must stay silent.
+    auto saved = read_file(root / "out.session.json");
+    std::size_t pinned_keys = 0;
+    for (std::size_t at = saved.find("\"pinned\""); at != std::string::npos;
+         at = saved.find("\"pinned\"", at + 1)) {
+      ++pinned_keys;
+    }
+    check(pinned_keys == 2, "pinned is omitted when false (only the two true rows emit it)");
+  }
+
+  // #34: validate_program enforces ONE pin across the whole visual pool -- built-in
+  // visual_type entries and custom patterns share a single selection lottery
+  // (director.cpp), so they share a single pin. Built-ins win over customs, matching
+  // the iteration order the enabled_theme pass uses.
+  void test_single_visual_pin_enforced()
+  {
+    auto root = scratch_root() / "visual_pin_single";
+    std::filesystem::remove_all(root);
+    write_file(root / "s.session.json", R"json({
+      "format": "trance-session", "format_version": 1,
+      "first_playlist_item": "main",
+      "playlist": { "main": { "standard": { "program": "p" } } },
+      "program_map": { "p": {
+        "enabled_theme": [ { "theme_name": "all", "random_weight": 1 } ],
+        "visual_type": [ { "type": "slow_flash", "random_weight": 1, "pinned": true },
+                         { "type": "animation", "random_weight": 1, "pinned": true } ],
+        "custom_visual_pattern": [
+          { "name": "a", "file": "patterns/a.pattern", "random_weight": 1, "enabled": true,
+            "pinned": true } ]
+      } },
+      "theme_map": { "all": { "scan": "media" } }
+    })json");
+    write_file(root / "patterns" / "a.pattern", "# a\n");
+    std::filesystem::create_directories(root / "media");
+
+    auto session = load_session((root / "s.session.json").string());
+    const auto& program = session.program_map().at("p");
+    int pins = 0;
+    for (const auto& vt : program.visual_type()) {
+      if (vt.pinned()) ++pins;
+    }
+    for (const auto& p : program.custom_visual_pattern()) {
+      if (p.pinned()) ++pins;
+    }
+    check(pins == 1, "validate_program leaves exactly one pin across the visual pool");
+    check(program.visual_type(0).pinned(), "the first pin in iteration order is the one kept");
+  }
+
+  // #34: a pin on a DISABLED custom pattern is dead -- rebuild_custom_patterns skips
+  // the pattern outright, so the pin would force a visual that never compiles. Cleared
+  // at validation so the panel and Director can't disagree about it.
+  void test_pin_on_disabled_pattern_is_cleared()
+  {
+    auto root = scratch_root() / "pin_disabled";
+    std::filesystem::remove_all(root);
+    write_file(root / "s.session.json", R"json({
+      "format": "trance-session", "format_version": 1,
+      "first_playlist_item": "main",
+      "playlist": { "main": { "standard": { "program": "p" } } },
+      "program_map": { "p": {
+        "enabled_theme": [ { "theme_name": "all", "random_weight": 1 } ],
+        "visual_type": [ { "type": "slow_flash", "random_weight": 1 } ],
+        "custom_visual_pattern": [
+          { "name": "a", "file": "patterns/a.pattern", "random_weight": 4, "pinned": true } ]
+      } },
+      "theme_map": { "all": { "scan": "media" } }
+    })json");
+    write_file(root / "patterns" / "a.pattern", "# a\n");
+    std::filesystem::create_directories(root / "media");
+
+    auto session = load_session((root / "s.session.json").string());
+    const auto& program = session.program_map().at("p");
+    check(!program.custom_visual_pattern(0).pinned(),
+          "a pin on a disabled custom pattern is cleared by validate_program");
+  }
+
+  // #34: the all-zero visual rescue keys off BUILT-IN weights only. A custom pattern
+  // can fail to parse and drop out of Director's lottery at runtime, so its weight is
+  // not evidence the program has anything playable -- letting it suppress the rescue
+  // would leave Director with an empty pool and a null _visual to dereference.
+  void test_custom_weight_does_not_suppress_visual_default_rescue()
+  {
+    auto root = scratch_root() / "custom_no_rescue";
+    std::filesystem::remove_all(root);
+    write_file(root / "s.session.json", R"json({
+      "format": "trance-session", "format_version": 1,
+      "first_playlist_item": "main",
+      "playlist": { "main": { "standard": { "program": "p" } } },
+      "program_map": { "p": {
+        "enabled_theme": [ { "theme_name": "all", "random_weight": 1 } ],
+        "visual_type": [ { "type": "slow_flash", "random_weight": 0 } ],
+        "custom_visual_pattern": [
+          { "name": "a", "file": "patterns/a.pattern", "random_weight": 9, "enabled": true } ]
+      } },
+      "theme_map": { "all": { "scan": "media" } }
+    })json");
+    write_file(root / "patterns" / "a.pattern", "# a\n");
+    std::filesystem::create_directories(root / "media");
+
+    auto session = load_session((root / "s.session.json").string());
+    const auto& program = session.program_map().at("p");
+    uint64_t builtin_total = 0;
+    for (const auto& vt : program.visual_type()) {
+      builtin_total += vt.random_weight();
+    }
+    check(builtin_total > 0,
+          "all-zero built-ins get the default rescue even when a custom carries weight");
+  }
+
+  // #34: a PINNED built-in at weight 0 is the deliberate "only this one" state, so it
+  // must survive the rescue that an unpinned all-zero pool triggers.
+  void test_pinned_builtin_survives_zero_weight_rescue()
+  {
+    auto root = scratch_root() / "pinned_zero";
+    std::filesystem::remove_all(root);
+    write_file(root / "s.session.json", R"json({
+      "format": "trance-session", "format_version": 1,
+      "first_playlist_item": "main",
+      "playlist": { "main": { "standard": { "program": "p" } } },
+      "program_map": { "p": {
+        "enabled_theme": [ { "theme_name": "all", "random_weight": 1 } ],
+        "visual_type": [ { "type": "slow_flash", "random_weight": 0, "pinned": true },
+                         { "type": "animation", "random_weight": 0 } ]
+      } },
+      "theme_map": { "all": { "scan": "media" } }
+    })json");
+    std::filesystem::create_directories(root / "media");
+
+    auto session = load_session((root / "s.session.json").string());
+    const auto& program = session.program_map().at("p");
+    check(program.visual_type_size() == 2, "a pinned all-zero visual pool is left alone");
+    check(program.visual_type_size() == 2 && program.visual_type(0).pinned(),
+          "the pin survives (it is the whole point of the zero weights)");
+  }
+
+  // #34: a pin on the NONE visual type is not a pin. NONE is the enum's zero and
+  // Director stores its pinned type in a uint32 where 0 means "nothing pinned", so
+  // honouring such a pin would suppress the all-zero rescue and leave Director with an
+  // empty pool -- which change_visual() leaves as a null _visual for update() to
+  // dereference. Cleared at validation, and the rescue must still fire.
+  // Built through the proto rather than JSON on purpose: "none" is not in the JSON
+  // enum table (session_json.cpp), so a pinned NONE can only reach validation from a
+  // converted legacy .session or a default-constructed entry -- exactly the paths that
+  // would otherwise slip past unnoticed.
+  void test_pinned_none_visual_type_is_not_a_pin()
+  {
+    trance_pb::Session session;
+    session.set_first_playlist_item("main");
+    (*session.mutable_playlist())["main"].mutable_standard()->set_program("p");
+    (*session.mutable_theme_map())["all"];
+    auto& built = (*session.mutable_program_map())["p"];
+    auto* theme = built.add_enabled_theme();
+    theme->set_theme_name("all");
+    theme->set_random_weight(1);
+    auto* vt = built.add_visual_type();
+    vt->set_type(trance_pb::Program_VisualType_NONE);
+    vt->set_random_weight(0);
+    vt->set_pinned(true);
+    validate_session(session);
+
+    const auto& program = session.program_map().at("p");
+    uint64_t total = 0;
+    bool any_pinned = false;
+    for (const auto& vt : program.visual_type()) {
+      total += vt.random_weight();
+      any_pinned = any_pinned || vt.pinned();
+    }
+    check(!any_pinned, "a pin on NONE is cleared rather than honoured");
+    check(total > 0, "the all-zero rescue still fires, so the pool is never left empty");
+  }
+
   // A one-image PNG, byte-for-byte. is_image() only sniffs the extension, but the archive
   // path and any future loader-side check want a file that is actually a PNG.
   const unsigned char kTinyPng[] = {
@@ -504,6 +719,12 @@ int main()
   test_future_version_is_error();
   test_system_json_round_trip();
   test_pattern_slug_assigned_on_save_without_sidecar();
+  test_visual_pinned_round_trip();
+  test_single_visual_pin_enforced();
+  test_pin_on_disabled_pattern_is_cleared();
+  test_custom_weight_does_not_suppress_visual_default_rescue();
+  test_pinned_builtin_survives_zero_weight_rescue();
+  test_pinned_none_visual_type_is_not_a_pin();
   test_scan_expands_to_root_relative_paths();
   test_archive_includes_scan_derived_media();
   test_scan_theme_saves_as_scan_key_only();

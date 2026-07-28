@@ -122,6 +122,11 @@ message VisualPatternSource {
   string source_text = 3;
   // Disabled patterns are stored but not selected.
   bool enabled = 4;
+
+  // If pinned, this pattern is the only visual ever selected -- the weight
+  // lottery is skipped entirely. At most one visual (built-in VisualTypeConfig
+  // or custom pattern) can be pinned in a program.
+  bool pinned = 5;
 }
 
 message Program {
@@ -158,6 +163,11 @@ message Program {
     // Controls how frequently this program will be randomly selected relative
     // to others.
     uint32 random_weight = 2;
+
+    // If pinned, this visual type is the only visual ever selected -- the
+    // weight lottery is skipped entirely. At most one visual (built-in or
+    // custom VisualPatternSource) can be pinned in a program.
+    bool pinned = 3;
   }
 
   // Deprecated; replaced by enabled_theme!
