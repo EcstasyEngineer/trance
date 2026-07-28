@@ -137,7 +137,7 @@ play_session frame loop ──► Director ──► Visual (cycler tree + effec
 Full user-facing reference: [controls.md](controls.md).
 
 In-window keys are handled in `handle_events()` (`src/trance/main.cpp`):
-window-close quits, **Escape**/**F2** toggle the ImGui control panel
+window-close and **Escape** quit, **F2** toggles the ImGui control panel
 (`src/trance/ui/app_ui.{h,cpp}`, which carries the "Quit trance" button), **F1**
 toggles the debug overlay (`Director::draw_debug_overlay`,
 `src/trance/director.cpp`), **M** toggles audio mute (`Audio::ToggleMute`).

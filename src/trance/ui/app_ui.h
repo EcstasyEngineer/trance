@@ -1,8 +1,8 @@
 #ifndef TRANCE_SRC_TRANCE_UI_APP_UI_H
 #define TRANCE_SRC_TRANCE_UI_APP_UI_H
 // ImGui in-app UI: the creator replacement. Toggled with
-// F2 or Escape (see main.cpp's handle_events -- Escape no longer quits; quitting is
-// the panel's Quit button, the tray's Quit item, or closing the window); coexists
+// F2 (see main.cpp's handle_events -- Escape quits outright; the other quit paths are
+// the panel's Quit button, the tray's Quit item, and closing the window); coexists
 // with the pre-existing F1 text debug overlay (Director::toggle_debug_overlay /
 // draw_debug_overlay), which is untouched.
 // Exists in --overlay runs too (the overlay is runtime-toggleable now): while the

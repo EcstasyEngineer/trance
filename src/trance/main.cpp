@@ -97,17 +97,19 @@ void handle_events(std::atomic<bool>& running, sf::RenderWindow& window, Directo
     if (key_pressed && key_pressed->code == sf::Keyboard::Key::F1) {
       director.toggle_debug_overlay();
     }
-    // Escape no longer quits: like F2 (kept as an alias), it toggles the control
-    // panel -- open if closed, close if open. The deliberate quit paths are the
-    // window close button, the tray's Quit item, and the panel's own Quit button.
-    // Not while ImGui wants text input: Escape's standard meaning inside an active
-    // InputText (e.g. the Session section's Save As field) is "cancel the edit" --
-    // ImGui already consumed it via process_event above, and it must not ALSO
-    // close the whole panel.
-    if (key_pressed &&
-        (key_pressed->code == sf::Keyboard::Key::Escape ||
-         key_pressed->code == sf::Keyboard::Key::F2) &&
-        app_ui && !app_ui->wants_text_input()) {
+    // Escape quits, like the window close button above. Not while ImGui wants text
+    // input: Escape's standard meaning inside an active InputText (e.g. the Session
+    // section's Save As field) is "cancel the edit" -- ImGui already consumed it via
+    // process_event above, and it must not ALSO tear down the app. With no panel at
+    // all (VR/export) there is no edit to cancel, so Escape still quits.
+    if (key_pressed && key_pressed->code == sf::Keyboard::Key::Escape &&
+        !(app_ui && app_ui->wants_text_input())) {
+      running = false;
+    }
+    // F2 toggles the control panel -- open if closed, close if open. Same text-input
+    // carve-out: F2 is not a text key, but a panel that owns the keyboard keeps it.
+    if (key_pressed && key_pressed->code == sf::Keyboard::Key::F2 && app_ui &&
+        !app_ui->wants_text_input()) {
       app_ui->toggle();
     }
     if (key_pressed && key_pressed->code == sf::Keyboard::Key::M && audio) {

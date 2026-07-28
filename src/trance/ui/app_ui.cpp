@@ -117,8 +117,8 @@ void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Au
     draw_system_section();
   }
   // Quit lives at the very bottom, clearly separated from the sections above --
-  // Escape/F2 only ever toggle this panel now, so this button (plus the tray Quit
-  // and the window close button) is the deliberate way out.
+  // F2 only ever toggles this panel, so this button (plus Escape, the tray Quit
+  // and the window close button) is the way out.
   ImGui::Separator();
   ImGui::Spacing();
   if (ImGui::Button("Quit trance")) {
