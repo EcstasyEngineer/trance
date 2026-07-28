@@ -60,7 +60,7 @@ These apply to both `session.json` and `system.json`.
    The only structural deviations from the proto are the five transforms listed in §7.
 2. **Enums are lowercase strings** of the proto enum value name: visual types
    `accelerate | slow_flash | sub_text | flash_text | parallel | super_parallel |
-   animation | super_fast`; renderer `monitor | openvr`; audio event type
+   animation | super_fast`; renderer `monitor | openvr | openxr`; audio event type
    `play | stop | fade` (the redundant `AUDIO_` prefix is dropped). Integers are not
    accepted. Note: the CLI `--visual` name table (`main.cpp:463-473`) calls PARALLEL
    `simple` — the JSON parser must NOT reuse that table; JSON says `parallel`.
@@ -369,7 +369,7 @@ here with the ImGui editor (which lives inside trance.exe).
 | Key | Type | Proto mapping |
 |---|---|---|
 | `enable_vsync` | bool | `System.enable_vsync` |
-| `renderer` | `"monitor"` \| `"openvr"` | `System.renderer`; `OCULUS` has no JSON form (dead — LibOVR removed; `main.cpp:138` already treats it as monitor) |
+| `renderer` | `"monitor"` \| `"openvr"` \| `"openxr"` | `System.renderer`; **absent = `"monitor"`** — the saver omits the key entirely when it is monitor, so a file with no `renderer` is a non-VR config, not an unset one (see README "VR setup"). `openxr` is the head-locked quad backend; `OCULUS` has no JSON form (dead — LibOVR removed; `main.cpp:138` already treats it as monitor). `--renderer` overrides this for one run without writing back |
 | `windowed` | bool | `System.windowed` |
 | `draw_depth` | float 0–1; absent = default 0.5 | `System.draw_depth.draw_depth` — wrapper **flattened**; key presence carries the `has_draw_depth()` distinction (`validate_system`, session.cpp:450), so `0.0` present and key absent behave differently, as today |
 | `eye_spacing` | float −1–1; absent = default 0.0625 | `System.eye_spacing.eye_spacing` — flattened, same presence rule |
