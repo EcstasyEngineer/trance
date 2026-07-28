@@ -74,7 +74,10 @@ namespace pattern
       case RenderStmt::Op::Spiral:
         // Spiral speed is a curve-drivable render param (v3): advance the spiral phase by the
         // per-frame speed before drawing, so `spiral speed (curve ...)` reads exactly like zoom.
-        if (!st.speed.empty()) {
+        // ... but only once per FRAME: in stereo this whole block is evaluated again for
+        // the second eye, and advancing there too would spin at double speed and leave
+        // the eyes on different angles (VisualRender::render_mutations_enabled).
+        if (!st.speed.empty() && api.render_mutations_enabled()) {
           api.rotate_spiral(eval_num(st.speed, 0.0, regs, nodes, root));
         }
         api.render_spiral();
@@ -90,9 +93,15 @@ namespace pattern
       case RenderStmt::Op::Warp:
         // v3 wave warp: amp in zoom, wavelength in origin, speed in speed. Set once per frame;
         // image draws later in the block read it. amp 0 => no displacement.
-        api.set_warp(eval_num(st.zoom, 0.0, regs, nodes, root),
-                     eval_num(st.origin, 0.2, regs, nodes, root),
-                     eval_num(st.speed, 0.0, regs, nodes, root));
+        // Skipped outright on a stereo frame's second pass: set_warp advances the wave's
+        // time base, so calling it per-eye would animate at double speed. The warp params
+        // it also latches are unchanged between the two passes, so the first pass's values
+        // are still the right ones for both eyes' image draws.
+        if (api.render_mutations_enabled()) {
+          api.set_warp(eval_num(st.zoom, 0.0, regs, nodes, root),
+                       eval_num(st.origin, 0.2, regs, nodes, root),
+                       eval_num(st.speed, 0.0, regs, nodes, root));
+        }
         break;
       case RenderStmt::Op::Image: {
         Image image = image_reg(regs, st.image_reg);

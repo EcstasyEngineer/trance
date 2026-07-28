@@ -326,6 +326,11 @@ void VisualApiImpl::set_theme_audio_volume(float volume)
   _director.set_theme_audio_volume(volume);
 }
 
+bool VisualApiImpl::render_mutations_enabled() const
+{
+  return _director.render_mutations_enabled();
+}
+
 void VisualApiImpl::set_warp(float amp, float wavelength, float speed)
 {
   _director.set_warp(amp, wavelength, speed);
