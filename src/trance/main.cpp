@@ -687,8 +687,10 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
           // (overlay_hints.cpp), so leaving this to the overlay seam below -- which
           // runs after the window is unmapped -- would rely on the WM happening to
           // drop the state on withdrawal.
+          // activate=false: the window is about to be hidden, so taking the
+          // foreground here would briefly steal it from whatever the user is doing.
           if (overlay_applied) {
-            clear_overlay_hints(renderer->window().getNativeHandle());
+            clear_overlay_hints(renderer->window().getNativeHandle(), false);
             overlay_applied = false;
           }
           // The seam owns the audio pause while hidden (not set_paused, which only
@@ -775,7 +777,10 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
           // focus request rather than leave it to fire against a click-through window.
           command_state.focus_requested = false;
         } else {
-          clear_overlay_hints(renderer->window().getNativeHandle());
+          // activate=false: the deferred focus seam below is the single activation site
+          // for this path -- it does the same Win32 activation AND the requestFocus()
+          // half, so activating here too would activate the window twice per toggle.
+          clear_overlay_hints(renderer->window().getNativeHandle(), false);
           // Disengaging hands the window back to the user: it must also be focusable
           // again. The Win32 clear restores styles with SWP_NOACTIVATE, so without
           // this the window stays unactivated and imgui-SFML swallows every click.
@@ -790,10 +795,19 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       // One-shot; requestFocus() is the cross-platform half and focus_window() adds the
       // Win32 activation requestFocus() won't do while another process (the tray helper
       // window) holds the foreground.
-      if (realtime && command_state.focus_requested && !command_state.hidden &&
-          !command_state.overlay_on && !director.vr_enabled()) {
-        renderer->window().requestFocus();
-        focus_window(renderer->window().getNativeHandle());
+      //
+      // The hidden/overlay_on guards are TRANSIENT -- the request legitimately stays
+      // pending across them and fires once the window becomes interactive. Everything
+      // else here is INAPPLICABLE for the whole run (VR has no visible sf::Window to
+      // focus at all; export has no window), so the request can never be satisfied and
+      // must be dropped rather than left pending forever (#39). Same one-shot semantics
+      // either way: the flag never survives a frame in which it was actionable-or-moot.
+      if (command_state.focus_requested && !command_state.hidden &&
+          !command_state.overlay_on) {
+        if (realtime && !director.vr_enabled()) {
+          renderer->window().requestFocus();
+          focus_window(renderer->window().getNativeHandle());
+        }
         command_state.focus_requested = false;
       }
       // Mirror live state back to the tray AFTER the apply seams, so the menu's

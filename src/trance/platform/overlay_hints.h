@@ -23,7 +23,18 @@ struct OverlayConfig {
 // already on just rewrites the opacity, which is the live opacity-change path;
 // clear_overlay_hints() restores a normal interactive window.
 void apply_overlay_hints(sf::WindowHandle handle, float opacity);
-void clear_overlay_hints(sf::WindowHandle handle);
+// `activate`: on Win32 the clear restores the window's ex-styles with SWP_NOACTIVATE, so
+// the window comes back styled-interactive but NOT activated -- and an unactivated window
+// never delivers WM_SETFOCUS, leaving imgui-SFML's focus latch false and every click on
+// the panel swallowed. Pass true only when this clear is the LAST thing that touches the
+// window, i.e. nobody else is going to activate it:
+//   - overlay-off: pass FALSE. The main loop's deferred focus seam activates instead (it
+//     also issues requestFocus(), the cross-platform half this can't do). Activating here
+//     too would activate the window twice for one toggle.
+//   - hide: pass FALSE. The window is about to be hidden; taking the foreground first
+//     would briefly steal it from whatever the user is actually doing.
+// No effect off Win32 -- X11 needs no activation here.
+void clear_overlay_hints(sf::WindowHandle handle, bool activate = false);
 
 // Startup variant (--overlay, called from the ScreenRenderer constructor): the window
 // is NOT yet mapped there, and per EWMH an unmapped X11 window takes _NET_WM_STATE as
