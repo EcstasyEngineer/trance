@@ -235,9 +235,10 @@ void apply_overlay_hints(sf::WindowHandle handle, float opacity)
 #endif
 }
 
-void clear_overlay_hints(sf::WindowHandle handle)
+void clear_overlay_hints(sf::WindowHandle handle, bool activate)
 {
 #if defined(__linux__)
+  (void)activate;
   Display* display = x11_open_overlay_display();
   if (!display) {
     return;
@@ -264,13 +265,18 @@ void clear_overlay_hints(sf::WindowHandle handle)
   // The restore above deliberately uses SWP_NOACTIVATE (it must not steal activation
   // mid-resize), which leaves the window styled-interactive but NOT activated -- and an
   // unactivated window never delivers WM_SETFOCUS, so imgui-SFML's focus latch stays
-  // false and swallows every click on the panel we just made clickable. Activate it
-  // explicitly here, after the ex-styles are back (SetForegroundWindow is a no-op while
-  // WS_EX_NOACTIVATE is still set).
-  SetForegroundWindow(hwnd);
-  SetActiveWindow(hwnd);
+  // false and swallows every click on the panel we just made clickable. Activating is
+  // therefore required SOMEWHERE, but it must happen exactly once and only when the
+  // window is staying on screen -- hence the caller's opt-in (see the header). Done
+  // after the ex-styles are back (SetForegroundWindow is a no-op while WS_EX_NOACTIVATE
+  // is still set).
+  if (activate) {
+    SetForegroundWindow(hwnd);
+    SetActiveWindow(hwnd);
+  }
 #else
   (void)handle;
+  (void)activate;
 #endif
 }
 
