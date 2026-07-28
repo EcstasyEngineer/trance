@@ -579,7 +579,25 @@ namespace
       sidecar.theme_scan[theme_name] = dir;
       auto full_dir = (std::filesystem::path(root) / dir).string();
       if (std::filesystem::exists(full_dir)) {
-        search_resources(theme, full_dir);
+        // search_resources() yields paths relative to the directory it walked, but every
+        // consumer of theme.image_path() (ThemeBank's loader, the archive's file walk)
+        // resolves against the SESSION ROOT per the sec 1 path contract. Scan into a
+        // scratch theme and rebase each result onto `dir` rather than letting scan-dir-
+        // relative paths reach trance_pb, where they'd resolve to nothing.
+        trance_pb::Theme scanned;
+        search_resources(scanned, full_dir);
+        auto rebase = [&dir](const std::string& p) {
+          return normalize_path_for_save((std::filesystem::path(dir) / p).string());
+        };
+        for (const auto& p : scanned.image_path()) {
+          theme.add_image_path(rebase(p));
+        }
+        for (const auto& p : scanned.animation_path()) {
+          theme.add_animation_path(rebase(p));
+        }
+        for (const auto& p : scanned.font_path()) {
+          theme.add_font_path(rebase(p));
+        }
       }
     }
   }

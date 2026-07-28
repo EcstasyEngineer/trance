@@ -6,6 +6,7 @@
 // Headless: no SFML. Links common_lib (protobuf + nlohmann_json), same as session.cpp
 // itself; not "bare C++17 compiler" like v3_grammar_test but does not touch a window,
 // GL context, or audio device. Run via ctest.
+#include <common/session_archive.h>
 #include <common/session_json.h>
 #include <common/trance.pb.h>
 
@@ -13,7 +14,12 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <set>
 #include <string>
+
+#pragma warning(push, 0)
+#include <miniz/miniz.h>
+#pragma warning(pop)
 
 namespace
 {
@@ -379,6 +385,109 @@ namespace
     check(read_file(slug_path) == "effect flash;\n", "slugged pattern file gets the source text");
   }
 
+  // A one-image PNG, byte-for-byte. is_image() only sniffs the extension, but the archive
+  // path and any future loader-side check want a file that is actually a PNG.
+  const unsigned char kTinyPng[] = {
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+      0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
+      0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00,
+      0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49,
+      0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82};
+
+  void write_png(const std::filesystem::path& path)
+  {
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream f{path, std::ios::binary};
+    f.write(reinterpret_cast<const char*>(kTinyPng), sizeof(kTinyPng));
+  }
+
+  // Builds a session root with a single `scan` theme over `media/`, containing one image
+  // in the scan dir itself and one in a nested subdirectory.
+  std::filesystem::path make_scan_session(const std::string& name)
+  {
+    auto root = scratch_root() / name;
+    std::filesystem::remove_all(root);
+    write_file(root / "s.session.json", R"json({
+      "format": "trance-session", "format_version": 1,
+      "first_playlist_item": "main",
+      "playlist": { "main": { "standard": { "program": "p" } } },
+      "program_map": { "p": { "enabled_theme": [ { "theme_name": "all" } ] } },
+      "theme_map": { "all": { "scan": "media" } }
+    })json");
+    write_png(root / "media" / "a.png");
+    write_png(root / "media" / "nested" / "b.png");
+    return root;
+  }
+
+  // #37: `scan` expands via search_resources(theme, <scan dir>), which yields paths
+  // relative to the SCAN DIRECTORY. Every consumer of theme.image_path() -- ThemeBank's
+  // loader and the archive's file walk alike -- resolves against the SESSION ROOT, so the
+  // expansion has to be root-relative ("media/a.png"), not scan-relative ("a.png").
+  void test_scan_expands_to_root_relative_paths()
+  {
+    auto root = make_scan_session("scan_paths");
+    SessionJsonSidecar sidecar;
+    auto session = load_session_json((root / "s.session.json").string(), root.string(), sidecar);
+
+    std::set<std::string> images;
+    for (const auto& p : session.theme_map().at("all").image_path()) {
+      images.insert(p);
+    }
+    check(images.count("media/a.png") == 1, "scan image path is root-relative");
+    check(images.count("media/nested/b.png") == 1, "nested scan image path is root-relative");
+  }
+
+  // #37: the archive walks the in-memory session's theme media lists and resolves each
+  // entry against the session root, so scan-derived media only lands in the zip if the
+  // expansion above is root-relative.
+  void test_archive_includes_scan_derived_media()
+  {
+    auto root = make_scan_session("scan_archive");
+    auto archive = root / "out.trance";
+
+    std::string error;
+    bool ok = export_session_archive((root / "s.session.json").string(), archive.string(), error);
+    check(ok, "export_session_archive succeeds for a scan theme");
+    if (!ok) {
+      std::cout << "  (unexpected) " << error << "\n";
+      return;
+    }
+
+    std::set<std::string> members;
+    mz_zip_archive zip{};
+    if (!mz_zip_reader_init_file(&zip, archive.string().c_str(), 0)) {
+      check(false, "archive is readable as a zip");
+      return;
+    }
+    for (mz_uint i = 0; i < mz_zip_reader_get_num_files(&zip); ++i) {
+      mz_zip_archive_file_stat stat{};
+      if (mz_zip_reader_file_stat(&zip, i, &stat)) {
+        members.insert(stat.m_filename);
+      }
+    }
+    mz_zip_reader_end(&zip);
+
+    check(members.count("session.json") == 1, "archive holds session.json at its root");
+    check(members.count("media/a.png") == 1, "archive includes scan-derived media");
+    check(members.count("media/nested/b.png") == 1, "archive includes nested scan-derived media");
+  }
+
+  // The scan sidecar still suppresses the expanded lists on save (spec sec 5), so the
+  // root-relative expansion above must not leak explicit image_path entries into the
+  // archived session.json -- reloading it re-derives them from `scan`.
+  void test_scan_theme_saves_as_scan_key_only()
+  {
+    auto root = make_scan_session("scan_save");
+    SessionJsonSidecar sidecar;
+    auto session = load_session_json((root / "s.session.json").string(), root.string(), sidecar);
+    save_session_json(session, (root / "out.session.json").string(), root.string(), sidecar);
+
+    auto saved = read_file(root / "out.session.json");
+    check(saved.find("\"scan\"") != std::string::npos, "saved scan theme re-emits the scan key");
+    check(saved.find("image_path") == std::string::npos,
+          "saved scan theme omits the expanded image list");
+  }
+
 } // namespace
 
 int main()
@@ -395,6 +504,9 @@ int main()
   test_future_version_is_error();
   test_system_json_round_trip();
   test_pattern_slug_assigned_on_save_without_sidecar();
+  test_scan_expands_to_root_relative_paths();
+  test_archive_includes_scan_derived_media();
+  test_scan_theme_saves_as_scan_key_only();
 
   if (g_fail) {
     std::cout << g_fail << " check(s) failed\n";
