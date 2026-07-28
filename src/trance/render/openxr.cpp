@@ -584,8 +584,17 @@ void OpenXrRenderer::render(const std::function<void(State)>& render_fn)
 
   XrSwapchainImageReleaseInfo release_info{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
   for (int eye = 0; eye < acquired; ++eye) {
-    xr_check(_instance, xrReleaseSwapchainImage(_swapchain[eye], &release_info),
-             "xrReleaseSwapchainImage");
+    if (!xr_check(_instance, xrReleaseSwapchainImage(_swapchain[eye], &release_info),
+                  "xrReleaseSwapchainImage")) {
+      // FATAL, same reasoning as the wait failure above: an image that failed to
+      // release is still owned by the app, so that swapchain slot is permanently
+      // consumed and subsequent acquires would eventually wedge
+      // (XR_ERROR_CALL_ORDER_INVALID) with the view black forever. Submitting a quad
+      // sourced from an unreleased image is also invalid usage -- so drop the layers
+      // and end the (already begun) frame layerlessly, then let update() exit cleanly.
+      _lost = true;
+      eyes_ready = false;
+    }
   }
   if (!eyes_ready) {
     end_info.layerCount = 0;
