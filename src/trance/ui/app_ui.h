@@ -13,9 +13,14 @@
 // One window ("trance", top-left) with collapsing sections:
 //   - Status: fps / themes / bed summary, reused from the same accessors
 //     draw_debug_overlay() uses (ThemeBank::debug_snapshot, Program::entrainment).
-//   - Visuals: the 8 built-ins + the program's custom patterns; clicking forces one
-//     immediately via Director::force_builtin_visual / force_pattern_from_source
-//     (the same plumbing --visual/--pattern use).
+//   - Visuals: the 8 built-ins (force-now button + a read-only expander showing the
+//     v3 grammar source, with Copy -- the modding-language reference) and the active
+//     program's custom patterns (editable name + source, live patternv3::parse lint,
+//     Apply/Force now/Remove, "+ New pattern"). Forcing goes through
+//     Director::force_builtin_visual / force_pattern_from_source (the same plumbing
+//     --visual/--pattern use); Apply fires on_program_change so Director re-parses.
+//     Custom-pattern edits land in the proto's name/source_text, which Save writes out
+//     as patterns/<slug>.pattern sidecars -- no extra persistence plumbing.
 //   - Program: live edit of the ACTIVE program (global fps, per-visual-type weights,
 //     text/spiral colours). Mutates the in-memory session proto in place, then fires
 //     on_program_change so ThemeBank/Director pick it up.
@@ -138,6 +143,10 @@ private:
   void draw_overlay_section();
   void draw_entrainment_section(Audio* audio);
   void draw_system_section();
+  // First "custom_N" not already used by a custom_visual_pattern in `program`.
+  // Duplicate names are a load-time error (session_json.cpp), so "+ New pattern"
+  // has to seed a name that cannot collide.
+  static std::string unique_pattern_name(const trance_pb::Program& program);
   // Save (with sidecar) to `path`, recording a transient status line either way.
   void save_session_to(const std::string& path);
   // Persist the System proto back to _system_path, recording a transient status line.
@@ -161,6 +170,15 @@ private:
   // Last force_pattern_from_source() parse error, shown inline in the Visuals section
   // until the next click. Empty when nothing failed.
   std::string _last_pattern_error;
+  // Per-custom-pattern-row lint, keyed by row index: "" = OK, else the patternv3
+  // "line:col: message" (or a duplicate/empty-name complaint). Cached so parse only
+  // runs when a row's name/source actually changed, not every frame; invalidated by
+  // erasing the row's entry, and cleared wholesale when row indices shift.
+  std::map<int, std::string> _pattern_lint;
+  // The program _pattern_lint's row indices refer to; a change means the active
+  // program switched under us and every cached verdict describes the wrong pattern.
+  // Compared only for identity -- never dereferenced.
+  const trance_pb::Program* _pattern_lint_program = nullptr;
 
   // Every image path ever seen per theme this run, in first-seen order, so an
   // unchecked image (removed from Theme::image_path) can be re-checked within the

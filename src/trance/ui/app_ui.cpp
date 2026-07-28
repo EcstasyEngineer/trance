@@ -5,9 +5,13 @@
 #include <trance/media/audio.h>
 #include <trance/runtime_state.h>
 #include <trance/theme_bank.h>
+#include <trance/visual/builtin_patterns.h>
 #include <trance/visual/builtin_visuals.h>
+#include <trance/visual/pattern_parser_v3.h>
 #include <algorithm>
+#include <cfloat>
 #include <cstdio>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -16,6 +20,7 @@
 #include <common/trance.pb.h>
 #include <imgui.h>
 #include <imgui-SFML.h>
+#include <imgui_stdlib.h>
 #include <SFML/Graphics.hpp>
 #pragma warning(pop)
 
@@ -197,33 +202,201 @@ void AppUi::draw_visuals_section(Director& director)
 {
   ImGui::TextUnformatted("Built-ins (click to force now):");
   for (const auto& visual : builtin_visuals()) {
+    ImGui::PushID(static_cast<int>(visual.type));
     if (ImGui::Button(visual.name)) {
       director.force_builtin_visual(visual.type);
     }
+    ImGui::SameLine();
+    // Built-in sources are compile-time constants (builtin_patterns_v3.cpp) -- shown
+    // read-only, as the modding-language reference for writing a custom pattern. Copy
+    // is the intended path to editing one: paste into a new custom pattern below.
+    if (ImGui::TreeNode("source")) {
+      // Returned by value; ReadOnly means InputTextMultiline never writes through the
+      // pointer, so handing it this frame-local buffer is safe.
+      std::string source = builtin::pattern_source_v3(visual.type);
+      if (ImGui::Button("Copy")) {
+        ImGui::SetClipboardText(source.c_str());
+      }
+      ImGui::SameLine();
+      ImGui::TextDisabled("%s", visual.blurb);
+      ImGui::InputTextMultiline("##builtin_source", &source, ImVec2(-FLT_MIN, 180.f),
+                                ImGuiInputTextFlags_ReadOnly);
+      ImGui::TreePop();
+    }
+    ImGui::PopID();
   }
 
   ImGui::Separator();
-  ImGui::TextUnformatted("Custom patterns (this program; click to force now):");
-  const auto& custom = director.program().custom_visual_pattern();
-  if (custom.empty()) {
+  ImGui::TextUnformatted("Custom patterns (this program):");
+  // Editing needs the MUTABLE active program. When the playlist resolves to the
+  // built-in default (no program_map entry) there is nothing in the session to edit,
+  // so fall back to the read-only force-now list off Director's const view.
+  trance_pb::Program* program = _active_program ? _active_program() : nullptr;
+  if (!program) {
+    ImGui::TextDisabled("(active program is the built-in default -- not editable)");
+    for (const auto& pattern : director.program().custom_visual_pattern()) {
+      if (!pattern.enabled()) {
+        continue;
+      }
+      ImGui::PushID(pattern.name().c_str());
+      if (ImGui::Button(pattern.name().c_str())) {
+        _last_pattern_error =
+            director.force_pattern_from_source(pattern.source_text(), pattern.name());
+      }
+      ImGui::PopID();
+    }
+    if (!_last_pattern_error.empty()) {
+      ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "parse error: %s",
+                         _last_pattern_error.c_str());
+    }
+    return;
+  }
+
+  // Row indices (the lint cache key) only mean anything relative to one program: a
+  // playlist switch re-points _active_program at a different program whose row 0 is a
+  // different pattern, so a kept verdict would describe the wrong pattern. Drop them.
+  // The rows' ImGui IDs are per-index too, so an edit active across such a switch
+  // lands in the new program's row -- rare (it needs a playlist advance mid-keystroke)
+  // and self-correcting on defocus, so it is not worth an imgui_internal.h dependency
+  // to force-clear the active ID here.
+  if (program != _pattern_lint_program) {
+    _pattern_lint_program = program;
+    _pattern_lint.clear();
+  }
+
+  if (ImGui::Button("+ New pattern")) {
+    auto* added = program->add_custom_visual_pattern();
+    added->set_name(unique_pattern_name(*program));
+    // Minimal valid v3 source: one pattern span with one cadence drawing a concept
+    // image. Named to match so `pattern NAME` and the proto name agree on sight
+    // (Director carries the proto's name as authoritative either way).
+    added->set_source_text("pattern " + added->name() + " for 1024f {\n"
+                           "  every 64f { image concept zoom (curve 0 -> 0.375) }\n"
+                           "  spiral speed 2\n"
+                           "}\n");
+    added->set_random_weight(1);
+    added->set_enabled(true);
+    // New rows compile immediately so the lint line starts out truthful, and the
+    // pattern joins the shuffle without a separate Apply click.
+    if (_on_program_change) {
+      _on_program_change();
+    }
+  }
+  if (!program->custom_visual_pattern_size()) {
     ImGui::TextDisabled("(none in this program)");
   }
-  for (const auto& pattern : custom) {
-    if (!pattern.enabled()) {
-      continue;
+
+  // Index of a row the user asked to remove, applied after the loop: erasing from the
+  // repeated field mid-iteration would invalidate the row we are still drawing.
+  int remove_index = -1;
+  for (int i = 0; i < program->custom_visual_pattern_size(); ++i) {
+    auto* pattern = program->mutable_custom_visual_pattern(i);
+    // By index, not by name: the name is editable, and an ID that changes mid-edit
+    // would tear down the InputText that is being typed into.
+    ImGui::PushID(i);
+    ImGui::SetNextItemWidth(200.f);
+    if (ImGui::InputText("##name", pattern->mutable_name())) {
+      // Duplicate names are a load-time error (session_json.cpp), so the lint has to
+      // catch them here rather than at Save. The WHOLE cache goes, not just this row:
+      // duplicate-ness is a property of the entire list, so renaming a to b must also
+      // re-lint the row already called b (and renaming away from a collision must
+      // clear the other row's error).
+      _pattern_lint.clear();
     }
-    ImGui::PushID(pattern.name().c_str());
-    if (ImGui::Button(pattern.name().c_str())) {
+    ImGui::SameLine();
+    if (ImGui::Button("Apply")) {
+      // Re-parse through Director (rebuild_custom_patterns) so the edit reaches the
+      // live shuffle. Lint below already told the user whether this will take.
+      if (_on_program_change) {
+        _on_program_change();
+      }
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!pattern->enabled());
+    if (ImGui::Button("Force now")) {
       // Same path force_pattern_from_source always uses (director.cpp): on a parse
       // failure it returns the parser diagnostic and leaves the current visual
       // untouched. Surfaced inline rather than only to stderr since this is an
       // interactive action.
-      _last_pattern_error = director.force_pattern_from_source(pattern.source_text(), pattern.name());
+      _last_pattern_error =
+          director.force_pattern_from_source(pattern->source_text(), pattern->name());
     }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Remove")) {
+      remove_index = i;
+    }
+
+    if (ImGui::InputTextMultiline("##source", pattern->mutable_source_text(),
+                                  ImVec2(-FLT_MIN, 160.f))) {
+      _pattern_lint.erase(i);
+    }
+
+    // Live lint: patternv3::parse is pure and cheap enough to run on edit, but not
+    // per frame for every row -- cache the diagnostic and only re-parse when the row
+    // changed (or was never linted). Parsed with locked_period_frames 0: the beat
+    // period is Director's to supply, and a `locked` length would report a spurious
+    // error here, so treat that as the one case the real compile decides.
+    auto lint = _pattern_lint.find(i);
+    if (lint == _pattern_lint.end()) {
+      std::string message;
+      for (int j = 0; j < program->custom_visual_pattern_size(); ++j) {
+        if (j != i && program->custom_visual_pattern(j).name() == pattern->name()) {
+          message = "duplicate name '" + pattern->name() + "' (a load-time error)";
+          break;
+        }
+      }
+      if (message.empty() && pattern->name().empty()) {
+        message = "empty name (a load-time error)";
+      }
+      if (message.empty()) {
+        auto parsed = patternv3::parse(pattern->source_text(), 0);
+        if (!parsed.ok) {
+          message = parsed.error;
+        }
+      }
+      lint = _pattern_lint.emplace(i, std::move(message)).first;
+    }
+    if (lint->second.empty()) {
+      ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "OK");
+    } else {
+      ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", lint->second.c_str());
+    }
+    ImGui::Separator();
     ImGui::PopID();
   }
+
+  if (remove_index >= 0) {
+    // No swap-and-pop: order is user-visible here, and DeleteSubrange keeps it.
+    program->mutable_custom_visual_pattern()->DeleteSubrange(remove_index, 1);
+    // Every cached diagnostic is keyed by row index, and the rows just shifted.
+    _pattern_lint.clear();
+    if (_on_program_change) {
+      _on_program_change();
+    }
+  }
+
   if (!_last_pattern_error.empty()) {
     ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "parse error: %s", _last_pattern_error.c_str());
+  }
+}
+
+std::string AppUi::unique_pattern_name(const trance_pb::Program& program)
+{
+  // Duplicate custom_visual_pattern names are a hard load-time error
+  // (session_json.cpp), so a new row must not collide with an existing one.
+  for (int n = 1;; ++n) {
+    std::string candidate = "custom_" + std::to_string(n);
+    bool taken = false;
+    for (const auto& existing : program.custom_visual_pattern()) {
+      if (existing.name() == candidate) {
+        taken = true;
+        break;
+      }
+    }
+    if (!taken) {
+      return candidate;
+    }
   }
 }
 
