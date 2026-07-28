@@ -154,8 +154,8 @@ make trance vanish instantly without killing the process**):
   the click-through hints), so no stuck click-through state can survive a hide/show cycle.
 - **Shift+F11 semantics (revised):** the hotkey is now a pure hide/show *toggle* — first
   press hides everything instantly, next press restores. It no longer shows the control
-  panel and no longer quits on a second press; quitting is the tray's Quit item, the window
-  close button, or the F2/Escape panel's Quit button. One carve-out: in hotkey-only
+  panel and no longer quits on a second press; quitting is the Escape key, the tray's Quit
+  item, the window close button, or the F2 panel's Quit button. One carve-out: in hotkey-only
   configurations where none of those quit surfaces exist (Linux VR, or Linux fullscreen
   after a failed ImGui init — no tray, no panel), a press while already hidden quits
   instead of restoring, so an orderly exit always remains reachable.
@@ -185,8 +185,8 @@ Status:
   `ok visual=<name> bed=<on|off> overlay=<on|off> hidden=<on|off> uptime=<seconds> themes=<a|b|c|d>`
 
 Debug/validation (same line protocol, not part of the settings surface proper):
-- **`ui on|off`** — show/hide the F2 ImGui panels remotely (same state the F2/Escape keys
-  toggle; `ui on` also un-hides and disengages the overlay, since a panel on an invisible
+- **`ui on|off`** — show/hide the F2 ImGui panels remotely (same state the F2 key
+  toggles; `ui on` also un-hides and disengages the overlay, since a panel on an invisible
   or click-through window is unreachable); `err` in modes with no UI (VR/export — the
   panel exists in `--overlay` runs, where `ui on` disengages the overlay to reach it).
 - **`screenshot FILE.png`** — dump the next fully-composited rendered frame (scene + UI,

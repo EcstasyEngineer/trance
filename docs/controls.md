@@ -10,12 +10,14 @@ Work while the trance window has focus (realtime mode):
 
 | Key | Action |
 |---|---|
-| **Escape** or **F2** | Toggle the in-app control panel (ImGui) |
+| **Escape** | Quit trance |
+| **F2** | Toggle the in-app control panel (ImGui) |
 | **F1** | Toggle the debug overlay (visual/cycler/theme state) |
 | **M** | Toggle audio mute |
 
-Escape does **not** quit. Quitting is deliberate: close the window, the tray menu's
-**Quit**, or the control panel's **Quit trance** button.
+Escape quits outright; the other ways out are closing the window, the tray menu's
+**Quit**, and the control panel's **Quit trance** button. While a control-panel text
+field is being edited, Escape cancels that edit instead of quitting.
 
 ## Global hide-everything hotkey — Shift+F11
 
