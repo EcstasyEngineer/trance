@@ -100,6 +100,40 @@ namespace
       float v = std::stof(_src.substr(ds, _i - ds));
       return neg ? -v : v;
     }
+    // As number_lit, but STOPS at a `..` range separator instead of swallowing it: plain
+    // number_lit eats digits and dots greedily, so `0.5..1` would scan "0.5.." as one
+    // malformed literal. Used only by the `show A..B` window (E1) and `env`'s frame/fraction
+    // operands, where a `..` may legitimately follow a fractional number.
+    float range_number_lit()
+    {
+      skip();
+      const std::size_t start = _i;
+      bool neg = false;
+      if (_i < _src.size() && _src[_i] == '-') {
+        neg = true;
+        ++_i;
+      }
+      const std::size_t ds = _i;
+      bool seen_dot = false;
+      while (_i < _src.size()) {
+        const char ch = _src[_i];
+        if (std::isdigit(static_cast<unsigned char>(ch))) {
+          ++_i;
+          continue;
+        }
+        // A dot only continues the number when it is NOT the start of a `..` separator and
+        // the number has no decimal point yet.
+        if (ch == '.' && !seen_dot && !(_i + 1 < _src.size() && _src[_i + 1] == '.')) {
+          seen_dot = true;
+          ++_i;
+          continue;
+        }
+        break;
+      }
+      if (_i == ds) throw ParseError{"expected a number", start};
+      float v = std::stof(_src.substr(ds, _i - ds));
+      return neg ? -v : v;
+    }
     void expect(char c)
     {
       skip();
@@ -198,6 +232,12 @@ namespace
   }
   std::string fnum(float v) { return std::to_string(v); }
 
+  // Effect::split values, mirroring VisualControl::SplitType (api.h). Duplicated as a plain
+  // constant rather than included: this TU is deliberately free of api.h, which drags SFML and
+  // would break the headless v3_grammar_test target (see CMakeLists).
+  constexpr uint32_t kSplitWord = 0;
+  constexpr uint32_t kSplitLine = 1;
+
   Slot content_to_slot(const std::string& w, std::size_t at)
   {
     if (w == "concept") return Slot::Primary;
@@ -241,7 +281,10 @@ namespace
     std::string _root_name;
 
     // Clock scopes (patterns AND named cadences): `this`/`over NAME` resolve here.
-    struct Scope { std::string name; std::string cid; };
+    // `len` is the scope's span in frames (0 = unknown), carried so the frame-denominated
+    // forms of `show`/`env` (E1/E2) can normalize against the enclosing clock's length and
+    // reject a window that overruns it -- a compile-time read, no runtime change.
+    struct Scope { std::string name; std::string cid; uint32_t len = 0; };
     std::vector<Scope> _clocks;
     // Register scopes (patterns ONLY): bare reg names qualify against the top.
     std::vector<Scope> _regs;
@@ -279,6 +322,9 @@ namespace
 
     // The top clock id (`this`). Used when a modulator has no `over`.
     std::string this_clock() const { return _clocks.empty() ? std::string() : _clocks.back().cid; }
+    // The top clock's span in frames (0 when unknown). Read only by `show`/`env` (E1/E2) to
+    // resolve frame-denominated windows against the clock they ride.
+    uint32_t this_len() const { return _clocks.empty() ? 0u : _clocks.back().len; }
 
     // Resolve `over NAME` (or `this` when over_name empty) to a minted clock id.
     std::string resolve_clock(const std::string& over_name, std::size_t at)
@@ -497,10 +543,134 @@ namespace
           else if (dir == "out") rs.alpha = "(1 - " + clk + ".progress)";
           else if (dir == "inout") rs.alpha = "(1 - abs(2 * " + clk + ".progress - 1))";
           else throw ParseError{"expected fade in|out|inout", at};
+        } else if (a == "show") {
+          _c.word();
+          parse_show(rs);
+        } else if (a == "env") {
+          _c.word();
+          parse_env(rs);
         } else {
           break;
         }
       }
+    }
+
+    // E1 `show A..B` / `show [expr]` -- a VISIBILITY WINDOW on any draw statement. Parser-only
+    // sugar: it fills `RenderStmt.when`, which render_eval already tests every frame before
+    // dispatching a draw (render_eval.cpp), ANDed with whatever gate is already there. Zero
+    // runtime change.
+    //
+    //   show 0.5..1    fraction of the enclosing clock -> `clk.progress >= A and clk.progress < B`
+    //   show 0f..8f    frame-denominated on that same clock -> `clk.frame >= A and clk.frame < B`
+    //   show [expr]    raw condition escape (this/self substituted like any [expr])
+    //
+    // Frames and fractions are never mixed within one window: `0f..0.5` is a parse error, since
+    // the two denominations answer different questions and silently coercing one would be the
+    // kind of guess this grammar refuses to make elsewhere (see `beats` with no bed).
+    void parse_show(RenderStmt& rs)
+    {
+      const std::size_t at = _c.pos();
+      std::string cond;
+      if (_c.next_is_bracket()) {
+        cond = subst_this(_c.bracket_expr());
+      } else {
+        if (!_c.next_is_digit()) {
+          throw ParseError{"expected a `show` window (A..B, Af..Bf or [expr])", at};
+        }
+        const float a = _c.range_number_lit();
+        const bool a_frames = _c.peek_word() == "f";
+        if (a_frames) _c.word();
+        _c.expect('.');
+        _c.expect('.');
+        const std::size_t bat = _c.pos();
+        const float b = _c.range_number_lit();
+        const bool b_frames = _c.peek_word() == "f";
+        if (b_frames) _c.word();
+        if (a_frames != b_frames) {
+          throw ParseError{"`show` window mixes frames and fractions (write both as Nf, or both "
+                           "as fractions)",
+                           at};
+        }
+        if (b <= a) throw ParseError{"`show` window end must be greater than its start", bat};
+        if (a < 0.f) throw ParseError{"`show` window start must be >= 0", at};
+        const std::string clk = this_clock();
+        if (a_frames) {
+          const uint32_t len = this_len();
+          if (len != 0 && b > float(len)) {
+            throw ParseError{"`show` window ends at " + fnum(b) + "f, past the enclosing clock's " +
+                                 std::to_string(len) + "f length",
+                             bat};
+          }
+          cond = "(" + clk + ".frame >= " + fnum(a) + " and " + clk + ".frame < " + fnum(b) + ")";
+        } else {
+          if (b > 1.f) throw ParseError{"a fractional `show` window must end at <= 1", bat};
+          cond = "(" + clk + ".progress >= " + fnum(a) + " and " + clk + ".progress < " + fnum(b) +
+              ")";
+        }
+      }
+      rs.when = rs.when.empty() ? cond : ("(" + rs.when + ") and " + cond);
+    }
+
+    // E2 `env in X [hold Y] out Z` -- a piecewise-linear ALPHA ENVELOPE: rise 0->1 over `in`,
+    // flat 1 over `hold`, fall 1->0 over `out`, then 0 for the remainder of the clock. Omitting
+    // `hold` gives a triangle; the remainder is a true ABSENCE (alpha exactly 0), which is what
+    // distinguishes `env` from `fade inout`'s whole-clock triangle.
+    //
+    // Parser-only sugar of the SAME class as `fade in/out/inout` (§4.3): it lowers to one
+    // compile-time alpha [expr] built from nested min/max over `this.progress`, all of which
+    // render_eval's evaluator already implements. Zero runtime change.
+    //
+    // Operands are frames (`16f`) or fractions of the clock (`0.25`); frames are normalized
+    // against the enclosing clock's length at parse time. in+hold+out must fit the clock.
+    void parse_env(RenderStmt& rs)
+    {
+      const std::size_t at = _c.pos();
+      const uint32_t len = this_len();
+      // One operand: `Nf` (needs a known clock length to normalize) or a bare fraction.
+      auto segment = [&](const char* what) -> float {
+        const std::size_t sat = _c.pos();
+        if (!_c.next_is_digit()) throw ParseError{std::string("expected an `env ") + what +
+                                                      "` length (Nf or a fraction)",
+                                                  sat};
+        const float v = _c.range_number_lit();
+        if (_c.peek_word() == "f") {
+          _c.word();
+          if (len == 0)
+            throw ParseError{std::string("`env ") + what +
+                                 " " + fnum(v) + "f` needs an enclosing clock with a known length",
+                             sat};
+          return v / float(len);
+        }
+        if (v < 0.f || v > 1.f)
+          throw ParseError{std::string("fractional `env ") + what + "` must be within 0..1", sat};
+        return v;
+      };
+
+      expect_word("in");
+      const float rise = segment("in");
+      float hold = 0.f;
+      if (_c.peek_word() == "hold") {
+        _c.word();
+        hold = segment("hold");
+      }
+      expect_word("out");
+      const float fall = segment("out");
+
+      if (rise <= 0.f || fall <= 0.f)
+        throw ParseError{"`env` needs a non-zero `in` and `out`", at};
+      // The whole envelope must fit inside one turn of the clock -- an overrun would silently
+      // clip the release (or the hold) rather than doing what the author wrote.
+      if (rise + hold + fall > 1.0001f)
+        throw ParseError{"`env in`+`hold`+`out` overruns the enclosing clock's length", at};
+
+      const std::string clk = this_clock();
+      const std::string p = clk + ".progress";
+      // rise:  p / rise                      clamped above at 1 by the min
+      // fall:  (end - p) / fall              clamped above at 1 by the min, below at 0 by the max
+      // Together: max(0, min(p/rise, (end-p)/fall, 1)) -- the trapezoid, zero past `end`.
+      const float end = rise + hold + fall;
+      rs.alpha = "max(0, min(min(" + p + " / " + fnum(rise) + ", (" + fnum(end) + " - " + p +
+          ") / " + fnum(fall) + "), 1))";
     }
 
     // Parse one statement inside a pattern/cadence body. Schedule effects (image pulls, copies)
@@ -589,12 +759,19 @@ namespace
       if (kw == "anim") {
         _c.word();
         const std::size_t cat = _c.pos();
+        const std::string content = _c.word();
         Effect e = effect(Effect::Kind::Anim);
-        e.slot = content_to_slot(_c.word(), cat);
+        if (content == "alternate") {
+          // E4 on the standalone load: ping-pong WHICH animation the streamer plays.
+          e.slot_reg = parse_alternate(sink);
+        } else {
+          e.slot = content_to_slot(content, cat);
+        }
         sink.push_back(e);
         return;
       }
-      if (kw == "image" || kw == "word" || kw == "caption" || kw == "subtext" || kw == "draw") {
+      if (kw == "image" || kw == "word" || kw == "line" || kw == "caption" || kw == "subtext" ||
+          kw == "draw") {
         parse_draw(span, sink);
         return;
       }
@@ -696,6 +873,42 @@ namespace
       _c.expect('}');
     }
 
+    // E4 `alternate [chance P]` -- a CONTENT WORD (beside concept/reward/runtime) giving a
+    // draw DETERMINISTIC A/B theme ping-pong instead of a random or pinned side.
+    //
+    // Parser-only sugar: it mints a hidden scalar register private to this statement, emits an
+    // `Effect{Kind::Toggle}` on it fired BEFORE the draw's own pull, and points the pull's
+    // `Effect::slot_reg` at that register. `resolved_slot` (compiled_visual.cpp) already reads
+    // slot_reg as a primary/alternate selector, and Toggle already exists -- zero runtime change.
+    //
+    //   alternate            flips every firing: A B A B ...
+    //   alternate chance P   the toggle only fires with probability P per pull, so the side
+    //                        HOLDS between flips. At P=0.5 each pull is an independent coin
+    //                        flip over the two sides -- i.e. exactly uniform-random theme per
+    //                        image, but as a stateful walk rather than a per-fire re-roll.
+    //
+    // The register is statement-scoped by construction (a fresh minted name per call), so two
+    // alternating draws in one pattern keep independent phase. A named/shared form
+    // (`alternate as NAME`) is deliberately NOT implemented this pass.
+    //
+    // Returns the qualified register name, and appends the Toggle (plus its chance Roll, if
+    // any) to `pre` -- which the caller must push into the effect list ahead of the draw.
+    std::string parse_alternate(std::vector<Effect>& pre)
+    {
+      const std::string reg = "_alt" + std::to_string(_idc++);
+      Effect toggle = effect(Effect::Kind::Toggle);
+      toggle.target = reg;
+      if (_c.peek_word() == "chance") {
+        // Reuse the exact `chance P` surface draws already use: a 100-bucket Roll plus a
+        // Guard::Ge on the gated effect -- here the gated effect is the toggle itself, so the
+        // flip (not the draw) is what becomes probabilistic.
+        Effect roll = parse_chance(toggle);
+        if (!roll.target.empty()) pre.push_back(roll);
+      }
+      pre.push_back(toggle);
+      return reg;
+    }
+
     void parse_draw(uint32_t /*span*/, std::vector<Effect>& sink)
     {
       const std::size_t at = _c.pos();
@@ -724,7 +937,22 @@ namespace
 
       const std::size_t cat = _c.pos();
       const std::string content = _c.word();
-      const Slot slot = content_to_slot(content, cat);
+      // `alternate` (E4) is a content word only where a slot is resolved at FIRE time from a
+      // register: image pulls and the animation load. Text/subtext take one of the three
+      // fixed content words.
+      std::vector<Effect> pre;  // toggle (+ its chance roll) fired before the draw's own pull
+      std::string alt_reg;
+      Slot slot = Slot::None;
+      if (content == "alternate") {
+        if (kw != "image") {
+          throw ParseError{"`alternate` content is available on `image` draws (and the standalone "
+                           "`anim`); " + kw + " takes concept|reward|runtime",
+                           cat};
+        }
+        alt_reg = parse_alternate(pre);
+      } else {
+        slot = content_to_slot(content, cat);
+      }
 
       if (kw == "image") {
         std::string reg = "cur";
@@ -735,6 +963,7 @@ namespace
         const std::string qreg = qualify_reg(reg, at);
         Effect e = effect(Effect::Kind::Image);
         e.slot = slot;
+        e.slot_reg = alt_reg;
         e.target = qreg;
         _written.insert(qreg);
         RenderStmt rs;
@@ -742,8 +971,9 @@ namespace
         rs.image_reg = qreg;
         parse_params(rs);
         std::vector<Effect> extra;  // anim load / anim-gate pulse
-        parse_anim(rs, slot, extra);
+        parse_anim(rs, slot, alt_reg, extra);
         Effect roll = parse_chance(e);
+        for (auto& x : pre) sink.push_back(x);
         if (!roll.target.empty()) sink.push_back(roll);
         sink.push_back(e);
         for (auto& x : extra) sink.push_back(x);
@@ -751,20 +981,23 @@ namespace
         return;
       }
 
-      // word / caption / subtext: the text path. (Text content is a single live slot, not a
-      // register, so text cannot crossfade/stash today -- that is the one deferred runtime
+      // word / line / caption / subtext: the text path. (Text content is a single live slot, not
+      // a register, so text cannot crossfade/stash today -- that is the one deferred runtime
       // extension; see docs/spec-grammar-v3.md Ext#4.)
-      Effect::Kind ek = kw == "word" ? Effect::Kind::Text
-                        : kw == "subtext" ? Effect::Kind::Subtext
-                                          : Effect::Kind::SmallSub;
+      Effect::Kind ek = (kw == "word" || kw == "line") ? Effect::Kind::Text
+                        : kw == "subtext"              ? Effect::Kind::Subtext
+                                                       : Effect::Kind::SmallSub;
       Effect e = effect(ek);
       e.slot = slot;
       if (kw == "caption") e.force = true;
+      // E3: `line` IS `word` with the whole-phrase split -- change_text already implements
+      // SPLIT_LINE (api.cpp), the field just had no author surface until now.
+      e.split = kw == "line" ? kSplitLine : kSplitWord;
       RenderStmt rs;
-      rs.op = kw == "word" ? RenderStmt::Op::Text
-              : kw == "subtext" ? RenderStmt::Op::Subtext
-                                : RenderStmt::Op::SmallText;
-      if (kw == "word") {
+      rs.op = (kw == "word" || kw == "line") ? RenderStmt::Op::Text
+              : kw == "subtext"              ? RenderStmt::Op::Subtext
+                                             : RenderStmt::Op::SmallText;
+      if (kw == "word" || kw == "line") {
         rs.origin = "0.75";
         rs.zoom = "0.75";
       } else if (kw == "subtext") {
@@ -779,7 +1012,10 @@ namespace
       Effect roll = parse_chance(e);
       if (!roll.target.empty()) {
         sink.push_back(roll);
-        rs.when = e.guard_reg + " >= 1";  // draw the text only on a chance hit (it flashes)
+        // Draw the text only on a chance hit (it flashes). ANDed rather than assigned so a
+        // `show` window already lowered into `when` by parse_params survives (E1).
+        const std::string hit = e.guard_reg + " >= 1";
+        rs.when = rs.when.empty() ? hit : ("(" + rs.when + ") and " + hit);
       }
       sink.push_back(e);
       push_render(rs);
@@ -787,13 +1023,17 @@ namespace
 
     // `anim` (always animate) / `anim every Nth` (animate every Nth fire, gated by a pulse).
     // Adds the change-animation load (+ pulse) to `extra`; sets has_anim/anim_gate on the draw.
-    void parse_anim(RenderStmt& rs, Slot slot, std::vector<Effect>& extra)
+    // `alt_reg` non-empty => the draw's content is `alternate` (E4), so the animation load
+    // follows the SAME toggle register the image pull does rather than a fixed slot.
+    void parse_anim(RenderStmt& rs, Slot slot, const std::string& alt_reg,
+                    std::vector<Effect>& extra)
     {
       if (_c.peek_word() != "anim") return;
       _c.word();
       rs.has_anim = true;
       Effect load = effect(Effect::Kind::Anim);
       load.slot = slot;
+      load.slot_reg = alt_reg;
       extra.push_back(load);
       if (_c.peek_word() == "every") {
         _c.word();
@@ -965,7 +1205,7 @@ namespace
           segname = clkname + buf;
         }
         const std::string cid = new_id();
-        _clocks.push_back({segname, cid});
+        _clocks.push_back({segname, cid, len});
         _regs.push_back({segname, cid});
 
         _c.seek(body_open);
@@ -1050,7 +1290,7 @@ namespace
         _warnings.push_back(loc(lat) + ": cadence " + std::to_string(len) +
                             " does not divide span " + std::to_string(span));
       }
-      _clocks.push_back({clkname, cid});
+      _clocks.push_back({clkname, cid, len});
       std::vector<Effect> leaf_effects;
       std::vector<Node> nested;  // nested patterns inside a cadence are uncommon; supported anyway
       _c.expect('{');
@@ -1155,7 +1395,7 @@ namespace
       dur_min = to_ticks(dur_min);
       dur_max = to_ticks(dur_max);
 
-      _clocks.push_back({clkname, cid});
+      _clocks.push_back({clkname, cid, span});
 
       std::vector<Effect> base_effects, burst_effects, enter_effects;
       std::vector<Node> nested;  // `pattern`/`every` inside base/burst blocks, run alongside
@@ -1249,7 +1489,7 @@ namespace
       if (len == 0) throw ParseError{"pattern length must be > 0", nat};
 
       const std::string cid = new_id();
-      _clocks.push_back({name, cid});
+      _clocks.push_back({name, cid, len});
       _regs.push_back({name, cid});
 
       _c.expect('{');

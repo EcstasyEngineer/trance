@@ -172,12 +172,67 @@ using `audio` against it.
 signature -- NOT the `0..100` scale playlist `AudioEvent.volume` uses elsewhere in the engine.
 Worth remembering if you're used to authoring playlist audio events.
 
+## Windows, Envelopes, And Alternation
+
+Three params and one verb control *when* a layer is on and *which theme* it pulls from. All
+four are compile-time sugar over fields the runtime already evaluated -- they add vocabulary,
+not engine.
+
+**`show` -- when a layer paints.** Without it, a draw paints for the whole life of its pattern.
+Write the window as a slice of the enclosing clock, in frames, or as a raw condition:
+
+```text
+every 64f -> beat {
+  image concept
+  word reward show 0f..8f      # an 8-frame stab at the top of each cut
+  line concept show 0.5..1     # the second half only
+  caption runtime show [this.frame < 32]
+}
+```
+
+The window is ANDed onto whatever gating is already in play, so it composes with sequenced
+phases, `burst` blocks and `chance`. Frames and fractions can't be mixed inside one window
+(`show 0f..0.5` is an error), and a frame window that runs past its clock's length is an error
+too -- neither gets silently clamped.
+
+**`env` -- rise, hold, fall, then gone.** `fade inout` is a whole-clock triangle: it peaks for
+an instant and is never actually absent, so a layer beneath it never has the screen to itself.
+`env` gives you a real hold and a real hole:
+
+```text
+every 64f -> beat {
+  image concept anim                            # the animation runs the whole cut
+  image reward -> still env in 16f hold 16f out 16f
+}                                               # ...and the still is GONE for the last 16f
+```
+
+Operands are frames or fractions (`env in 0.25 out 0.25`); omit `hold` for a triangle that
+still has the absent tail. `in + hold + out` must fit the clock.
+
+**`line` -- whole phrases.** `word` puts one word on screen at a time; `line` puts the whole
+phrase up. Same content vocabulary, same params, same everything else.
+
+**`alternate` -- deterministic A/B.** `concept` pins theme A and `runtime` rolls a coin every
+firing. `alternate` ping-pongs A, B, A, B instead:
+
+```text
+every 48f { image alternate zoom (curve 0 -> 0.4) }
+every 8f  { image alternate chance 0.25 anim }   # holds a side, pivots occasionally
+```
+
+`alternate chance P` flips only with probability `P` per pull, so the theme *holds* between
+flips -- at `P = 0.5` that is a uniform-random side per image, and lower values read as
+"stay in this world for a while, then pivot." Each `alternate` statement keeps its own phase.
+It also works on the standalone animation load (`anim alternate`).
+
 ## Common Effects
 
 ```text
 image concept -> cur zoom (curve 0 -> 0.5) fade in
+image alternate chance 0.5 env in 16f hold 16f out 16f
 draw prev alpha 0.5 origin 0.25 zoom 0.75
-word reward
+word reward show 0f..8f
+line concept show 0.5..1
 caption concept
 subtext runtime
 spiral speed (curve 1 -> 4)

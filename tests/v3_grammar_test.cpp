@@ -676,6 +676,302 @@ pattern beat_locked for beats 8 {
           "audio error: unknown content word is a hard parse error naming the bad word");
   }
 
+  // 4n. E1 `show A..B` (§4.15): a visibility window on any draw statement. Lowers to
+  // `RenderStmt.when` -- already honored every frame by render_eval -- ANDed with (never
+  // replacing) whatever gate push_render/chance already put there. Parser-only, zero runtime
+  // change, so the assertions are on the lowered gate string AND on how many frames of a run
+  // it actually admits.
+  {
+    // Fraction form: the second half of each 64f beat.
+    auto pr = parse("pattern p for 64f { every 64f -> beat { word concept show 0.5..1 } }");
+    check(pr.ok, std::string("show fraction: parses") + (pr.ok ? "" : (" -- " + pr.error)));
+    if (pr.ok) {
+      const pattern::RenderStmt* t = nullptr;
+      for (const auto& st : pr.render_block)
+        if (st.op == pattern::RenderStmt::Op::Text) t = &st;
+      check(t && t->when.find(".progress >= 0.5") != std::string::npos &&
+                t->when.find(".progress < 1") != std::string::npos,
+            "show fraction: lowers to a progress-window condition on RenderStmt.when");
+      // The pattern-active gate push_render appends must SURVIVE -- a `show` that clobbered it
+      // would make a sequenced phase's draws paint outside their phase.
+      check(t && t->when.find(".active") != std::string::npos,
+            "show fraction: the enclosing pattern's .active gate is ANDed, not replaced");
+      if (t) {
+        pattern::NodeMap nm;
+        Cycler* c = pattern::compile(pr.root, pattern::MakeAction{}, nm);
+        pattern::Registers regs;
+        uint32_t on = 0;
+        for (uint32_t f = 0; f < 64; ++f) {
+          c->advance();
+          if (pattern::eval_cond_expr(t->when, regs, nm, c)) ++on;
+        }
+        delete c;
+        check(on == 32, "show fraction: `0.5..1` admits exactly half the 64f clock (got " +
+                            std::to_string(on) + ")");
+      }
+    }
+
+    // Frame-denominated form: the 8f stab the originals used for text.
+    auto prf = parse("pattern p for 64f { every 64f -> beat { word concept show 0f..8f } }");
+    check(prf.ok, std::string("show frames: parses") + (prf.ok ? "" : (" -- " + prf.error)));
+    if (prf.ok) {
+      const pattern::RenderStmt* t = nullptr;
+      for (const auto& st : prf.render_block)
+        if (st.op == pattern::RenderStmt::Op::Text) t = &st;
+      check(t && t->when.find(".frame") != std::string::npos,
+            "show frames: `0f..8f` lowers against the clock's .frame, not .progress");
+      if (t) {
+        pattern::NodeMap nm;
+        Cycler* c = pattern::compile(prf.root, pattern::MakeAction{}, nm);
+        pattern::Registers regs;
+        uint32_t on = 0;
+        for (uint32_t f = 0; f < 64; ++f) {
+          c->advance();
+          if (pattern::eval_cond_expr(t->when, regs, nm, c)) ++on;
+        }
+        delete c;
+        check(on == 8, "show frames: `0f..8f` admits exactly 8 frames of the 64f clock (got " +
+                           std::to_string(on) + ")");
+      }
+    }
+
+    // Raw `[expr]` escape: substituted for `this` like any other bracket expr.
+    auto pre = parse("pattern p for 64f { every 64f -> beat { image concept show [this.frame < 4] } }");
+    check(pre.ok, std::string("show expr: parses") + (pre.ok ? "" : (" -- " + pre.error)));
+    if (pre.ok) {
+      auto im = images(pre);
+      check(im.size() == 1 && im[0]->when.find("this") == std::string::npos &&
+                im[0]->when.find(".frame < 4") != std::string::npos,
+            "show expr: raw [expr] passes through with `this` substituted to the clock id");
+    }
+
+    // `show` composes with `chance` on a text draw: BOTH gates must survive (the chance guard
+    // used to be assigned over `when`, which would silently drop the window).
+    auto prc = parse("pattern p for 64f { every 64f -> beat { word concept show 0.5..1 chance 0.5 } }");
+    check(prc.ok, std::string("show+chance: parses") + (prc.ok ? "" : (" -- " + prc.error)));
+    if (prc.ok) {
+      const pattern::RenderStmt* t = nullptr;
+      for (const auto& st : prc.render_block)
+        if (st.op == pattern::RenderStmt::Op::Text) t = &st;
+      check(t && t->when.find(".progress >= 0.5") != std::string::npos &&
+                t->when.find("_chance") != std::string::npos,
+            "show+chance: the window AND the chance guard both survive in `when`");
+    }
+
+    // Error cases: a reversed window, mixed denominations, and a frame window that overruns
+    // the enclosing clock are all hard parse errors -- no silent clamp.
+    auto rev = parse("pattern p for 64f { every 64f { image concept show 1..0.5 } }");
+    check(!rev.ok, "show error: a window whose end <= its start is a hard parse error");
+
+    auto mixed = parse("pattern p for 64f { every 64f { image concept show 0f..0.5 } }");
+    check(!mixed.ok && mixed.error.find("frames and fractions") != std::string::npos,
+          "show error: mixing frames and fractions in one window is a hard parse error");
+
+    auto over = parse("pattern p for 128f { every 64f { image concept show 0f..128f } }");
+    check(!over.ok && over.error.find("64f") != std::string::npos,
+          "show error: a frame window past the enclosing clock's length names that length");
+
+    auto frac = parse("pattern p for 64f { every 64f { image concept show 0.5..2 } }");
+    check(!frac.ok, "show error: a fractional window ending past 1 is a hard parse error");
+  }
+
+  // 4o. E2 `env in X hold Y out Z` (§4.16): a piecewise-linear alpha envelope lowering to one
+  // compile-time min/max [expr] -- the SAME class as `fade in/out/inout`, zero runtime change.
+  // The load-bearing difference from `fade inout` is the true ABSENCE past `in+hold+out`:
+  // `fade inout` is a whole-clock triangle that never actually reaches zero except at the
+  // endpoints, so a layer beneath it is never alone on screen.
+  {
+    auto pr = parse("pattern p for 64f { every 64f -> beat { image reward env in 16f hold 16f out 16f } }");
+    check(pr.ok, std::string("env: parses") + (pr.ok ? "" : (" -- " + pr.error)));
+    if (pr.ok) {
+      auto im = images(pr);
+      check(im.size() == 1 && !im[0]->alpha.empty(),
+            "env: lowers to an alpha [expr] on the draw (not a new RenderStmt field)");
+      if (im.size() == 1) {
+        // Sample the envelope across the clock: rise over 0-16, flat 1 over 16-32 (the hold),
+        // fall over 32-48, then EXACTLY zero for the remaining 16f.
+        auto alpha_at = [&](uint32_t frame) {
+          pattern::NodeMap nm;
+          Cycler* c = pattern::compile(pr.root, pattern::MakeAction{}, nm);
+          pattern::Registers regs;
+          for (uint32_t i = 0; i <= frame; ++i) c->advance();
+          double a = pattern::eval_expr(im[0]->alpha, 1.0, regs, nm, c);
+          delete c;
+          return a;
+        };
+        check(alpha_at(0) < 0.05, "env: alpha starts at ~0");
+        check(alpha_at(8) > 0.4 && alpha_at(8) < 0.6, "env: rises linearly through the `in` leg");
+        check(alpha_at(16) > 0.99 && alpha_at(24) > 0.99 && alpha_at(31) > 0.99,
+              "env: holds at full alpha across the whole `hold` leg");
+        check(alpha_at(40) > 0.4 && alpha_at(40) < 0.6, "env: falls linearly through the `out` leg");
+        check(alpha_at(48) == 0.0 && alpha_at(56) == 0.0 && alpha_at(63) == 0.0,
+              "env: is EXACTLY absent (alpha 0) for the clock's remainder -- the hold-with-a-hole "
+              "shape `fade inout` cannot express");
+      }
+    }
+
+    // Fractions are accepted alongside frames; omitting `hold` gives a triangle that still
+    // has the absent tail.
+    auto tri = parse("pattern p for 64f { every 64f -> beat { image reward env in 0.25 out 0.25 } }");
+    check(tri.ok, std::string("env triangle: fractions parse") + (tri.ok ? "" : (" -- " + tri.error)));
+    if (tri.ok) {
+      auto im = images(tri);
+      if (im.size() == 1) {
+        pattern::NodeMap nm;
+        Cycler* c = pattern::compile(tri.root, pattern::MakeAction{}, nm);
+        pattern::Registers regs;
+        double peak = 0.0, tail = 0.0;
+        for (uint32_t f = 0; f < 64; ++f) {
+          c->advance();
+          double a = pattern::eval_expr(im[0]->alpha, 1.0, regs, nm, c);
+          peak = std::max(peak, a);
+          if (f >= 32) tail = std::max(tail, a);
+        }
+        delete c;
+        check(peak > 0.99, "env triangle: no `hold` still reaches full alpha at the apex");
+        check(tail == 0.0, "env triangle: absent for everything past in+out");
+      }
+    }
+
+    // Overrun is a parse error: 32+32+32 cannot fit a 64f clock. Silently clipping the release
+    // would be the exact "grammar quietly degraded the intent" failure this extension exists
+    // to fix.
+    auto bad = parse("pattern p for 64f { every 64f { image concept env in 32f hold 32f out 32f } }");
+    check(!bad.ok && bad.error.find("overruns") != std::string::npos,
+          "env error: in+hold+out past the clock's length is a hard parse error");
+
+    auto nofall = parse("pattern p for 64f { every 64f { image concept env in 16f } }");
+    check(!nofall.ok, "env error: a missing `out` leg is a hard parse error");
+  }
+
+  // 4p. E3 `line` (§4.17): the `word` statement with SPLIT_LINE -- whole phrases instead of
+  // one word at a time. `Effect::split` and `change_text`'s SPLIT_LINE branch both already
+  // existed; this is purely the missing author surface.
+  {
+    auto pr = parse("pattern p for 64f { every 64f { line concept } }");
+    check(pr.ok, std::string("line: parses") + (pr.ok ? "" : (" -- " + pr.error)));
+    if (pr.ok) {
+      auto texts = find_effects(pr.root, pattern::Effect::Kind::Text);
+      check(texts.size() == 1 && texts[0]->split == 1,
+            "line: lowers to a Text effect with split = SPLIT_LINE (1)");
+      check(texts.size() == 1 && texts[0]->slot == pattern::Slot::Primary,
+            "line: takes the same content vocabulary as `word`");
+      bool has_text_stmt = false;
+      for (const auto& st : pr.render_block)
+        if (st.op == pattern::RenderStmt::Op::Text) has_text_stmt = true;
+      check(has_text_stmt, "line: emits the same RenderStmt{Op::Text} `word` does");
+    }
+
+    // `word` must still lower to SPLIT_WORD -- `line` adds a verb, it does not change `word`.
+    auto w = parse("pattern p for 64f { every 64f { word concept } }");
+    if (w.ok) {
+      auto texts = find_effects(w.root, pattern::Effect::Kind::Text);
+      check(texts.size() == 1 && texts[0]->split == 0,
+            "line: `word` is unchanged (still SPLIT_WORD)");
+    }
+
+    // `line` composes with the shared draw params (E1 included).
+    auto sh = parse("pattern p for 64f { every 64f -> beat { line reward show 0.5..1 zoom 0.9 } }");
+    check(sh.ok, std::string("line+show: parses") + (sh.ok ? "" : (" -- " + sh.error)));
+    if (sh.ok) {
+      const pattern::RenderStmt* t = nullptr;
+      for (const auto& st : sh.render_block)
+        if (st.op == pattern::RenderStmt::Op::Text) t = &st;
+      check(t && !t->when.empty() && t->zoom == "0.900000",
+            "line+show: `line` takes the same params/window surface as any other draw");
+    }
+  }
+
+  // 4q. E4 `alternate` (§4.18): deterministic A/B theme ping-pong on image/anim draws. The
+  // parser synthesizes a hidden scalar register + an Effect{Kind::Toggle} fired BEFORE the
+  // pull, and points the pull's Effect::slot_reg at it -- `resolved_slot` already reads
+  // slot_reg (compiled_visual.cpp) and Toggle already exists, so this is zero runtime change.
+  {
+    auto pr = parse("pattern p for 128f { every 64f { image alternate zoom 0.5 } }");
+    check(pr.ok, std::string("alternate: parses") + (pr.ok ? "" : (" -- " + pr.error)));
+    if (pr.ok) {
+      auto toggles = find_effects(pr.root, pattern::Effect::Kind::Toggle);
+      auto imgs = find_effects(pr.root, pattern::Effect::Kind::Image);
+      check(toggles.size() == 1, "alternate: synthesizes exactly one Toggle effect");
+      check(imgs.size() == 1 && !imgs[0]->slot_reg.empty(),
+            "alternate: the image pull reads its slot from a register, not a fixed Slot");
+      check(toggles.size() == 1 && imgs.size() == 1 && toggles[0]->target == imgs[0]->slot_reg,
+            "alternate: the Toggle drives the SAME register the pull selects on");
+      check(toggles.size() == 1 && toggles[0]->guard == pattern::Effect::Guard::None,
+            "alternate: the bare form flips unconditionally on every firing");
+      // Effect ORDER matters: the toggle must fire before the pull, or the first image of
+      // each pair reads the previous firing's side.
+      const pattern::Node* leaf = nullptr;
+      std::vector<const pattern::Node*> stack{&pr.root};
+      while (!stack.empty()) {
+        const pattern::Node* n = stack.back();
+        stack.pop_back();
+        for (const auto& e : n->effects)
+          if (e.kind == pattern::Effect::Kind::Image) leaf = n;
+        for (const auto& c : n->children) stack.push_back(&c);
+      }
+      check(leaf != nullptr, "alternate: the pull lands on an Action leaf");
+      if (leaf) {
+        int toggle_at = -1, image_at = -1;
+        for (std::size_t i = 0; i < leaf->effects.size(); ++i) {
+          if (leaf->effects[i].kind == pattern::Effect::Kind::Toggle) toggle_at = int(i);
+          if (leaf->effects[i].kind == pattern::Effect::Kind::Image) image_at = int(i);
+        }
+        check(toggle_at >= 0 && image_at > toggle_at,
+              "alternate: the Toggle is ordered BEFORE the pull it selects for");
+      }
+    }
+
+    // Two alternating draws in one pattern must keep INDEPENDENT phase (statement-scoped
+    // register), not silently share one toggle.
+    auto two = parse("pattern p for 128f { every 64f { image alternate -> a } every 32f { image alternate -> b } }");
+    check(two.ok, std::string("alternate scope: parses") + (two.ok ? "" : (" -- " + two.error)));
+    if (two.ok) {
+      auto toggles = find_effects(two.root, pattern::Effect::Kind::Toggle);
+      check(toggles.size() == 2 && toggles[0]->target != toggles[1]->target,
+            "alternate scope: each statement mints its OWN toggle register (independent phase)");
+    }
+
+    // `alternate chance P`: the TOGGLE (not the draw) becomes probabilistic, so the theme
+    // HOLDS between flips. This is the form the re-authored accelerate depends on.
+    auto ch = parse("pattern p for 128f { every 64f { image alternate chance 0.5 anim } }");
+    check(ch.ok, std::string("alternate chance: parses") + (ch.ok ? "" : (" -- " + ch.error)));
+    if (ch.ok) {
+      auto toggles = find_effects(ch.root, pattern::Effect::Kind::Toggle);
+      auto rolls = find_effects(ch.root, pattern::Effect::Kind::Roll);
+      auto imgs = find_effects(ch.root, pattern::Effect::Kind::Image);
+      check(rolls.size() == 1, "alternate chance: synthesizes the same 100-bucket Roll `chance` uses");
+      check(toggles.size() == 1 && toggles[0]->guard == pattern::Effect::Guard::Ge &&
+                rolls.size() == 1 && toggles[0]->guard_reg == rolls[0]->target,
+            "alternate chance: the guard lands on the TOGGLE (the flip is probabilistic, the "
+            "draw still paints every firing)");
+      check(imgs.size() == 1 && imgs[0]->guard == pattern::Effect::Guard::None,
+            "alternate chance: the image pull itself is NOT gated (unlike a draw's `chance P`)");
+      // The animation load must follow the same toggle, so the still and its animation never
+      // come from opposite themes.
+      auto anims = find_effects(ch.root, pattern::Effect::Kind::Anim);
+      check(anims.size() == 1 && imgs.size() == 1 && anims[0]->slot_reg == imgs[0]->slot_reg,
+            "alternate chance: a trailing `anim` load rides the same toggle as the pull");
+    }
+
+    // The standalone `anim alternate` load (for a burst `enter { }` theme pivot).
+    auto sa = parse("pattern p for 128f { every 64f { anim alternate } }");
+    check(sa.ok, std::string("anim alternate: parses") + (sa.ok ? "" : (" -- " + sa.error)));
+    if (sa.ok) {
+      auto anims = find_effects(sa.root, pattern::Effect::Kind::Anim);
+      auto toggles = find_effects(sa.root, pattern::Effect::Kind::Toggle);
+      check(anims.size() == 1 && toggles.size() == 1 && !anims[0]->slot_reg.empty() &&
+                anims[0]->slot_reg == toggles[0]->target,
+            "anim alternate: the standalone animation load ping-pongs off its own toggle");
+    }
+
+    // `alternate` is image/anim only -- text resolves its slot the same way but the point of
+    // the extension is theme ping-pong on the PULL, and a bare error beats a silent no-op.
+    auto bad = parse("pattern p for 128f { every 64f { word alternate } }");
+    check(!bad.ok && bad.error.find("alternate") != std::string::npos,
+          "alternate error: `word alternate` is a hard parse error naming the bad content word");
+  }
+
   // 5. Every shipped v3 built-in parses and lowers to a runnable tree, and every RenderStmt in
   // its render_block evaluates to finite, sane-bounded numbers at frames {0, mid, end-1} with
   // the cycler tree actually advanced -- not just string-matched. This is the gap parse-time
@@ -768,6 +1064,18 @@ pattern beat_locked for beats 8 {
 pattern mantra_pulse for beats 16 {
   every beats 4 { audio concept loop volume (curve 0.2 -> 0.8) }
   every beats 1 { image concept zoom (curve 0 -> 0.4) }
+})"},
+        // The four parser-only extensions (§4.15-§4.18): their lowered `when`/`alpha` strings
+        // are built by templates, so they get the same malformed-expr tripwire everything
+        // else in this block gets.
+        {"show/env/line/alternate", R"(
+pattern extended for 256f {
+  every 64f -> beat {
+    image alternate chance 0.5 -> cur env in 16f hold 16f out 16f anim every 2nd
+    line reward show 0.5..1 zoom 0.8
+    word concept show 0f..8f
+    caption runtime show [this.frame < 32]
+  }
 })"},
     };
     for (const auto& c : cases) {

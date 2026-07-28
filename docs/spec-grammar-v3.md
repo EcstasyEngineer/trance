@@ -7,7 +7,12 @@
 > the cycler + effect + render-block runtime. The runtime extensions it needed are built:
 > curve-driven spiral speed, the `SpiralSet` selector, the wave warp shader, and (landed after
 > the original §9 estimate) the sampled ramp cadence and the `burst` surface (§13 is no longer
-> speculative — both shipped; see §4.10/§4.11). The **one deferred** piece is a text-content
+> speculative — both shipped; see §4.10/§4.11). A later wave (issue #42) added four
+> **parser-only** vocabulary extensions — `show` (§4.15), `env` (§4.16), `line` (§4.17) and
+> `alternate` (§4.18) — which added nothing to §9: they reach `RenderStmt.when`/`alpha`,
+> `Effect::split` and `Effect::slot_reg`+`Toggle`, all of which already shipped and already ran
+> every frame. Their motivation is the eight-visual intent audit in
+> `docs/intent-screenplays.md`. The **one deferred** piece is a text-content
 > register so text can crossfade like images (Ext#4) — the text path is a single live slot, not
 > a register. Where this spec and any older prose disagree, **the parser and runtime enums are
 > the source of truth** (`pattern_ast.h`, `pattern_parser_v3.cpp`, `render_eval.cpp`, `api.cpp`).
@@ -620,6 +625,138 @@ audio stop
   mantras next to your images and fonts, and the pattern grammar can trigger them the same way
   it triggers a flash.
 
+### 4.15 `show` — the VISIBILITY WINDOW on a draw (issue #42, SHIPPED, parser-only)
+
+```
+show <A> ".." <B>          # fractions of the enclosing clock:  show 0.5..1
+show <A>f ".." <B>f        # frames on that same clock:         show 0f..8f
+show "[" EXPR "]"          # raw condition escape:              show [this.frame < 8]
+```
+
+- **What it is.** The duty/gate knob. A draw with a `show` window paints only while the window
+  holds; its content and effects still fire on their own cadence. This is the surface that was
+  missing when the eight built-ins were first authored in v3 — `RenderStmt.when` existed and was
+  honored every frame (`render_eval.cpp`), but **no syntax wrote it**, so every text layer
+  painted continuously for the life of its pattern and every "appears for a beat, then vanishes"
+  rhythm in the originals was unportable as authored. See `docs/intent-screenplays.md` (drift
+  class S1) for the eight-visual audit that motivated it.
+- **It is a `draw_param`, not a statement** — parsed by `parse_params`, so it is available on
+  every draw verb (`image` / `draw` / `word` / `line` / `caption` / `subtext`) with no per-verb
+  code, exactly like `zoom`/`fade`/`alpha`.
+- **Lowering — pure `RenderStmt.when`, ZERO runtime change.**
+  - `show A..B`   ⇒ `when = "(clk.progress >= A and clk.progress < B)"`
+  - `show Af..Bf` ⇒ `when = "(clk.frame >= A and clk.frame < B)"`
+  - `show [expr]` ⇒ `when = <expr>` with `this`/`self` substituted, like any raw modulator
+  
+  `clk` is the enclosing clock (`this`) — the same id a bare `zoom (curve ...)` on the same
+  statement would ride. The window is **ANDed onto whatever gate is already there**, never
+  assigned over it: `push_render`'s enclosing-pattern `.active` gate, a burst block's FSM gate,
+  and a text draw's `chance` guard all survive alongside it. Half-open by construction
+  (`>= A`, `< B`) so two adjacent windows tile a clock without overlapping on the seam.
+- **Validation (hard parse errors, no silent clamp).** `B <= A`; a frame window ending past the
+  enclosing clock's length (the message names that length); a fractional window ending past 1;
+  and **mixing denominations in one window** (`show 0f..0.5`). The last one is deliberate: the
+  two forms answer different questions and coercing one silently is exactly the guess this
+  grammar refuses to make elsewhere (cf. `beats` with no bed, §4.1).
+- **Modder note.** `show` is when a layer is ON. Write it as a slice of the box's life
+  (`show 0.5..1` = the second half) or in frames (`show 0f..8f` = the first 8 frames of each
+  cut). Everything else about the draw is unchanged — it still pulls its content on cadence,
+  it just isn't painted outside the window.
+
+### 4.16 `env` — attack/hold/release ALPHA ENVELOPE (issue #42, SHIPPED, parser-only)
+
+```
+env in <X> [hold <Y>] out <Z>     # each operand: Nf (frames) or a fraction of the clock
+```
+
+- **What it is.** A piecewise-linear alpha envelope: rise 0→1 over `in`, flat 1 over `hold`,
+  fall 1→0 over `out`, then **0 for the remainder of the clock**. ADSR minus the S. Omitting
+  `hold` gives a triangle that still has the absent tail.
+- **Why it is not `fade inout`.** `fade inout` is a whole-clock triangle
+  (`1 - abs(2p - 1)`): its peak is an instant and its alpha is nonzero at nearly every frame, so
+  a layer beneath it is **never alone on screen**. `env` has a genuine hold and a genuine hole.
+  This is the exact shape the original `animation` visual used for its still layer (16f in,
+  hold across the wrap, 16f out, **32f absent** while the animation holds the stage alone) and
+  what the v3 port lost by reaching for `fade inout`. `fade inout` is not deprecated — it stays
+  the right answer when a symmetric whole-clock triangle IS the intent; `env` supersedes it only
+  where a hold was meant.
+- **Lowering — one compile-time alpha `[expr]`, ZERO runtime change.** Operands normalize to
+  fractions of the clock at parse time (`Nf` divides by the enclosing clock's length), then:
+
+  ```
+  alpha = max(0, min(min(clk.progress / IN, (END - clk.progress) / OUT), 1))
+  where END = IN + HOLD + OUT
+  ```
+
+  Nested `min`/`max` over `this.progress` — the same class as `fade in/out/inout` (§4.3) and
+  built from operators `render_eval`'s evaluator already implements. `env` writes
+  `RenderStmt.alpha`, so a later `alpha`/`fade` param on the same statement overwrites it
+  (last-writer-wins, the documented `draw_param` rule).
+- **Validation (hard parse errors).** `in + hold + out` may not exceed the clock — silently
+  clipping the release would be precisely the "grammar quietly degraded the intent" failure this
+  extension exists to fix. A zero/absent `in` or `out` leg, a fractional operand outside `0..1`,
+  and an `Nf` operand under a clock of unknown length are also errors.
+- **Modder note.** `env in 16f hold 16f out 16f` on a 64f box: fade up for 16 frames, sit at
+  full for 16, fade down for 16, **then be gone for the last 16**. That last clause is the whole
+  point — it is how you let the layer underneath have the screen to itself.
+
+### 4.17 `line` — the whole-phrase text verb (issue #42, SHIPPED, parser-only)
+
+```
+line <content> <draw_param>* [chance P]      # identical to `word`, except the split
+```
+
+- **What it is.** `line` is the `word` statement with `Effect.split = SPLIT_LINE` — a whole
+  phrase on screen at once instead of one word at a time. Five of the eight original visuals
+  used `SPLIT_LINE`; `word` hardcoded `SPLIT_WORD` (the enum's 0 default) and there was no
+  surface for anything else, so those layers were either downgraded to single words or dropped.
+- **Lowering — one field, ZERO runtime change.** `Effect{Kind::Text, split = SPLIT_LINE}` plus
+  the identical `RenderStmt{Op::Text}` (same `origin`/`zoom` 0.75 defaults) `word` emits.
+  `change_text` has always implemented the `SPLIT_LINE` branch (`api.cpp`); the field just had
+  no author-facing surface. `word` is unchanged — this adds a verb, it does not re-point one.
+- **`spell` is NOT implemented.** SubText's type-out stream (`SPLIT_WORD` reset followed by
+  repeated `SPLIT_ONCE_ONLY` advances) is a real follow-up and remains unbuilt; do not read
+  `line` as having covered it.
+- **Modder note.** `word` = one word at a time. `line` = the whole phrase. Everything else —
+  content vocabulary, params, `show`, `chance` — is the same on both.
+
+### 4.18 `alternate` — deterministic A/B theme ping-pong (issue #42, SHIPPED, parser-only)
+
+```
+image alternate [chance P] <draw_param>*    # a CONTENT word, beside concept|reward|runtime
+anim alternate [chance P]                   # the standalone animation load
+```
+
+- **What it is.** A fourth content word for `image` draws and the standalone `anim` load, giving
+  a draw **deterministic** A/B theme alternation instead of a pinned side (`concept`/`reward`)
+  or an independent re-roll per firing (`runtime`). The originals ping-ponged on a counter
+  (`_alternate = !_alternate`); the runtime already supported it (`Effect::slot_reg` +
+  `Kind::Toggle`), but no grammar reached it, so every port flattened to `runtime` or a pin.
+- **Two forms.**
+  - **`alternate`** — flips on every firing: A B A B A B.
+  - **`alternate chance P`** — the **toggle** fires with probability `P` per pull, so the side
+    HOLDS between flips. At `P = 0.5` each pull is an independent coin flip over the two sides,
+    i.e. exactly uniform-random theme per image — but as a stateful walk rather than a per-fire
+    re-roll, which is what lets a lower `P` express "hold this world for a while, then pivot."
+    Note the guard lands on the **toggle**, not the draw: unlike a draw's own `chance P` (§4.12),
+    the image still paints every firing.
+- **Lowering — ZERO runtime change.** The parser mints a hidden scalar register, emits an
+  `Effect{Kind::Toggle}` on it ordered **before** the draw's own pull, and sets the pull's
+  `Effect::slot_reg` to that register. `resolved_slot` (`compiled_visual.cpp`) already reads a
+  non-empty `slot_reg` as a primary/alternate selector, and `Kind::Toggle` already exists. The
+  `chance P` form reuses the identical 100-bucket `Roll` + `Guard::Ge` machinery §4.12 describes,
+  gating the toggle. A trailing `anim` on the same draw inherits the same `slot_reg`, so a still
+  and its animation never come from opposite themes.
+- **The register is STATEMENT-scoped** — a fresh minted name per `alternate`, so two alternating
+  draws in one pattern keep independent phase. A named/shared form (`alternate as NAME`, so two
+  statements can share one phase) is **deliberately not implemented**; it is the obvious next
+  step if a pattern ever needs it, and §4.7's rejected `set`/`inc`/`roll` surface stays closed.
+- **Bi-thematic floor untouched.** `alternate` still selects between exactly the two live theme
+  slots (§8) — it changes *how* the side is chosen, not how many sides exist.
+- **Modder note.** `image concept` is always theme A. `image runtime` rolls a coin every time.
+  `image alternate` goes A, B, A, B — and `image alternate chance 0.25` holds a side for a
+  while before pivoting.
+
 ---
 
 ## 5. The unified curve-drivable effect class (and the spiral split)
@@ -866,6 +1003,18 @@ landed, not as an open TODO list).
    like `rotate_spiral` so the per-frame curve path can reach it from `render_eval.cpp`); this
    extension is almost entirely schedule+lowering, not new engine capability.
 
+**The §4.15–§4.18 extensions (issue #42) added NOTHING to this list — that is the point of
+them.** `show`, `env`, `line` and `alternate` are all **parser-only sugar**: they lower entirely
+onto `RenderStmt.when`, `RenderStmt.alpha`, `Effect::split` and `Effect::slot_reg` +
+`Effect::Kind::Toggle` — fields and effect kinds that already existed and were already evaluated
+every frame by machinery that already ran. No new `Effect::Kind`, no new `RenderStmt::Op`, no
+new node type, no scheduling change, not one line of runtime code. They exist because the
+`docs/intent-screenplays.md` audit found the *opposite* failure mode to the one this section
+guards against: wherever the runtime already had a capability but the grammar had no surface for
+it, the v3 ports of the eight built-ins silently dropped or flattened the behaviour instead of
+flagging it. The compile-down floor is about refusing runtime magic that sneaks in through the
+grammar; it was never an argument for leaving shipped runtime capability unreachable.
+
 **Out of scope / hard non-goals (still true):** grammar-driven spiral color (per-frame color
 uniform); 3+ simultaneous themes (two live theme slots, VRAM budget); live phase-accurate beat
 (`every locked`/`beats N` use a compile-time period, not a live audio clock; see
@@ -1047,11 +1196,12 @@ body           ::= stmt*
 stmt           ::= pattern | cadence | burst | look
                  | warp_stmt | spiral_stmt | copy_stmt | draw_stmt | audio_stmt | anim_stmt
 
-anim_stmt      ::= "anim" content
+anim_stmt      ::= "anim" ( content | alternate_content )
                     (* standalone: switch WHICH animation the streamer plays (an
                        Effect::Kind::Anim), no image pull, nothing drawn. One-shot setup --
                        e.g. a burst `enter { anim runtime }` picks the burst's animation
-                       once; a `draw REG ... anim` then renders it. *)
+                       once; a `draw REG ... anim` then renders it. `anim alternate`
+                       ping-pongs the side off its own toggle (§4.18). *)
 
 (* ---- look{} settings header (parse_look) — the ONLY settings surface ---- *)
 look           ::= "look" "{" look_prop* "}"
@@ -1106,22 +1256,51 @@ audio_stmt     ::= "audio" content [ "loop" ] [ "volume" modulator ]
                        RenderStmt{Op::AudioVolume} evaluated every frame like spiral speed. *)
 
 (* ---- draws (parse_draw) ---- *)
-draw_stmt      ::= "image" content [ "-" ">" REG ] draw_param* anim_param? chance_param?
-                 | ( "word" | "caption" | "subtext" ) content draw_param* chance_param?
+draw_stmt      ::= "image" ( content | alternate_content ) [ "-" ">" REG ]
+                        draw_param* anim_param? chance_param?
+                 | ( "word" | "line" | "caption" | "subtext" ) content draw_param* chance_param?
                  | "draw" REG draw_param* [ "anim" ]
                     (* trailing `anim` on `draw`: render the animation stream layer instead
                        of the still -- pure render, no change-animation effect (pair with a
-                       standalone anim_stmt to pick which); no `every Nth` form here. *)
+                       standalone anim_stmt to pick which); no `every Nth` form here.
+                       `line` is `word` with Effect::split = SPLIT_LINE (§4.17) -- identical
+                       in every other respect, including the Op::Text RenderStmt and its
+                       0.75 origin/zoom defaults. *)
 content        ::= "concept" | "reward" | "runtime"   (* Slot::Primary / Alternate / Runtime;
                                                             "runtime" resolves the theme at
                                                             fire time, not parse time *)
+alternate_content
+               ::= "alternate" [ chance_param ]
+                    (* §4.18, `image` draws and the standalone anim_stmt ONLY. Mints a hidden
+                       statement-scoped scalar register, emits Effect{Kind::Toggle} on it
+                       BEFORE the pull, and sets the pull's Effect::slot_reg to it. The
+                       optional chance_param gates the TOGGLE (the flip is probabilistic; the
+                       draw still paints every firing) -- unlike a draw's own chance_param,
+                       which gates the draw. `word alternate` etc. is a hard parse error. *)
 
 draw_param     ::= ( "zoom" | "origin" | "alpha" | "brightness" ) modulator
                  | "fade" ( "in" | "out" | "inout" | modulator )
+                 | "show" show_window
+                 | "env" "in" env_len [ "hold" env_len ] "out" env_len
                     (* NOTE: draw_param is parsed in a loop (parse_params) so any number of
                        these may repeat/mix in one statement; last writer for a given
                        zoom/origin/alpha field wins. `brightness` is a literal alias for
-                       `alpha` — same RenderStmt field. *)
+                       `alpha` — same RenderStmt field. `env` writes the same alpha field, so
+                       a later `alpha`/`fade` on the statement overwrites it. *)
+
+show_window    ::= FLOAT ".." FLOAT                    (* fractions of the enclosing clock *)
+                 | UINT "f" ".." UINT "f"              (* frames on that same clock *)
+                 | "[" EXPR "]"                        (* raw condition, this/self substituted *)
+                    (* §4.15. Lowers to RenderStmt.when, ANDed onto any gate already there
+                       (pattern .active, burst FSM, chance guard). Half-open: >= A, < B.
+                       Hard parse errors: B <= A; a frame window past the clock's length; a
+                       fractional window past 1; mixing frames and fractions in one window. *)
+
+env_len        ::= UINT "f" | FLOAT                    (* frames, or a fraction of the clock *)
+                    (* §4.16. Lowers to ONE alpha [expr]:
+                       max(0, min(min(clk.progress/IN, (END-clk.progress)/OUT), 1)),
+                       END = IN+HOLD+OUT -- trapezoid with a true absent tail past END.
+                       Hard parse error if IN+HOLD+OUT overruns the clock. *)
 anim_param     ::= "anim" [ "every" UINT ( "st" | "nd" | "rd" | "th" ) ]
                     (* "image" draws ONLY — word/caption/subtext/draw do not accept `anim`. *)
 chance_param   ::= "chance" ( FLOAT | "(" FLOAT ")" )
@@ -1154,7 +1333,9 @@ author-facing keyword; a bare `beat` modulator kind (§4.13); `drunk <mod> on or
 as a bare-curve cadence length (§4.9) — the shipped ramped cadence is the dedicated `every
 ramp A -> B steps N` form above, not a `curve` value in `<len>`'s slot; standalone
 `zoom`/`origin`/`alpha`/`fade` statements outside a draw (§4.3) — these are `draw_param`
-only, never top-level `stmt`s.
+only, never top-level `stmt`s; `spell <content> every Nf` (the SubText type-out stream, the
+deliberately-unbuilt follow-up to §4.17's `line`); and `alternate as NAME` / `alternate with
+NAME` (a shared-phase toggle across two statements — §4.18 ships statement-scoped only).
 
 ---
 
