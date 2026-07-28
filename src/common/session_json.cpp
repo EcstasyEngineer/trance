@@ -413,10 +413,11 @@ namespace
       std::size_t idx = 0;
       for (const auto& entry : *types) {
         auto ep = tp + "[" + std::to_string(idx++) + "]";
-        check_unknown_keys(entry, {"type", "random_weight"}, ep);
+        check_unknown_keys(entry, {"type", "random_weight", "pinned"}, ep);
         auto* vt = program.add_visual_type();
         vt->set_type(parse_visual_type(get_string(entry, "type", ep), ep));
         vt->set_random_weight(get_uint(entry, "random_weight", ep));
+        vt->set_pinned(get_bool(entry, "pinned", ep));
       }
     }
 
@@ -429,7 +430,7 @@ namespace
       std::size_t idx = 0;
       for (const auto& entry : *patterns) {
         auto ep = pp + "[" + std::to_string(idx++) + "]";
-        check_unknown_keys(entry, {"name", "file", "random_weight", "enabled"}, ep);
+        check_unknown_keys(entry, {"name", "file", "random_weight", "enabled", "pinned"}, ep);
         auto name = get_string(entry, "name", ep);
         if (std::find(seen_names.begin(), seen_names.end(), name) != seen_names.end()) {
           throw std::runtime_error(ep + "/name: duplicate custom_visual_pattern name '" + name +
@@ -452,6 +453,7 @@ namespace
         src->set_source_text(source_text);
         src->set_random_weight(get_uint(entry, "random_weight", ep));
         src->set_enabled(get_bool(entry, "enabled", ep));
+        src->set_pinned(get_bool(entry, "pinned", ep));
 
         sidecar.pattern_file[{program_name, name}] = file;
       }
@@ -703,6 +705,7 @@ namespace
         json e = json::object();
         e["type"] = save_visual_type(vt.type());
         e["random_weight"] = vt.random_weight();
+        if (vt.pinned()) e["pinned"] = vt.pinned();
         arr.push_back(std::move(e));
       }
       obj["visual_type"] = std::move(arr);
@@ -733,6 +736,7 @@ namespace
         e["file"] = normalize_path_for_save(file);
         if (src.random_weight()) e["random_weight"] = src.random_weight();
         if (src.enabled()) e["enabled"] = src.enabled();
+        if (src.pinned()) e["pinned"] = src.pinned();
         arr.push_back(std::move(e));
       }
       obj["custom_visual_pattern"] = std::move(arr);

@@ -147,11 +147,52 @@ namespace
           t->set_random_weight(1);
         }
     }
+    // Single-pin across the WHOLE visual pool: built-in visual_type entries and
+    // custom_visual_pattern entries share one lottery (director.cpp), so they
+    // share one pin too -- first pin in iteration order wins, the rest are cleared.
+    // Mirrors the enabled_theme pass above.
+    bool builtin_pinned = false;
+    for (auto& type : *program.mutable_visual_type()) {
+      if (type.pinned()) {
+        // A pin on NONE is not a pin: NONE is the enum's zero, Director stores the
+        // pinned type in a uint32 where 0 means "nothing pinned", and no visual is
+        // compiled for it. Honouring it would suppress the all-zero rescue below and
+        // leave Director with an empty pool (and a null _visual to dereference).
+        if (builtin_pinned || type.type() == trance_pb::Program_VisualType_NONE) {
+          type.set_pinned(false);
+        } else {
+          builtin_pinned = true;
+        }
+      }
+    }
+    bool visual_pinned = builtin_pinned;
+    for (auto& pattern : *program.mutable_custom_visual_pattern()) {
+      if (pattern.pinned()) {
+        // A disabled pattern is skipped by the runtime outright, so a pin on it is
+        // dead weight the UI would draw as an active force -- clear it here so the
+        // panel and Director agree.
+        if (visual_pinned || !pattern.enabled()) {
+          pattern.set_pinned(false);
+        } else {
+          visual_pinned = true;
+        }
+      }
+    }
+
+    // Deliberately counts the BUILT-INS ONLY, even though the runtime lottery also
+    // draws from custom_visual_pattern (director.cpp). A custom pattern can drop out
+    // of that lottery at any time -- rebuild_custom_patterns skips one that fails to
+    // parse -- so custom weight is not evidence the program has anything playable,
+    // and letting it suppress this rescue can leave Director with an empty pool (and
+    // Director::update() dereferences a null _visual). Built-ins always compile, so
+    // they are the only safe guarantor. A PINNED built-in is likewise a guarantee,
+    // and its zero weight is intentional ("only this one"), so it suppresses the
+    // rescue where a merely-weighted custom must not.
     count = 0;
     for (const auto& type : program.visual_type()) {
       count += type.random_weight();
     }
-    if (!count) {
+    if (!count && !builtin_pinned) {
       set_default_visual_types(program);
     }
     program.set_global_fps(std::max(1u, std::min(240u, program.global_fps())));

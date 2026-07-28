@@ -21,13 +21,22 @@
 //     --visual/--pattern use); Apply fires on_program_change so Director re-parses.
 //     Custom-pattern edits land in the proto's name/source_text, which Save writes out
 //     as patterns/<slug>.pattern sidecars -- no extra persistence plumbing.
-//   - Program: live edit of the ACTIVE program (global fps, per-visual-type weights,
-//     text/spiral colours). Mutates the in-memory session proto in place, then fires
-//     on_program_change so ThemeBank/Director pick it up.
-//   - Themes: per-theme enable/weight rows (the program's enabled_theme entries;
-//     disable = weight 0, entries are kept -- matching ThemeBank::set_program's
-//     semantics) + per-theme image multiselect editing Theme::image_path. Content
-//     edits need a restart: ThemeBank is built once at startup, no live rebuild.
+//   - Program: live edit of the ACTIVE program (global fps, per-visual-type weight
+//     rows, text/spiral colours). Mutates the in-memory session proto in place, then
+//     fires on_program_change so ThemeBank/Director pick it up.
+//   - Themes: per-theme weight rows (the program's enabled_theme entries; off = weight
+//     0, entries are kept -- matching ThemeBank::set_program's semantics) + per-theme
+//     image multiselect editing Theme::image_path. Content edits need a restart:
+//     ThemeBank is built once at startup, no live rebuild.
+//
+// Weight rows (draw_weight_row, shared by Themes/Program/Visuals) are the one UI for
+// "how often does this get picked": an on/off button over the same stash the old
+// enable checkbox used, a 0..100 slider over the RAW random_weight, the row's
+// EFFECTIVE share of its pool as a percent, and a pin toggle. Two pools, matching the
+// two lotteries: themes (enabled_theme) and visuals (built-in visual_type PLUS enabled
+// custom patterns -- Director::change_visual draws from both at once). Weight edits
+// fire on_program_change on RELEASE, not per drag tick: set_program re-parses every
+// custom pattern in the program.
 //   - Session: loaded path, Save (back to that path) and Save As, via
 //     save_session(session, path, sidecar) so pattern files / scan-dir themes
 //     round-trip instead of being frozen inline.
@@ -147,6 +156,52 @@ private:
   // Duplicate names are a load-time error (session_json.cpp), so "+ New pattern"
   // has to seed a name that cannot collide.
   static std::string unique_pattern_name(const trance_pb::Program& program);
+
+  // One weight row, shared by the Themes and Program/Visuals sections: an on/off
+  // button (animates the weight to 0 and back via the stash), a 0..100 slider over
+  // the RAW random_weight, the row's EFFECTIVE share of `pool_total` as a percent,
+  // and an optional pin toggle. `key` identifies the row in the stash/tween maps
+  // (see _visual_last_weight). `pinned` may be null for rows with no pin concept.
+  // An EMPTY `label` means the caller draws the row's name itself (the Themes section
+  // puts its TreeNode there). `slider_tooltip` may be null; it hangs off the slider
+  // specifically, which is why it is a parameter rather than an IsItemHovered() at the
+  // call site -- by then IsItem* refers to the row's last widget, not the slider.
+  // `pool_pinned` says some row in this pool is pinned, so the lottery is skipped
+  // entirely: the row then shows a flat 100%/0% instead of a weight share that would
+  // describe a draw that never happens.
+  //
+  // Writes the new weight through `weight` / the new pin state through `pinned`, and
+  // returns what changed so the caller can batch its _on_program_change(): weights
+  // report on slider RELEASE (dragging re-parses every custom pattern per tick), pin
+  // and on/off report immediately.
+  struct WeightRowResult
+  {
+    bool weight_changed = false;  // committed (release / button), not per drag tick
+    bool pin_changed = false;
+  };
+  WeightRowResult draw_weight_row(const char* label, const std::string& key, uint32_t* weight,
+                                  bool* pinned, uint64_t pool_total,
+                                  std::map<std::string, uint32_t>& stash,
+                                  const char* slider_tooltip = nullptr, bool pool_pinned = false);
+
+  // Sum of every weight in the visual pool: built-in visual_type entries PLUS
+  // enabled custom patterns. They share one lottery (director.cpp's change_visual),
+  // so they share one denominator for the percent labels.
+  static uint64_t visual_pool_total(const trance_pb::Program& program);
+  // True when some visual owns the pool by pin -- Director then skips the lottery, so
+  // the rows' percent labels must read 100%/0% rather than a weight share.
+  static bool any_visual_pinned(const trance_pb::Program& program);
+  // Clear every visual pin except the one just set, whose identity is (`builtin_index`
+  // for a built-in row) or (`custom_name` for a custom row) -- exactly one of the two
+  // is meaningful, selected by `is_custom`. Mirrors the single-pin rule
+  // validate_program enforces on load (session.cpp) so the UI and the loader agree.
+  // Built-ins are identified by ROW INDEX because duplicate entries of one type are
+  // legal, and clearing by type would leave both of a duplicated pair pinned.
+  static void clear_other_visual_pins(trance_pb::Program& program, bool is_custom,
+                                      int builtin_index, const std::string& custom_name);
+  // The stash/tween key for a visual row: "b<row index>" built-in, "c<name>" custom.
+  static std::string visual_row_key(bool is_custom, int builtin_index,
+                                    const std::string& custom_name);
   // Save (with sidecar) to `path`, recording a transient status line either way.
   void save_session_to(const std::string& path);
   // Persist the System proto back to _system_path, recording a transient status line.
@@ -184,10 +239,31 @@ private:
   // unchecked image (removed from Theme::image_path) can be re-checked within the
   // session. Not persisted -- unchecked paths saved out are gone from the file.
   std::map<std::string, std::vector<std::string>> _theme_seen_images;
-  // Last nonzero weight per theme, so the enable checkbox round-trips a theme's
-  // weight instead of resetting it to 1 (disable keeps the enabled_theme entry at
+  // Last nonzero weight per theme, so the on/off button round-trips a theme's
+  // weight instead of resetting it to 1 (off keeps the enabled_theme entry at
   // weight 0, matching ThemeBank::set_program's semantics).
   std::map<std::string, uint32_t> _theme_last_weight;
+  // The same stash for visual rows, keyed by weight_row_key(): "b<type>" for a
+  // built-in visual_type entry, "c<name>" for a custom pattern. Names, not indices:
+  // a Remove shifts every row below it, and a stale index would restore the wrong
+  // row's weight.
+  std::map<std::string, uint32_t> _visual_last_weight;
+
+  // In-flight "animate the slider to 0" tweens from the off button, keyed the same
+  // way as the stashes above ("t<name>" for themes). PURELY COSMETIC: the model
+  // weight drops to 0 on the click, and the tween only walks the slider grab down to
+  // meet it. `from` is the weight the row started at; update() advances `elapsed`
+  // with its dt and drops the row once it lands.
+  struct WeightTween
+  {
+    uint32_t from = 0;
+    float elapsed = 0.f;
+  };
+  std::map<std::string, WeightTween> _weight_tweens;
+  // The program the two stashes and the tween map describe. A change means the
+  // playlist advanced under us and every stashed weight belongs to a different
+  // program's identically-named row. Compared only for identity -- never dereferenced.
+  const trance_pb::Program* _weight_stash_program = nullptr;
 
   // Session section state: Save As target (seeded with the loaded path) + a
   // transient "saved"/error status line with a countdown.

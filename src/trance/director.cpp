@@ -133,6 +133,14 @@ void Director::rebuild_custom_patterns()
 {
   _custom_patterns.clear();
   _last_custom_index = -1;
+  _pinned_builtin_type = 0;
+  _pinned_custom_index = -1;
+  for (const auto& type : _program->visual_type()) {
+    if (type.pinned()) {
+      _pinned_builtin_type = static_cast<uint32_t>(type.type());
+      break;
+    }
+  }
   const uint32_t locked_frames = locked_period_frames(*_program);
   for (const auto& src : _program->custom_visual_pattern()) {
     if (!src.enabled()) {
@@ -155,6 +163,13 @@ void Director::rebuild_custom_patterns()
     parsed.weight = src.random_weight();
     parsed.root = std::move(v3.root);
     parsed.render_block = std::move(v3.render_block);
+    // Recorded here, not from the proto index: a pattern that is disabled or fails
+    // to parse never lands in _custom_patterns, so the pin has to follow the entry
+    // that actually made it in. A pinned-but-unparseable pattern leaves the pin
+    // unset and the program falls back to its normal shuffle.
+    if (src.pinned() && _pinned_builtin_type == 0) {
+      _pinned_custom_index = int(_custom_patterns.size());
+    }
     _custom_patterns.push_back(std::move(parsed));
   }
 }
@@ -526,6 +541,39 @@ void Director::change_visual(uint32_t length)
         new CompiledVisual{*_visual_api, compiled->second.root, compiled->second.render_block});
     _last_visual_selection = _forced_builtin_type;
     return;
+  }
+
+  // Program-level pin (the F2 panel's pin button, VisualTypeConfig/VisualPatternSource
+  // .pinned): same force semantics as the CLI overrides above, but sourced from the
+  // session rather than the command line, so the CLI still wins. Unlike the overrides
+  // this falls THROUGH to the lottery when the pinned visual isn't available (a type
+  // with no compiled built-in), rather than no-opping into a frozen screen.
+  if (_pinned_custom_index >= 0 && _pinned_custom_index < int(_custom_patterns.size())) {
+    if (_visual && _last_custom_index == _pinned_custom_index) {
+      _visual->reset();
+      return;
+    }
+    const auto& p = _custom_patterns[_pinned_custom_index];
+    _visual.reset(new CompiledVisual{*_visual_api, p.root, p.render_block});
+    _last_custom_index = _pinned_custom_index;
+    _custom_visual_name = p.name;
+    _last_visual_selection = trance_pb::Program_VisualType_NONE;
+    return;
+  }
+  if (_pinned_builtin_type) {
+    auto compiled = _builtin_compiled.find(_pinned_builtin_type);
+    if (compiled != _builtin_compiled.end()) {
+      if (_visual && _last_custom_index < 0 && _last_visual_selection == _pinned_builtin_type) {
+        _visual->reset();
+        return;
+      }
+      _last_custom_index = -1;
+      _custom_visual_name.clear();
+      _visual.reset(
+          new CompiledVisual{*_visual_api, compiled->second.root, compiled->second.render_block});
+      _last_visual_selection = _pinned_builtin_type;
+      return;
+    }
   }
 
   // 64-bit totals so a program with many large weights can't overflow the sum.

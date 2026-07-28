@@ -138,11 +138,13 @@ unknown keys at the item's top level... they are only legal inside `standard`.
 | `visual_type` | array | `Program.visual_type` |
 | `visual_type[].type` | enum string, see §2.2 | `VisualTypeConfig.type` |
 | `visual_type[].random_weight` | uint | `VisualTypeConfig.random_weight` |
+| `visual_type[].pinned` | bool, omitted when false; at most one true across `visual_type` **and** `custom_visual_pattern` (`validate_program` enforces) | `VisualTypeConfig.pinned` |
 | `custom_visual_pattern` | array | `Program.custom_visual_pattern` |
 | `custom_visual_pattern[].name` | string, unique within the program (load error on duplicate) | `VisualPatternSource.name` — authoritative identity; NOT derived from the filename |
 | `custom_visual_pattern[].file` | string, root-relative path to a `*.pattern` file | file **content** → `VisualPatternSource.source_text` (see §4) |
 | `custom_visual_pattern[].random_weight` | uint | `VisualPatternSource.random_weight` |
 | `custom_visual_pattern[].enabled` | bool | `VisualPatternSource.enabled` |
+| `custom_visual_pattern[].pinned` | bool, omitted when false; shares the single-pin budget with `visual_type[].pinned`; cleared on a disabled pattern | `VisualPatternSource.pinned` |
 | `global_fps` | uint, clamped 1–240 by validate | `Program.global_fps` |
 | `zoom_intensity` | float, clamped 0–1 | `Program.zoom_intensity` |
 | `spiral_colour_a` / `spiral_colour_b` | hex colour string | `Program.spiral_colour_a/b` |
@@ -158,6 +160,22 @@ unknown keys at the item's top level... they are only legal inside `standard`.
 
 The deprecated `Program.enabled_theme_name` (field 100) has no JSON representation.
 There is **no inline pattern-source key** — `file` is the only form (§4).
+
+**Weights are raw and unnormalized.** Every `random_weight` is a lottery ticket count,
+not a percentage: a row's real share is `weight / total` over its pool. There are two
+pools, and they are the two the F2 panel shows percentages against — themes
+(`enabled_theme`) and visuals (`visual_type` **plus** enabled `custom_visual_pattern`
+entries, which `Director::change_visual` draws from as a single combined lottery).
+A pool that sums to **0** is the magic empty state: `validate_program` rewrites an
+all-zero theme pool to every theme at weight 1, and an all-zero *unpinned* visual pool
+to the default visual types.
+
+**`pinned` means different things per pool.** A pinned *theme* is always one of the two
+live themes — presence, not rotation share — so it stays resident even at weight 0 and
+the weights only choose the other slot. A pinned *visual* is force-this-one: selection
+skips the weight lottery entirely and always returns it (the `--visual` / `--pattern`
+CLI overrides still win over a session pin, and a pin whose visual can't be compiled
+falls through to the normal lottery rather than freezing).
 
 ### 3.3 Theme (`trance_pb::Theme`)
 
