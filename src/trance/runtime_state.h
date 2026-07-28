@@ -27,6 +27,14 @@ struct CommandRuntimeState {
   // has and pushes changes via apply_overlay_hints/clear_overlay_hints.
   bool overlay_on = false;
   float overlay_opacity = 0.35f;
+  // One-shot request to pull keyboard/mouse focus back to the trance window, set by
+  // every path that makes the window interactive again (show_control_panel, F2 while
+  // the overlay is engaged). Consumed and cleared by the apply seam once the window is
+  // out of click-through/hidden state: without it, an overlay-off leaves the window
+  // unfocused (Win32 restores its styles with SWP_NOACTIVATE, and the tray's
+  // SetForegroundWindow left the hidden helper window in front), and imgui-SFML drops
+  // every mouse event while its focus latch is false -- panel drawn, clicks ignored.
+  bool focus_requested = false;
   // `screenshot PATH`: consumed by the renderer's pre-display hook (which sees the
   // fully composited back buffer) on the next rendered frame; empty = nothing pending.
   std::string screenshot_path;

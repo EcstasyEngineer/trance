@@ -79,8 +79,10 @@ std::thread run_async_thread(std::atomic<bool>& running, ThemeBank& bank)
   }};
 }
 
+void show_control_panel(CommandRuntimeState& state, AppUi* app_ui);
+
 void handle_events(std::atomic<bool>& running, sf::RenderWindow& window, Director& director,
-                   Audio* audio, AppUi* app_ui)
+                   Audio* audio, AppUi* app_ui, CommandRuntimeState& state)
 {
   while (const std::optional event = window.pollEvent()) {
     // ImGui gets first look at input so clicks/typing inside its panels don't also
@@ -108,9 +110,17 @@ void handle_events(std::atomic<bool>& running, sf::RenderWindow& window, Directo
     }
     // F2 toggles the control panel -- open if closed, close if open. Same text-input
     // carve-out: F2 is not a text key, but a panel that owns the keyboard keeps it.
+    // Opening goes through show_control_panel() rather than a bare toggle so it obeys
+    // the one policy every show-the-panel path obeys: disengage the overlay first, and
+    // take focus (#39). A bare toggle here could open the panel over a click-through
+    // window -- drawn, unclickable, and with the seam none the wiser.
     if (key_pressed && key_pressed->code == sf::Keyboard::Key::F2 && app_ui &&
         !app_ui->wants_text_input()) {
-      app_ui->toggle();
+      if (app_ui->visible()) {
+        app_ui->set_visible(false);
+      } else {
+        show_control_panel(state, app_ui);
+      }
     }
     if (key_pressed && key_pressed->code == sf::Keyboard::Key::M && audio) {
       audio->ToggleMute();
@@ -146,10 +156,17 @@ void print_info(double elapsed_seconds, uint64_t frames, uint64_t total_frames)
 // a click falls through and focus moves away, the window can never be re-focused by
 // clicking, so not even F2-the-key could close it). Showing the panel likewise implies
 // un-hiding: a panel on an invisible window is equally unreachable.
+// Showing the panel also implies TAKING FOCUS: the paths that get here left the window
+// unfocused by construction (the tray menu foregrounds its hidden helper window; the
+// Win32 overlay clear restores styles without activation), and imgui-SFML drops every
+// mouse event while its focus latch is false -- a drawn-but-unclickable panel. Only the
+// request is recorded here; the apply seam grabs focus once the window is actually
+// interactive again (#39).
 void show_control_panel(CommandRuntimeState& state, AppUi* app_ui)
 {
   state.overlay_on = false;
   state.hidden = false;
+  state.focus_requested = true;
   if (app_ui) {
     app_ui->set_visible(true);
   }
@@ -522,6 +539,15 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   // any change onto the native window.
   bool overlay_applied = overlay.enabled;
   float overlay_opacity_applied = overlay.opacity;
+  // One-shot "re-run apply_overlay_hints even though nothing changed", consumed by the
+  // overlay seam. Seeded from --overlay because ScreenRenderer's constructor applies the
+  // hints while the window is still UNMAPPED and Director's constructor then makes it
+  // visible: on Win32 that map is exactly when DWM re-evaluates the window and can drop
+  // the layered alpha (the window comes up opaque, and the F2 slider then no-ops because
+  // the stored opacity already equals the intended one). Re-asserting once on the first
+  // loop iteration closes that gap; the hide seam re-arms it for the same reason after a
+  // restore (#39).
+  bool overlay_reassert_pending = overlay.enabled;
   // Hide-everything: what's actually applied to the window right now, plus the mute
   // state stashed at hide time so a `show` restores what the user had (not defaults).
   // Same diff-against-intent pattern as the overlay pair above. Pause needs no stash:
@@ -577,7 +603,8 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       // still true; it is flipped after the loop so the async ThemeBank thread's
       // `while (running)` loop terminates and the join at the bottom of
       // play_session is bounded.)
-      handle_events(running, renderer->window(), director, audio.get(), app_ui.get());
+      handle_events(running, renderer->window(), director, audio.get(), app_ui.get(),
+                    command_state);
       // Command channel: parse + dispatch every line received since last frame, right
       // after handle_events (spec sec 3: "Parse + dispatch happens in the drain loop --
       // main.cpp's per-frame loop, right after handle_events").
@@ -616,6 +643,13 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
             break;
           case ControlRequest::kOverlayToggle:
             command_state.overlay_on = !command_state.overlay_on;
+            // Requests are applied in arrival order, so the field already holds the
+            // batch's NET intent -- but a batch that nets to zero (a fast on/off/on
+            // burst landing in one frame) would leave the seam with nothing to diff
+            // while the user watched two transitions go by. Arm the re-assert so the
+            // window is resynchronized to that net intent exactly once, whatever the
+            // batch did on the way there (#39).
+            overlay_reassert_pending = true;
             break;
           case ControlRequest::kOverlayOpacityUp:
           case ControlRequest::kOverlayOpacityDown:
@@ -695,6 +729,14 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
             }
           }
           show_fresh_frame = true;
+          // The window was just re-mapped: same DWM re-evaluation risk as the startup
+          // path, so make the overlay seam re-assert its hints rather than trust
+          // overlay_applied. Only when the overlay is actually engaged -- re-clearing
+          // an already-clear window would send the WM a pointless state-remove.
+          overlay_reassert_pending = command_state.overlay_on;
+          // A window that was invisible cannot have had focus; restoring it must hand
+          // input back, or the panel comes up unclickable.
+          command_state.focus_requested = true;
         }
         hidden_applied = command_state.hidden;
       }
@@ -702,11 +744,23 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       // `overlay on|off|opacity` verbs, the F2 UI's Overlay section, and the
       // SystemControl requests above (each only writes command_state). Realtime
       // only -- export mode has no real window to overlay.
+      //
+      // The trigger is a transition, an opacity change, or an explicit re-assert
+      // request -- NOT overlay_applied alone. overlay_applied is a belief about the
+      // window, never read back from it, so any hint write the OS ignored (all of them
+      // are cerr-logged, not checked) desyncs it permanently and a "no diff" seam then
+      // silently declines to fix the window (#39). Re-assert covers the two known
+      // desync sources: hints applied to a not-yet-mapped window at startup, and a
+      // window that has just come back from hidden. Steady state still costs zero
+      // native calls -- the flag is one-shot.
       if (realtime &&
-          (command_state.overlay_on != overlay_applied ||
+          (command_state.overlay_on != overlay_applied || overlay_reassert_pending ||
            (command_state.overlay_on &&
             command_state.overlay_opacity != overlay_opacity_applied))) {
         if (command_state.overlay_on) {
+          // Unconditional on every engage/re-assert: apply_overlay_hints rewrites the
+          // ex-styles AND SetLayeredWindowAttributes, so a stuck-opaque or
+          // stuck-click-through window gets corrected rather than reasoned about.
           apply_overlay_hints(renderer->window().getNativeHandle(),
                               command_state.overlay_opacity);
           // Engaging makes the window click-through: collapse the F2 panel on the
@@ -717,11 +771,30 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
           if (app_ui && !overlay_applied) {
             app_ui->set_visible(false);
           }
+          // An engaged overlay can't be focused (and must not be): drop any pending
+          // focus request rather than leave it to fire against a click-through window.
+          command_state.focus_requested = false;
         } else {
           clear_overlay_hints(renderer->window().getNativeHandle());
+          // Disengaging hands the window back to the user: it must also be focusable
+          // again. The Win32 clear restores styles with SWP_NOACTIVATE, so without
+          // this the window stays unactivated and imgui-SFML swallows every click.
+          command_state.focus_requested = true;
         }
         overlay_applied = command_state.overlay_on;
         overlay_opacity_applied = command_state.overlay_opacity;
+        overlay_reassert_pending = false;
+      }
+      // Focus grab: deferred to here so it lands AFTER both apply seams -- the window
+      // must be visible and out of click-through before activation means anything.
+      // One-shot; requestFocus() is the cross-platform half and focus_window() adds the
+      // Win32 activation requestFocus() won't do while another process (the tray helper
+      // window) holds the foreground.
+      if (realtime && command_state.focus_requested && !command_state.hidden &&
+          !command_state.overlay_on && !director.vr_enabled()) {
+        renderer->window().requestFocus();
+        focus_window(renderer->window().getNativeHandle());
+        command_state.focus_requested = false;
       }
       // Mirror live state back to the tray AFTER the apply seams, so the menu's
       // checkmarks/label never reflect a half-applied frame (the hide seam mutates

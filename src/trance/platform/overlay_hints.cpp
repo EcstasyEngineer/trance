@@ -261,7 +261,33 @@ void clear_overlay_hints(sf::WindowHandle handle)
                                      WS_EX_NOACTIVATE);
   SetWindowLongPtr(hwnd, GWL_EXSTYLE, ex_style);
   win32_restore_overlay_bounds(hwnd);
+  // The restore above deliberately uses SWP_NOACTIVATE (it must not steal activation
+  // mid-resize), which leaves the window styled-interactive but NOT activated -- and an
+  // unactivated window never delivers WM_SETFOCUS, so imgui-SFML's focus latch stays
+  // false and swallows every click on the panel we just made clickable. Activate it
+  // explicitly here, after the ex-styles are back (SetForegroundWindow is a no-op while
+  // WS_EX_NOACTIVATE is still set).
+  SetForegroundWindow(hwnd);
+  SetActiveWindow(hwnd);
 #else
+  (void)handle;
+#endif
+}
+
+void focus_window(sf::WindowHandle handle)
+{
+#if defined(_WIN32)
+  // sf::Window::requestFocus() only FLASHES the taskbar button when another process
+  // owns the foreground; the overlay's own tray helper window is exactly that case
+  // (show_tray_menu SetForegroundWindow's the hidden helper), so take activation
+  // directly as well.
+  HWND hwnd = handle;
+  SetForegroundWindow(hwnd);
+  SetActiveWindow(hwnd);
+#else
+  // X11 (and every other platform SFML supports): requestFocus() already does the right
+  // thing -- _NET_ACTIVE_WINDOW / XSetInputFocus -- and the caller has issued it, so
+  // there is nothing platform-specific left to add here.
   (void)handle;
 #endif
 }

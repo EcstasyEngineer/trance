@@ -31,4 +31,11 @@ void clear_overlay_hints(sf::WindowHandle handle);
 // works the same mapped or unmapped, so this just forwards to apply_overlay_hints().
 void apply_overlay_hints_at_startup(sf::WindowHandle handle, float opacity);
 
+// Pull activation/keyboard focus back to the window, after sf::Window::requestFocus().
+// No-op on X11 (requestFocus() covers it); on Win32 it adds the SetForegroundWindow +
+// SetActiveWindow pair that requestFocus() alone won't do when a foreign window (the
+// tray helper) holds the foreground. Call only on an interactive, non-click-through
+// window -- activating a WS_EX_NOACTIVATE overlay is a no-op by design.
+void focus_window(sf::WindowHandle handle);
+
 #endif
