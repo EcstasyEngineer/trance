@@ -45,7 +45,7 @@ AppUi::AppUi(trance_pb::Session& session, const std::string& session_path,
              SessionJsonSidecar& sidecar, trance_pb::System& system,
              const std::string& system_path, CommandRuntimeState& command_state,
              std::function<void()> on_program_change,
-             std::function<trance_pb::Program*()> active_program)
+             std::function<trance_pb::Program*()> active_program, std::string vr_failure)
 : _session{session}
 , _session_path{session_path}
 , _sidecar{sidecar}
@@ -54,6 +54,7 @@ AppUi::AppUi(trance_pb::Session& session, const std::string& session_path,
 , _command_state{command_state}
 , _on_program_change{std::move(on_program_change)}
 , _active_program{std::move(active_program)}
+, _vr_failure{std::move(vr_failure)}
 {
   // Seed Save As with the loaded path so "tweak the filename" is the common case.
   std::snprintf(_save_as_buf, sizeof(_save_as_buf), "%s", session_path.c_str());
@@ -140,6 +141,15 @@ void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Au
   ImGui::SetNextWindowPos(ImVec2(10.f, 10.f), ImGuiCond_FirstUseEver);
   ImGui::SetNextWindowSize(ImVec2(420.f, 640.f), ImGuiCond_FirstUseEver);
   ImGui::Begin("trance");
+  // Above every section, unmissable and never timed out: a requested VR backend failed
+  // and this desktop window is the fallback (#41). Wrapped -- the reason string is
+  // longer than the panel is wide.
+  if (!_vr_failure.empty()) {
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.4f, 0.4f, 1.f));
+    ImGui::TextWrapped("VR UNAVAILABLE: %s", _vr_failure.c_str());
+    ImGui::PopStyleColor();
+    ImGui::Separator();
+  }
   if (ImGui::CollapsingHeader("Status", ImGuiTreeNodeFlags_DefaultOpen)) {
     draw_status_section(director, audio, themes);
   }

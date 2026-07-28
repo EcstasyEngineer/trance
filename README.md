@@ -16,7 +16,8 @@ randomly-generated patterns designed to aid induction and deepening.
 - Audio support with multiple independent channels, plus binaural/isochronic entrainment beds
 - Programmable playlist with conditionals and subroutines
 - Video export (`.webm`, `.h264`, frame-by-frame `.jpg`/`.png`/`.bmp`)
-- SteamVR (OpenVR) support
+- VR output: SteamVR (OpenVR) stereo, or a head-locked OpenXR quad that stays straight
+  ahead and survives window occlusion — see [VR setup](#vr-setup)
 
 ## Quick start
 
@@ -55,7 +56,43 @@ trance.exe --overlay some.session.json
 
 # video export instead of a window:
 trance.exe --export_path out.webm --export_length 60 some.session.json
+
+# pick the renderer for this run only (system.json is not modified):
+trance.exe --renderer=openxr some.session.json
+# valid names: monitor, openvr, openxr. An unknown name is a fatal error at startup.
 ```
+
+## VR setup
+
+**Choosing a renderer.** Three ways, in increasing precedence:
+
+1. The `"renderer"` key in `system.json` — `"monitor"`, `"openvr"` or `"openxr"`.
+   **A missing key means monitor mode**, and the saver *omits* the key whenever it is
+   monitor — so a `system.json` with no `renderer` line is a complete, deliberate
+   non-VR config, not an unset one. This is the usual cause of "I launched it under
+   SteamVR and only got a flat floating window": that window is SteamVR mirroring the
+   ordinary desktop output, not trance rendering to the headset.
+2. The F2 panel's **System → Renderer** radios, which write `system.json` immediately
+   but **take effect on the next launch** — the renderer is constructed once at startup.
+3. `--renderer=monitor|openvr|openxr`, which overrides both for that run and is never
+   written back.
+
+**The two VR backends.** `openvr` renders a stereo projection through SteamVR.
+`openxr` submits a head-locked quad one metre ahead of the view — the image stays
+centred wherever you look, and nothing on the desktop can occlude it. The OpenXR path
+is currently Windows-only and mono (stereo parallax is tracked in #41).
+
+**Which OpenXR runtime is used is not ours to pick.** We create a plain OpenXR
+instance, so whichever runtime is registered **active** on the machine wins — Oculus /
+Quest Link if that is set, SteamVR's OpenXR runtime if that is. trance has no runtime
+selection logic. Set the active runtime in the Oculus or SteamVR desktop app before
+launching.
+
+**If VR fails to start**, trance still plays the session on the desktop window, but it
+says so loudly: a `*** VR UNAVAILABLE: ... ***` banner on stdout/stderr and a
+persistent red line at the top of the F2 panel naming the backend that was requested
+and where the request came from. The specific cause is printed by the backend itself
+just above the banner.
 
 ## Data model
 

@@ -98,11 +98,17 @@ public:
   // (the Program section disables itself in that case). `system`/`system_path` are
   // main()'s live System config + where it was loaded from: the System section edits
   // the proto in place and persists straight back to `system_path` via save_system.
+  // `vr_failure` (#41) is empty in the normal case; non-empty when a VR renderer was
+  // REQUESTED but failed to initialize and main.cpp fell back to the desktop window.
+  // It is shown as a persistent banner at the top of the panel -- this UI only exists
+  // in non-VR mode, which is exactly the fallback case, so it can carry the warning
+  // that would otherwise be stderr-only (invisible on a Windows GUI launch).
   AppUi(trance_pb::Session& session, const std::string& session_path,
         SessionJsonSidecar& sidecar, trance_pb::System& system,
         const std::string& system_path, CommandRuntimeState& command_state,
         std::function<void()> on_program_change,
-        std::function<trance_pb::Program*()> active_program);
+        std::function<trance_pb::Program*()> active_program,
+        std::string vr_failure = {});
   ~AppUi();
 
   AppUi(const AppUi&) = delete;
@@ -215,6 +221,10 @@ private:
   CommandRuntimeState& _command_state;
   std::function<void()> _on_program_change;
   std::function<trance_pb::Program*()> _active_program;
+  // Why VR isn't running this session (#41), or empty if VR was never requested / is
+  // running. Fixed at construction -- the renderer is built once at startup -- so this
+  // banner is persistent for the run rather than timed out like _system_status.
+  const std::string _vr_failure;
 
   bool _visible = false;
   bool _initialized = false;
