@@ -79,6 +79,14 @@ public:
   // v3 wave warp: set the per-frame sinusoidal image-displacement state (amp 0 = no warp).
   void set_warp(float amp, float wavelength, float speed);
 
+  // False during the SECOND of the two render passes a stereo frame makes (VR_RIGHT).
+  // In stereo the whole render block is evaluated once per eye, so any render-time state
+  // that ACCUMULATES per call (the spiral angle, the warp time base) would advance twice
+  // per frame -- spinning/waving at double speed, and differently between the eyes.
+  // Mutating render ops consult this and skip the advance on the second pass; every other
+  // state (NONE / VR_MONO / VR_LEFT / export) is the frame's one-and-only pass and ticks.
+  bool render_mutations_enabled() const;
+
   sf::Vector2f text_size(const Font& font, const std::string& text, bool large) const;
   void render_text(const Font& font, const std::string& text, bool large, const sf::Color& colour,
                    float scale, const sf::Vector2f& offset, float zoom_origin, float zoom) const;

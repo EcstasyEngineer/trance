@@ -198,6 +198,14 @@ void Director::render() const
   });
 }
 
+bool Director::render_mutations_enabled() const
+{
+  // See the declaration: VR_RIGHT is the second of a stereo frame's two passes, so the
+  // accumulating render-time state must not advance again on it. (This also covers the
+  // old OpenVR stereo path, which has always double-ticked for the same reason.)
+  return _render_state != Renderer::State::VR_RIGHT;
+}
+
 void Director::toggle_debug_overlay()
 {
   _debug_overlay = !_debug_overlay;
@@ -276,6 +284,10 @@ void Director::set_warp(float amp, float wavelength, float speed)
   _warp_amp = amp;
   _warp_wavelength = wavelength;
   _warp_speed = speed;
+  // The time base is the accumulating part: it advances once per FRAME, not once per
+  // render pass. eval_render suppresses this call entirely on a stereo frame's second
+  // pass (VisualRender::render_mutations_enabled), which is what keeps the wave from
+  // animating at double speed in VR.
   _warp_time += 1.f / 60.f;
 }
 
