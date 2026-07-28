@@ -1103,20 +1103,21 @@ void AppUi::draw_system_section()
     changed = true;
   }
 
-  // Eye spacing only feeds the OpenVR per-eye camera offset today; grey it out
+  // Eye spacing feeds the per-eye camera offset in both VR renderers; grey it out
   // elsewhere rather than hiding it, so the setting stays discoverable. mutable_ on
   // an unset EyeSpacing materializes it zeroed -- same value the renderer reads
   // through the const accessor, so no behaviour change until the user drags.
-  const bool openvr = _system.renderer() == trance_pb::System::OPENVR;
-  ImGui::BeginDisabled(!openvr);
+  const bool stereo = _system.renderer() == trance_pb::System::OPENVR ||
+      _system.renderer() == trance_pb::System::OPENXR;
+  ImGui::BeginDisabled(!stereo);
   float eye_spacing = _system.eye_spacing().eye_spacing();
   if (ImGui::SliderFloat("eye spacing", &eye_spacing, 0.f, 1.f, "%.3f")) {
     _system.mutable_eye_spacing()->set_eye_spacing(eye_spacing);
     changed = true;
   }
   ImGui::EndDisabled();
-  if (!openvr) {
-    ImGui::TextDisabled("(eye spacing: only used by the SteamVR/OpenVR renderer)");
+  if (!stereo) {
+    ImGui::TextDisabled("(eye spacing: only used by the VR renderers)");
   }
 
   if (changed) {

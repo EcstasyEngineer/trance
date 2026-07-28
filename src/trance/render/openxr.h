@@ -37,7 +37,10 @@ private:
   XrSystemId _system_id;
   XrSession _session;
   XrSpace _view_space;  // XR_REFERENCE_SPACE_TYPE_VIEW: quads posed here are head-locked.
-  XrSwapchain _swapchain;
+  // One swapchain per eye, index 0 = left, 1 = right. Stereo parallax comes from
+  // rendering the scene twice with the eye_offset shader shear, not from posing
+  // the two quads apart -- they share one head-locked pose.
+  XrSwapchain _swapchain[2];
   int64_t _swapchain_format;
   XrEnvironmentBlendMode _blend_mode;
   XrSessionState _session_state;
@@ -47,9 +50,9 @@ private:
   // good -- treat it as session loss and make the next update() exit cleanly.
   bool _lost;
   // Swapchain textures are runtime-owned; never glDeleteTextures them. The FBOs
-  // wrapping them are ours.
-  std::vector<uint32_t> _swapchain_tex;
-  std::vector<uint32_t> _fbo;
+  // wrapping them are ours. Indexed per eye, matching _swapchain.
+  std::vector<uint32_t> _swapchain_tex[2];
+  std::vector<uint32_t> _fbo[2];
 };
 
 #endif

@@ -87,7 +87,7 @@ OpenXrRenderer::OpenXrRenderer(const trance_pb::System& system)
 , _system_id{XR_NULL_SYSTEM_ID}
 , _session{XR_NULL_HANDLE}
 , _view_space{XR_NULL_HANDLE}
-, _swapchain{XR_NULL_HANDLE}
+, _swapchain{XR_NULL_HANDLE, XR_NULL_HANDLE}
 , _swapchain_format{0}
 , _blend_mode{XR_ENVIRONMENT_BLEND_MODE_OPAQUE}
 , _session_state{XR_SESSION_STATE_UNKNOWN}
@@ -228,7 +228,8 @@ OpenXrRenderer::OpenXrRenderer(const trance_pb::System& system)
     return;
   }
 
-  // Mono, but per-eye native resolution is what the compositor resamples best.
+  // Per-eye native resolution is what the compositor resamples best; both eyes
+  // share these dimensions.
   uint32_t view_count = 0;
   if (!xr_check(_instance,
                 xrEnumerateViewConfigurationViews(_instance, _system_id,
@@ -301,52 +302,55 @@ OpenXrRenderer::OpenXrRenderer(const trance_pb::System& system)
               << "using format " << _swapchain_format << std::endl;
   }
 
-  // One swapchain total: mono rendering, quad layer with eyeVisibility BOTH.
-  XrSwapchainCreateInfo swapchain_info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
-  swapchain_info.usageFlags =
-      XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
-  swapchain_info.format = _swapchain_format;
-  swapchain_info.sampleCount = 1;
-  swapchain_info.width = _width;
-  swapchain_info.height = _height;
-  swapchain_info.faceCount = 1;
-  swapchain_info.arraySize = 1;
-  swapchain_info.mipCount = 1;
-  if (!xr_check(_instance, xrCreateSwapchain(_session, &swapchain_info, &_swapchain),
-                "xrCreateSwapchain")) {
-    return;
-  }
-
-  uint32_t image_count = 0;
-  if (!xr_check(_instance, xrEnumerateSwapchainImages(_swapchain, 0, &image_count, nullptr),
-                "xrEnumerateSwapchainImages")) {
-    return;
-  }
-  std::vector<XrSwapchainImageOpenGLKHR> images(
-      image_count, XrSwapchainImageOpenGLKHR{XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR});
-  if (!xr_check(_instance,
-                xrEnumerateSwapchainImages(
-                    _swapchain, image_count, &image_count,
-                    reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data())),
-                "xrEnumerateSwapchainImages")) {
-    return;
-  }
-  // Wrap each runtime-owned texture in an FBO once at init; the runtime already
-  // allocated storage, so no glTexImage2D here (unlike the OpenVR path).
-  for (const auto& image : images) {
-    GLuint fbo;
-    glGenFramebuffers(1, &fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, image.image, 0);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-      std::cerr << "framebuffer failed" << std::endl;
-      glBindFramebuffer(GL_FRAMEBUFFER, 0);
-      _fbo.push_back(fbo);
+  // One swapchain per eye: the scene is rendered twice with opposite eye_offset
+  // shear, and each result goes to a quad layer restricted to that eye.
+  for (int eye = 0; eye < 2; ++eye) {
+    XrSwapchainCreateInfo swapchain_info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+    swapchain_info.usageFlags =
+        XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
+    swapchain_info.format = _swapchain_format;
+    swapchain_info.sampleCount = 1;
+    swapchain_info.width = _width;
+    swapchain_info.height = _height;
+    swapchain_info.faceCount = 1;
+    swapchain_info.arraySize = 1;
+    swapchain_info.mipCount = 1;
+    if (!xr_check(_instance, xrCreateSwapchain(_session, &swapchain_info, &_swapchain[eye]),
+                  "xrCreateSwapchain")) {
       return;
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    _swapchain_tex.push_back(image.image);
-    _fbo.push_back(fbo);
+
+    uint32_t image_count = 0;
+    if (!xr_check(_instance, xrEnumerateSwapchainImages(_swapchain[eye], 0, &image_count, nullptr),
+                  "xrEnumerateSwapchainImages")) {
+      return;
+    }
+    std::vector<XrSwapchainImageOpenGLKHR> images(
+        image_count, XrSwapchainImageOpenGLKHR{XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR});
+    if (!xr_check(_instance,
+                  xrEnumerateSwapchainImages(
+                      _swapchain[eye], image_count, &image_count,
+                      reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data())),
+                  "xrEnumerateSwapchainImages")) {
+      return;
+    }
+    // Wrap each runtime-owned texture in an FBO once at init; the runtime already
+    // allocated storage, so no glTexImage2D here (unlike the OpenVR path).
+    for (const auto& image : images) {
+      GLuint fbo;
+      glGenFramebuffers(1, &fbo);
+      glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+      glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, image.image, 0);
+      if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        std::cerr << "framebuffer failed" << std::endl;
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        _fbo[eye].push_back(fbo);
+        return;
+      }
+      glBindFramebuffer(GL_FRAMEBUFFER, 0);
+      _swapchain_tex[eye].push_back(image.image);
+      _fbo[eye].push_back(fbo);
+    }
   }
   _success = true;
 #else
@@ -362,13 +366,15 @@ OpenXrRenderer::~OpenXrRenderer()
   if (_window && !_window->setActive(true)) {
     std::cerr << "couldn't activate hidden OpenXR OpenGL context" << std::endl;
   }
-  for (auto fbo : _fbo) {
-    glDeleteFramebuffers(1, &fbo);
-  }
-  // _swapchain_tex textures are runtime-owned; destroying the swapchain frees
-  // them. Never glDeleteTextures them.
-  if (_swapchain != XR_NULL_HANDLE) {
-    xr_check(_instance, xrDestroySwapchain(_swapchain), "xrDestroySwapchain");
+  for (int eye = 0; eye < 2; ++eye) {
+    for (auto fbo : _fbo[eye]) {
+      glDeleteFramebuffers(1, &fbo);
+    }
+    // _swapchain_tex textures are runtime-owned; destroying the swapchain frees
+    // them. Never glDeleteTextures them.
+    if (_swapchain[eye] != XR_NULL_HANDLE) {
+      xr_check(_instance, xrDestroySwapchain(_swapchain[eye]), "xrDestroySwapchain");
+    }
   }
   if (_view_space != XR_NULL_HANDLE) {
     xr_check(_instance, xrDestroySpace(_view_space), "xrDestroySpace");
@@ -413,8 +419,23 @@ uint32_t OpenXrRenderer::height() const
 
 float OpenXrRenderer::eye_spacing_multiplier() const
 {
-  // Inert: mono rendering never reaches State::VR_LEFT/VR_RIGHT.
-  return 1.f;
+  // Same derivation as the OpenVR path, but the "camera" here is the quad, not a
+  // runtime projection: the content spans kQuadWidthMetres at kQuadDistanceMetres,
+  // so its half-FOV tangent is fixed by our own geometry rather than queried.
+  // eye_offset = eye_spacing_multiplier * eye_spacing_setting; at the shader's
+  // near_plane=1 and nominal far_plane=129 the NDC parallax shift is
+  // eye_offset / far_plane, and we want that to equal half_ipd / half_fov_tangent.
+  // The 16 cancels the 1/16 default eye_spacing_setting, so the default gives
+  // exactly physical parallax.
+  //
+  // A quad layer needs no per-runtime IPD query: the quad is a fixed virtual
+  // screen, so the correct shear depends on the viewer's IPD only through the
+  // nominal human average -- 64mm, the same 0.032f half-IPD the OpenVR path falls
+  // back to when the runtime reports nothing.
+  const float half_ipd = 0.032f;
+  const float half_fov_tangent = (kQuadWidthMetres / 2.f) / kQuadDistanceMetres;
+  const float nominal_far_plane = 1.f + 0.5f * 256.f;
+  return 16.f * nominal_far_plane * half_ipd / half_fov_tangent;
 }
 
 void OpenXrRenderer::init()
@@ -514,62 +535,88 @@ void OpenXrRenderer::render(const std::function<void(State)>& render_fn)
     return;
   }
 
-  uint32_t index = 0;
-  XrSwapchainImageAcquireInfo acquire_info{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-  if (!xr_check(_instance, xrAcquireSwapchainImage(_swapchain, &acquire_info, &index),
-                "xrAcquireSwapchainImage")) {
-    // No image acquired: index is stale, so no GL render and no release. The
-    // frame was begun, though, so it must still be ended (layerless).
-    end_info.layerCount = 0;
-    xr_check(_instance, xrEndFrame(_session, &end_info), "xrEndFrame");
-    return;
-  }
-  XrSwapchainImageWaitInfo image_wait_info{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
-  image_wait_info.timeout = XR_INFINITE_DURATION;
-  if (!xr_check(_instance, xrWaitSwapchainImage(_swapchain, &image_wait_info),
-                "xrWaitSwapchainImage")) {
-    // Image never became ready: skip the render, end layerless -- and treat it as
-    // FATAL. The image acquired above can only be released after a successful
-    // wait, so this failure permanently consumes a swapchain slot; retrying would
-    // eventually wedge every acquire (XR_ERROR_CALL_ORDER_INVALID) with the view
-    // black forever. The wait was XR_INFINITE_DURATION, so a failure means the
-    // session/instance is gone anyway -- flag it and let update() exit cleanly.
-    _lost = true;
-    end_info.layerCount = 0;
-    xr_check(_instance, xrEndFrame(_session, &end_info), "xrEndFrame");
-    return;
-  }
+  // Render both eyes before submitting either: a partially-acquired frame must be
+  // ended layerlessly, so nothing is composed until both swapchains are through
+  // acquire/wait/render/release. eye 0 = left, eye 1 = right.
+  uint32_t index[2] = {0, 0};
+  // How many eyes have been acquired-and-waited so far, i.e. how many owe a
+  // release before this frame can end. Only these get released on the error paths.
+  int acquired = 0;
+  bool eyes_ready = true;
+  for (int eye = 0; eye < 2 && eyes_ready; ++eye) {
+    XrSwapchainImageAcquireInfo acquire_info{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+    if (!xr_check(_instance, xrAcquireSwapchainImage(_swapchain[eye], &acquire_info, &index[eye]),
+                  "xrAcquireSwapchainImage")) {
+      // No image acquired for this eye: index[eye] is stale, so no GL render and
+      // no release for it. Any earlier eye is released below, and the frame -- which
+      // was begun -- is still ended, layerlessly.
+      eyes_ready = false;
+      break;
+    }
+    XrSwapchainImageWaitInfo image_wait_info{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+    image_wait_info.timeout = XR_INFINITE_DURATION;
+    if (!xr_check(_instance, xrWaitSwapchainImage(_swapchain[eye], &image_wait_info),
+                  "xrWaitSwapchainImage")) {
+      // Image never became ready: skip the render, end layerless -- and treat it as
+      // FATAL. The image acquired above can only be released after a successful
+      // wait, so this failure permanently consumes a swapchain slot; retrying would
+      // eventually wedge every acquire (XR_ERROR_CALL_ORDER_INVALID) with the view
+      // black forever. The wait was XR_INFINITE_DURATION, so a failure means the
+      // session/instance is gone anyway -- flag it and let update() exit cleanly.
+      _lost = true;
+      eyes_ready = false;
+      break;
+    }
+    ++acquired;
 
-  glBindFramebuffer(GL_FRAMEBUFFER, _fbo[index]);
-  // Gamma passthrough into the sRGB-typed image (see format selection above).
-  glDisable(GL_FRAMEBUFFER_SRGB);
-  glClear(GL_COLOR_BUFFER_BIT);
-  glViewport(0, 0, _width, _height);
-  // Render the app content ONCE (mono). The debug HUD only draws for
-  // State::NONE, so it never lands in the VR quad.
-  render_fn(State::VR_MONO);
-  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, _fbo[eye][index[eye]]);
+    // Gamma passthrough into the sRGB-typed image (see format selection above).
+    glDisable(GL_FRAMEBUFFER_SRGB);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glViewport(0, 0, _width, _height);
+    // Render the app content once per eye; the opposite eye_offset shear between
+    // the two passes is the entire stereo effect (the quads themselves are posed
+    // identically). The debug HUD only draws for State::NONE, so it never lands in
+    // the VR quads.
+    render_fn(eye ? State::VR_RIGHT : State::VR_LEFT);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  }
 
   XrSwapchainImageReleaseInfo release_info{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-  xr_check(_instance, xrReleaseSwapchainImage(_swapchain, &release_info),
-           "xrReleaseSwapchainImage");
+  for (int eye = 0; eye < acquired; ++eye) {
+    xr_check(_instance, xrReleaseSwapchainImage(_swapchain[eye], &release_info),
+             "xrReleaseSwapchainImage");
+  }
+  if (!eyes_ready) {
+    end_info.layerCount = 0;
+    xr_check(_instance, xrEndFrame(_session, &end_info), "xrEndFrame");
+    return;
+  }
 
-  // Head-locked mono quad: identity orientation in VIEW space, one texture for
-  // both eyes, no projection layer.
-  XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD};
-  quad.layerFlags = 0;
-  quad.space = _view_space;
-  quad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
-  quad.subImage.swapchain = _swapchain;
-  quad.subImage.imageRect = {{0, 0}, {static_cast<int32_t>(_width), static_cast<int32_t>(_height)}};
-  quad.subImage.imageArrayIndex = 0;
-  quad.pose.orientation = {0.f, 0.f, 0.f, 1.f};
-  quad.pose.position = {0.f, 0.f, -kQuadDistanceMetres};
-  quad.size = {kQuadWidthMetres, kQuadWidthMetres * float(_height) / float(_width)};
+  // Head-locked stereo quads: identical identity-orientation pose and size in VIEW
+  // space, one per eye, differing only in eyeVisibility and source swapchain. The
+  // head-lock is deliberate -- the parallax lives in the rendered content, not in
+  // the layer placement, so the two quads must NOT be posed apart.
+  XrCompositionLayerQuad quads[2] = {XrCompositionLayerQuad{XR_TYPE_COMPOSITION_LAYER_QUAD},
+                                     XrCompositionLayerQuad{XR_TYPE_COMPOSITION_LAYER_QUAD}};
+  for (int eye = 0; eye < 2; ++eye) {
+    auto& quad = quads[eye];
+    quad.layerFlags = 0;
+    quad.space = _view_space;
+    quad.eyeVisibility = eye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT;
+    quad.subImage.swapchain = _swapchain[eye];
+    quad.subImage.imageRect = {{0, 0},
+                               {static_cast<int32_t>(_width), static_cast<int32_t>(_height)}};
+    quad.subImage.imageArrayIndex = 0;
+    quad.pose.orientation = {0.f, 0.f, 0.f, 1.f};
+    quad.pose.position = {0.f, 0.f, -kQuadDistanceMetres};
+    quad.size = {kQuadWidthMetres, kQuadWidthMetres * float(_height) / float(_width)};
+  }
 
   const XrCompositionLayerBaseHeader* layers[] = {
-      reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quad)};
-  end_info.layerCount = 1;
+      reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quads[0]),
+      reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quads[1])};
+  end_info.layerCount = 2;
   end_info.layers = layers;
   xr_check(_instance, xrEndFrame(_session, &end_info), "xrEndFrame");
 }
