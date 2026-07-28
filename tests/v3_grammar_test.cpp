@@ -746,6 +746,33 @@ pattern beat_locked for beats 8 {
             "show expr: raw [expr] passes through with `this` substituted to the clock id");
     }
 
+    // Repeated raw `show [expr]`: the composition must parenthesize the INCOMING condition,
+    // not just the existing one. `and` binds tighter than `or` (render_eval.h b_or/b_and), so
+    // composing an unparenthesized RHS gives `(0) and 1 or 1` -- which is TRUE, silently
+    // dropping the first window's gate entirely. `show [0]` alone can never admit a frame, so
+    // neither can `show [0] show [...]`, whatever the second window says.
+    auto pro = parse("pattern p for 64f { every 64f -> beat { image concept "
+                     "show [0] show [1 or 1] } }");
+    check(pro.ok, std::string("show expr twice: parses") + (pro.ok ? "" : (" -- " + pro.error)));
+    if (pro.ok) {
+      auto im = images(pro);
+      check(im.size() == 1, "show expr twice: exactly one image draw");
+      if (im.size() == 1) {
+        pattern::NodeMap nm;
+        Cycler* c = pattern::compile(pro.root, pattern::MakeAction{}, nm);
+        pattern::Registers regs;
+        uint32_t on = 0;
+        for (uint32_t f = 0; f < 64; ++f) {
+          c->advance();
+          if (pattern::eval_cond_expr(im[0]->when, regs, nm, c)) ++on;
+        }
+        delete c;
+        check(on == 0,
+              "show expr twice: an `or` in the second window cannot override the first "
+              "(got " + std::to_string(on) + " admitted frames, want 0)");
+      }
+    }
+
     // `show` composes with `chance` on a text draw: BOTH gates must survive (the chance guard
     // used to be assigned over `when`, which would silently drop the window).
     auto prc = parse("pattern p for 64f { every 64f -> beat { word concept show 0.5..1 chance 0.5 } }");

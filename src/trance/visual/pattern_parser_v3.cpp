@@ -608,7 +608,12 @@ namespace
               ")";
         }
       }
-      rs.when = rs.when.empty() ? cond : ("(" + rs.when + ") and " + cond);
+      // BOTH sides get parenthesized. The windowed forms above build their own parens, but
+      // a raw `show [expr]` is whatever the author wrote -- and `and` binds tighter than
+      // `or`, so an unparenthesized top-level `or` would bind only its left operand to the
+      // conjunction: `show [0] show [1 or 1]` composing to `(0) and 1 or 1` is TRUE, i.e.
+      // the first window silently stops gating anything.
+      rs.when = rs.when.empty() ? cond : ("(" + rs.when + ") and (" + cond + ")");
     }
 
     // E2 `env in X [hold Y] out Z` -- a piecewise-linear ALPHA ENVELOPE: rise 0->1 over `in`,
