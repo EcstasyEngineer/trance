@@ -1462,6 +1462,36 @@ pattern p for 512f {
     }
   }
 
+  // Raw [expr] modulators can reference an in-scope pattern/clock by NAME -- the expr-level
+  // analog of `over NAME` (accelerate's zoom rides its own origin creep this way). The tell
+  // for a broken substitution is silent: an unsubstituted name reaches resolve_ident, which
+  // resolves an unknown id to 0.0 rather than erroring -- so assert on the lowered string,
+  // not just on evaluation.
+  {
+    auto pr = parse(
+        "pattern outer for 100f {\n"
+        "  every 10f { image concept zoom [outer.progress + 0.1 * this.progress]"
+        " origin (curve 0 -> 1 over outer) }\n"
+        "}");
+    check(pr.ok, std::string("named-clock raw expr: parses") + (pr.ok ? "" : (" -- " + pr.error)));
+    if (pr.ok) {
+      auto imgs = images(pr);
+      check(!imgs.empty(), "named-clock raw expr: image stmt lowered");
+      if (!imgs.empty()) {
+        const auto* st = imgs.front();
+        check(st->zoom.find("outer") == std::string::npos,
+              "named-clock raw expr: pattern name substituted out at parse time");
+        check(st->zoom.find("this") == std::string::npos,
+              "named-clock raw expr: `this` substituted out at parse time");
+        const std::string curve_clock = progress_clock(st->origin);
+        check(!curve_clock.empty() && st->zoom.find(curve_clock + ".progress") != std::string::npos,
+              "named-clock raw expr: resolves to the same clock id as `over " +
+                  std::string("outer`"));
+      }
+      eval_render_block_at_frames(pr.root, pr.render_block, "named-clock raw expr");
+    }
+  }
+
   std::cout << "\n" << (g_fail ? "FAILED: " : "all v3 grammar checks passed (")
             << g_fail << (g_fail ? " failed\n" : " failures)\n");
   return g_fail ? 1 : 0;

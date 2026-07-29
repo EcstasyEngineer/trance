@@ -34,7 +34,11 @@ namespace
   // Lean-in. The original's macro-arc was a whole-run 0 -> 0.4 origin creep with only a small
   // +0.1 zoom pop per cut; the first v3 authoring collapsed that into a violent 0 -> 0.5 zoom
   // on EVERY cut, which reads as per-image punch with no sense of approach. Split back apart:
-  // `origin` rides the whole `accelerate` clock, `zoom` rides the cut.
+  // `origin` rides the whole `accelerate` clock, and `zoom` is the raw expr
+  // origin + 0.1*cut -- the pop rides ON TOP of the creep, exactly the original's
+  // `zoom = zoom_origin + .1f * progress`. The base term is load-bearing: the projection
+  // shrinks the image grid whenever origin > zoom, and an absolute 0 -> 0.1 zoom spends
+  // three quarters of the run in that regime (the black-bar bug).
   //
   // Animation bursts. `anim every 4th` restores the original's every-Nth live-motion cut
   // (N was rolled 2/4/8/16 per pass; 4 is the middle of that range and the one that keeps
@@ -51,7 +55,7 @@ namespace
   const char* kAccelerate = R"(
 pattern accelerate for 2048f {
   every ramp 56f -> 12f steps 140 ease early -> cut {
-    image alternate chance 0.5 zoom (curve 0 -> 0.1) origin (curve 0 -> 0.4 over accelerate) anim every 4th
+    image alternate chance 0.5 zoom [0.4 * accelerate.progress + 0.1 * this.progress] origin (curve 0 -> 0.4 over accelerate) anim every 4th
     word concept show 0..0.25 chance 0.5
   }
   spiral speed (curve 1 -> 4 over accelerate)
