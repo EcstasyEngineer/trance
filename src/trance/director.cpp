@@ -371,8 +371,20 @@ void Director::render_image(const Image& image, float alpha, float zoom_origin, 
          x_flip ? 0.f : 1.f, y_flip ? 1.f : 0.f, x_flip ? 1.f : 0.f, y_flip ? 1.f : 0.f});
   };
 
-  for (int x = 0; x_size * (2 * x - 1) < 1 + std::abs(_system.eye_spacing().eye_spacing()); ++x) {
-    for (int y = 0; y_size * (2 * y - 1) < 1; ++y) {
+  // The vertex shader projects each quad scaled by
+  // k = ((1 - origin) * far + origin) / (far - zoom * (far - 1)) (near = 1):
+  // k == 1 exactly when zoom == origin, and k < 1 whenever origin > zoom, which
+  // contracts the whole grid toward screen centre. The coverage loops below must
+  // measure with the projected size or the uncovered edge clears to black bars.
+  // Floored at 1/16: tile count grows as 1/k, and past that point the shrink is
+  // an authoring error rather than a coverage bug worth thousands of quads.
+  const auto far_p = 1.f + far_plane_distance();
+  auto cover = ((1.f - zoom_origin) * far_p + zoom_origin) / (far_p - zoom * (far_p - 1.f));
+  cover = std::max(1.f / 16.f, std::min(1.f, cover));
+
+  for (int x = 0;
+       cover * x_size * (2 * x - 1) < 1 + std::abs(_system.eye_spacing().eye_spacing()); ++x) {
+    for (int y = 0; cover * y_size * (2 * y - 1) < 1; ++y) {
       add_quad(x, y, x % 2, y % 2);
       if (x) {
         add_quad(-x, y, x % 2, y % 2);

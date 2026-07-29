@@ -500,19 +500,39 @@ namespace
       return this_clock();
     }
 
+    // Substitute identifiers in a raw [expr]: whole-word `this`/`self` become the
+    // enclosing clock id, and an in-scope pattern/clock name used as `NAME.attr`
+    // becomes that clock's id — the expr-level analog of `over NAME`. Everything
+    // else passes through untouched (attribute names, function names, numbers).
     std::string subst_this(const std::string& expr)
     {
       const std::string cid = this_clock();
       std::string out;
       std::size_t i = 0;
       while (i < expr.size()) {
-        // Replace whole-word `this` and `self` with the current clock id.
-        if ((expr.compare(i, 4, "this") == 0 &&
-             (i + 4 >= expr.size() || !std::isalnum(static_cast<unsigned char>(expr[i + 4])))) ||
-            (expr.compare(i, 4, "self") == 0 &&
-             (i + 4 >= expr.size() || !std::isalnum(static_cast<unsigned char>(expr[i + 4]))))) {
-          out += cid;
-          i += 4;
+        const auto c = static_cast<unsigned char>(expr[i]);
+        if (std::isalpha(c) || expr[i] == '_') {
+          std::size_t j = i;
+          while (j < expr.size() &&
+                 (std::isalnum(static_cast<unsigned char>(expr[j])) || expr[j] == '_')) {
+            ++j;
+          }
+          const std::string word = expr.substr(i, j - i);
+          if (word == "this" || word == "self") {
+            out += cid;
+          } else if (j < expr.size() && expr[j] == '.') {
+            std::string mapped;
+            for (auto it = _clocks.rbegin(); it != _clocks.rend(); ++it) {
+              if (it->name == word) {
+                mapped = it->cid;
+                break;
+              }
+            }
+            out += mapped.empty() ? word : mapped;
+          } else {
+            out += word;
+          }
+          i = j;
         } else {
           out += expr[i++];
         }

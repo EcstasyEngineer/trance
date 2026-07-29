@@ -535,13 +535,16 @@ anim-param     ::= "anim" [ "every" <N> ("st"|"nd"|"rd"|"th") ]
 modulator ::= literal | curve | rawexpr   [ over NAME ]
 literal   ::= NUMBER
 curve     ::= curve NUMBER -> NUMBER [ ease (linear | late | early) ]
-rawexpr   ::= [ EXPR ]                  # this/self substituted
+rawexpr   ::= [ EXPR ]                  # this/self + in-scope clock names substituted
 ```
 
 - **Lowering.** All compile to a render `[expr]` string read each frame:
   - `curve A -> B` ⇒ `"(A + (B-A) * <clock>.progress)"`
   - `<literal>`    ⇒ `"V"`
-  - `[expr]`       ⇒ passthrough with `this`/`self` substituted
+  - `[expr]`       ⇒ passthrough with `this`/`self` substituted, and any in-scope
+    pattern/clock name used as `NAME.attr` substituted to that clock's id — the
+    expr-level analog of `over NAME` (e.g. accelerate's
+    `zoom [0.4 * accelerate.progress + 0.1 * this.progress]`)
   - `over NAME`    ⇒ swaps `<clock>` from `this` (enclosing pattern id) to ancestor `NAME`'s id
 - **`drunk` and bare `beat` are NOT modulator kinds** — `parse_modulator` accepts exactly
   three forms: `[expr]`, `curve A -> B [ease ...]`, and a numeric literal. `drunk` is a
