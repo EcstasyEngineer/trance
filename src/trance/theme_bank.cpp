@@ -530,12 +530,6 @@ uint32_t ThemeBank::cache_per_theme() const
       : _image_cache_size / uint32_t(std::min<std::size_t>(3, enabled_themes));
 }
 
-void ThemeBank::cancel_async()
-{
-  _streamer->cancel();
-  _alt_streamer->cancel();
-}
-
 void ThemeBank::async_update()
 {
   do_purge();

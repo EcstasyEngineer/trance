@@ -112,7 +112,7 @@ story — decision list below.
 ### 3. ThemeBank + media loading — **Functional**
 
 The async media pipeline (~800 LOC ThemeBank + AsyncStreamer + GIF/WebM streamers +
-vendored `jpgd`). Bi-thematic slot queue (`unloading|primary|alternate|loading`),
+SFML's stb-backed still-image loader). Bi-thematic slot queue (`unloading|primary|alternate|loading`),
 RAM cache reconciled by a 10ms async thread, GL uploads render-thread-only with a
 deferred-free purge protocol in both directions. 2014-era hand-rolled lock/atomic
 concurrency.
@@ -125,9 +125,8 @@ alternate`, no index leaks).
 
 Risks: ledger items 1-3 and 10, plus: `advance_theme`'s slot shift is per-slot atomic
 but not atomic as a whole (async thread can observe a half-shifted queue); OOM policy
-is terminate-with-message (no degrade path); vendored `jpgd` is a 2011 decoder with
-3.2k LOC and known CVE history in forks, decoding arbitrary user files; manual
-lock/unlock (not `lock_guard`) on `_purge_mutex` isn't exception-safe.
+is terminate-with-message (no degrade path); manual lock/unlock (not `lock_guard`) on
+`_purge_mutex` isn't exception-safe.
 
 Coverage reality: zero tests; the headless harness excludes this component by
 construction. The ef8c63d fixes were verified by a hand-run bad-media session whose
@@ -136,8 +135,7 @@ in the build.
 
 Actions: (1) fix the three races — atomics + moving the reset under the read-side
 locking view (small, mechanical); (2) add a TSan/ASan-able smoke run + check in the
-corrupt-media fixture session (medium, mechanical); (3) jpgd exit strategy — decision
-list below.
+corrupt-media fixture session (medium, mechanical).
 
 ### 4. Renderer layer — **Functional**
 
@@ -255,6 +253,11 @@ their outcome so the decision is not relitigated.
 3. ~~**Creator: retire or keep**~~ — **decided: deleted.** `src/creator/`, the
    `TRANCE_BUILD_CREATOR` option and the wxWidgets dependency are gone; the three
    features with no F2 equivalent are tracked in §5 above.
-4. **jpgd exit strategy** — **still open.** Sync the vendored 2011 decoder against
-   maintained upstream, or test whether SFML 3's stb_image handles the progressive JPEGs
-   that motivated vendoring and delete 3.2k LOC.
+4. ~~**jpgd exit strategy**~~ — **decided: deleted.** The vendoring was motivated by
+   SFML 2's inability to decode progressive JPEGs; SFML 3 loads images through stb_image,
+   which does both baseline and progressive. Measured side by side over a generated corpus
+   (baseline 4:2:0/4:2:2/4:4:4, progressive 4:2:0/4:4:4, grayscale baseline + progressive,
+   CMYK, Adobe YCCK, restart markers, EXIF-tagged, 2000x1400, truncated, corrupt scan),
+   stb decoded everything jpgd did — plus the CMYK, YCCK and truncated files jpgd rejected
+   outright. `src/jpgd/` (3.5k LOC) is gone and JPEGs go through the same
+   `sf::Image::loadFromFile` path as every other still format.

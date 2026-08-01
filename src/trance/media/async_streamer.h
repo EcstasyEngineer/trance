@@ -2,7 +2,6 @@
 #define TRANCE_SRC_TRANCE_MEDIA_ASYNC_STREAMER_H
 #include <common/media/image.h>
 #include <common/media/streamer.h>
-#include <atomic>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -21,12 +20,6 @@ public:
 
   // Called from async update thread.
   void async_update(const std::function<void(const Image&)>& cleanup_function);
-
-  // Shutdown signal, called from the owning (render) thread before joining the async
-  // thread. async_update() can be waiting for the render thread to advance _index, and
-  // the render thread stops advancing it entirely while playback is paused or hidden --
-  // so without this the join deadlocks. One-way: a cancelled streamer stays cancelled.
-  void cancel();
 
 private:
   mutable std::mutex _swap_mutex;
@@ -47,7 +40,6 @@ private:
   std::deque<Image> _old_buffer;
   std::unique_ptr<Streamer> _old_streamer;
 
-  std::atomic<bool> _cancelled{false};
   float _update_counter = 0.f;
   std::size_t _index = 0;
   bool _backwards = false;

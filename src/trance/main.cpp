@@ -895,11 +895,6 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   // still true; flip it so the async ThemeBank thread (gated on `running`) terminates
   // and the join below cannot hang.
   running = false;
-  // `running` alone is not enough: async_update() can be parked waiting for the render
-  // thread to advance the animation index, and this loop stops advancing it whenever
-  // playback is paused or hidden -- so quitting from a paused/Shift+F11 state used to
-  // hang the join forever and leave a zombie process.
-  theme_bank->cancel_async();
   async_thread.join();
   // No explicit window().close() here: ~OpenXrRenderer must run while the hidden
   // window's GL context is still alive -- the runtime holds the hDC/hGLRC handed

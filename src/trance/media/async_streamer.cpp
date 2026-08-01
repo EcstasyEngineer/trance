@@ -1,6 +1,4 @@
 #include <trance/media/async_streamer.h>
-#include <chrono>
-#include <thread>
 
 namespace
 {
@@ -28,11 +26,6 @@ AsyncStreamer::AsyncStreamer(const std::function<std::unique_ptr<Streamer>()>& l
       _a.end = true;
     }
   }
-}
-
-void AsyncStreamer::cancel()
-{
-  _cancelled = true;
 }
 
 Image AsyncStreamer::get_frame(const std::function<void(const Image&)>& function) const
@@ -132,21 +125,15 @@ void AsyncStreamer::async_update(const std::function<void(const Image&)>& cleanu
       // decode above ran unlocked, that is the frame currently on screen -- the
       // cleanup_function would purge an sf::Image still being drawn. The append branch
       // below writes at begin+size, one past the displayed range, so it never needs to
-      // wait. (The loop-top guard checked this already, but next_frame() drops the lock
+      // guard. (The loop-top guard checked this already, but next_frame() drops the lock
       // for as long as a decode takes, so _index can advance onto begin meanwhile.)
       //
-      // Waiting on the render thread is only safe because it is INTERRUPTIBLE: the main
-      // loop gates theme_bank->advance_frames() on !playback_paused, so while paused or
-      // Shift+F11-hidden _index never moves at all. An unconditional wait here therefore
-      // never returns, async_update() never returns, and async_thread.join() deadlocks on
-      // Quit -- a zombie process. cancel() is what breaks that; see main.cpp's teardown.
-      while (_index == _current->begin && !_cancelled) {
-        swap_lock.unlock();
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        swap_lock.lock();
-      }
-      if (_cancelled) {
-        // Shutting down: drop the decoded frame rather than recycle a displayed one.
+      // Same condition as the loop-top guard, so take the same exit: drop the frame we
+      // just decoded and let the next async_update() pass re-decode it. Waiting here
+      // instead would hang -- the main loop gates theme_bank->advance_frames() on
+      // !playback_paused, so while paused or Shift+F11-hidden _index never moves at all,
+      // and async_thread.join() on Quit would never return.
+      if (_index == _current->begin) {
         break;
       }
       {

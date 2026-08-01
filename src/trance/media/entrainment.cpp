@@ -33,23 +33,15 @@ EntrainmentStream::~EntrainmentStream()
 
 namespace
 {
-  // Resolve each layer's per-block Tracks (center/binaural/pulse Hz,
-  // amplitude dB) at the given running time into the derived synthesis
-  // fields synth_frame() consumes. Called once per chunk, not per sample --
-  // the cumulative phase accumulators already absorb a carrier/pulse
-  // frequency that steps between blocks without a click, so block-rate
-  // sampling is enough to make a sweep audible smoothly. amplitude_db is
-  // interpolated in dB (perceptually linear) and converted to linear gain
-  // here, after evaluation.
-  void resolve_block(std::vector<EntrainmentStream::Layer>& layers, double t_seconds)
+  // Expand each layer's source fields (center/binaural Hz, amplitude dB) into
+  // the derived synthesis fields synth_frame() consumes. The bed is static for
+  // its whole lifetime, so this runs once per Configure(), not per block.
+  void resolve_derived(std::vector<EntrainmentStream::Layer>& layers)
   {
     for (auto& layer : layers) {
-      const double center = layer.center_hz.eval(t_seconds);
-      const double binaural = layer.binaural_hz.eval(t_seconds);
-      layer.carrier_left_hz = center - binaural / 2.0;
-      layer.carrier_right_hz = center + binaural / 2.0;
-      layer.resolved_pulse_hz = layer.pulse_hz.eval(t_seconds);
-      layer.gain = std::pow(10.0, layer.amplitude_db.eval(t_seconds) / 20.0);
+      layer.carrier_left_hz = layer.center_hz - layer.binaural_hz / 2.0;
+      layer.carrier_right_hz = layer.center_hz + layer.binaural_hz / 2.0;
+      layer.gain = std::pow(10.0, layer.amplitude_db / 20.0);
     }
   }
 
@@ -66,11 +58,11 @@ namespace
     for (auto& layer : layers) {
       double env_left = 1.0;
       double env_right = 1.0;
-      if (layer.resolved_pulse_hz > 0.0) {
+      if (layer.pulse_hz > 0.0) {
         // Unipolar (0..1) gate, 180 degrees out of phase between the ears.
         env_left = 0.5 * (1.0 + std::cos(layer.pulse_phase + pi));
         env_right = 0.5 * (1.0 + std::cos(layer.pulse_phase));
-        layer.pulse_phase += step * layer.resolved_pulse_hz;
+        layer.pulse_phase += step * layer.pulse_hz;
         if (layer.pulse_phase >= two_pi) {
           layer.pulse_phase -= two_pi;
         }
@@ -97,14 +89,9 @@ namespace
 
   // RMS and peak of the summed bed at unit master gain, over a window long
   // enough to cover the slow isochronic/binaural cycles. Operates on a copy so
-  // the real phase state is untouched. Resolves Tracks at t=0 (the start of
-  // the bed): a reasonable approximation for normalisation even once a layer
-  // sweeps, since the calibration only sets a fixed master gain -- exact
-  // loudness tracking across a sweep is out of scope until the mixer reacts
-  // to level changes at playback time, not just at Configure().
+  // the real phase state is untouched.
   Calibration measure(std::vector<EntrainmentStream::Layer> layers)
   {
-    resolve_block(layers, 0.0);
     const std::size_t frames = sample_rate * 2;  // 2 seconds
     double sum_sq = 0.0;
     double peak = 0.0;
@@ -139,18 +126,15 @@ void EntrainmentStream::Configure(const trance_pb::Entrainment& config)
   stop();
 
   _layers.clear();
-  _running_seconds = 0.0;
   for (const auto& l : config.layer()) {
     Layer layer{};
-    // Static fields are lifted into degenerate single-keyframe (constant)
-    // Tracks so playback is unchanged.
-    layer.center_hz = trance::Track{double(l.center_hz())};
-    layer.binaural_hz = trance::Track{double(l.binaural_hz())};
-    layer.pulse_hz = trance::Track{double(l.pulse_hz())};
-    layer.amplitude_db = trance::Track{double(l.amplitude_db())};
+    layer.center_hz = double(l.center_hz());
+    layer.binaural_hz = double(l.binaural_hz());
+    layer.pulse_hz = double(l.pulse_hz());
+    layer.amplitude_db = double(l.amplitude_db());
     _layers.push_back(layer);
   }
-  resolve_block(_layers, _running_seconds);
+  resolve_derived(_layers);
 
   if (_layers.empty()) {
     _master_gain = 0.0;
@@ -180,11 +164,6 @@ bool EntrainmentStream::onGetData(Chunk& chunk)
   if (_layers.empty()) {
     std::fill(_buffer.begin(), _buffer.end(), std::int16_t(0));
   } else {
-    // Sample each layer's Tracks once per block (not per sample): the
-    // cumulative phase accumulators in synth_frame() already make a
-    // carrier/pulse frequency step between blocks glitch-free.
-    resolve_block(_layers, _running_seconds);
-    _running_seconds += double(chunk_frames) / sample_rate;
     for (std::size_t i = 0; i < chunk_frames; ++i) {
       double l = 0.0;
       double r = 0.0;

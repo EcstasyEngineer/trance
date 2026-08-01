@@ -16,6 +16,7 @@ class Image
 {
 public:
   Image();
+  // Raw RGBA pixels: used by the GIF/WebM streamers, which decode into their own buffer.
   Image(uint32_t width, uint32_t height, unsigned char* data);
   Image(const sf::Image& image);
   explicit operator bool() const;

@@ -4,8 +4,6 @@
 #include <string>
 #include <vector>
 
-#include <trance/media/entrainment_keyframes.h>
-
 #pragma warning(push, 0)
 #include <SFML/Audio/SoundStream.hpp>
 #pragma warning(pop)
@@ -36,27 +34,16 @@ public:
 
   // One resolved layer's running state. Public only so the .cpp synthesis
   // helpers can operate on it; not part of the intended interface.
-  //
-  // Each sweepable source field (center_hz, binaural_hz, pulse_hz,
-  // amplitude_db) is carried as a Track, sampled once per synthesis block
-  // against the stream's running time rather than per-sample -- the
-  // cumulative-phase accumulators below already tolerate a frequency that
-  // changes between blocks without a click, which is what makes block-rate
-  // sampling safe. Configure() with today's static (non-keyframed) config
-  // builds degenerate single-keyframe (constant) Tracks, so playback is
-  // bit-for-bit unchanged until something actually authors a sweep.
   struct Layer {
-    trance::Track center_hz;
-    trance::Track binaural_hz;
-    trance::Track pulse_hz;      // 0 = continuous (no gate)
-    trance::Track amplitude_db;  // interpolated in dB, converted to gain per block
+    // Source fields, copied straight off the config message.
+    double center_hz;
+    double binaural_hz;
+    double pulse_hz;     // 0 = continuous (no gate)
+    double amplitude_db;
 
-    // Per-block resolved values (Track::eval() results for the current
-    // block), consumed by synth_frame(). carrier_left/right_hz and gain are
-    // derived from center_hz/binaural_hz/amplitude_db each block.
+    // Derived once at Configure() time and consumed by synth_frame().
     double carrier_left_hz;
     double carrier_right_hz;
-    double resolved_pulse_hz;
     double gain;  // linear, per-layer relative level
 
     double phase_left;
@@ -73,8 +60,7 @@ private:
   double _master_gain;
   std::vector<Layer> _layers;
   std::vector<std::int16_t> _buffer;  // interleaved stereo scratch reused per chunk
-  std::string _last_config;        // serialized config, to skip no-op reconfigures
-  double _running_seconds = 0.0;   // stream time at the start of the next block, for Track::eval()
+  std::string _last_config;           // serialized config, to skip no-op reconfigures
 };
 
 #endif

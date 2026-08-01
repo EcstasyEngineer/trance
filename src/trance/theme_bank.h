@@ -69,9 +69,6 @@ public:
 
   // Called from separate update thread to perform async loading/unloading.
   void async_update();
-  // Called from the OWNING thread to unblock a pending async_update() so the update
-  // thread can be joined -- see AsyncStreamer::cancel.
-  void cancel_async();
 
   // Read-only snapshot of the bank's internal state for the debug overlay.
   // Slots map to the active-theme queue: [0] unloading, [1] primary (used by

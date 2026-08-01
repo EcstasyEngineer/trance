@@ -1,12 +1,10 @@
 #include <common/media/image.h>
-#include <common/util.h>
 #include <iostream>
 
 #define VPX_CODEC_DISABLE_COMPAT 1
 #pragma warning(push, 0)
 #include <SFML/Graphics.hpp>
 #include <SFML/OpenGL.hpp>
-#include "jpgd/jpgd.h"
 #pragma warning(pop)
 
 std::vector<GLuint> Image::textures_to_delete;
@@ -109,33 +107,13 @@ Image::texture_deleter::~texture_deleter()
 // process down with no diagnostic.
 static const int max_image_dimension = 16384;
 
+// JPEGs used to go through a vendored copy of the jpgd library because SFML 2
+// could not decode progressive JPEGs. SFML 3's image loader is stb_image, which
+// handles baseline and progressive alike (and additionally CMYK/YCCK Adobe files
+// and truncated scans, all of which jpgd rejected), so every format goes through
+// the one loadFromFile path below.
 Image load_image(const std::string& path)
 {
-  // Load JPEGs with the jpgd library since SFML does not support progressive
-  // JPEGs.
-  if (ext_is(path, "jpg") || ext_is(path, "jpeg")) {
-    int width = 0;
-    int height = 0;
-    int reqs = 0;
-    unsigned char* data =
-        jpgd::decompress_jpeg_image_from_file(path.c_str(), &width, &height, &reqs, 4);
-    if (!data) {
-      std::cerr << "\ncouldn't load " << path << std::endl;
-      return {};
-    }
-    if (width <= 0 || height <= 0 || width > max_image_dimension ||
-        height > max_image_dimension) {
-      std::cerr << "\nrefusing " << path << ": bad dimensions " << width << "x" << height
-                << std::endl;
-      free(data);
-      return {};
-    }
-
-    Image image{uint32_t(width), uint32_t(height), data};
-    free(data);
-    return image;
-  }
-
   sf::Image sf_image;
   if (!sf_image.loadFromFile(path)) {
     std::cerr << "\ncouldn't load " << path << std::endl;

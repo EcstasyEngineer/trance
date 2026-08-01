@@ -147,7 +147,6 @@ add_library(common_lib STATIC
   src/common/session_archive.cpp
   src/common/session_json.cpp
   src/common/session_legacy.cpp
-  src/jpgd/jpgd.cpp
   ${CMAKE_BINARY_DIR}/common/trance.pb.cc)
 
 target_include_directories(common_lib PUBLIC

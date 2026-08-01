@@ -90,7 +90,6 @@ play_session frame loop ──► Director ──► Visual (cycler tree + effec
 | `src/trance/ui/` | The ImGui in-app control panel (`app_ui.{h,cpp}`), toggled with F2. |
 | `src/trance/net/` | The `--command_port` control channel: line→verb protocol (`command_protocol.{h,cpp}`) and the socket/mailbox (`command_channel.{h,cpp}`). |
 | `src/trance/platform/` | Out-of-window controls (`system_control.{h,cpp}`): the system tray icon (Windows) and the global Shift+F11 hide-everything hotkey (Win32/X11) — the control surface that keeps working while the overlay is click-through. |
-| `src/jpgd/` | Vendored JPEG decoder (third-party). |
 
 ## Where to start reading, per subsystem
 
