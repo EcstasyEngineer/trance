@@ -4,6 +4,33 @@
 > `line` / `alternate` grammar extensions (`docs/spec-grammar-v3.md` §4.15–§4.18) and the
 > built-in re-authoring that follows them.
 
+> **Status — read this before trusting the drift lists below.** This document was written
+> *before* the extensions it proposes were built. The four parser-only surfaces have since
+> **shipped**, and two built-ins have been re-authored against them, so the "not authorable in
+> v3" verdicts scattered through §1–§8 are now wrong for those cases. Specifically:
+>
+> | Proposal | Status |
+> |---|---|
+> | **E1 `show`** — visibility window on any draw | **Shipped** (§4.15) |
+> | **E2 `env`** — attack/hold/release alpha envelope | **Shipped** (§4.16) |
+> | **E3 `line`** — whole-phrase text verb | **Shipped** (§4.17). The optional `spell` follow-up was **not** built. |
+> | **E4 `alternate`** — deterministic A/B ping-pong | **Shipped** (§4.18), statement-scoped only; `alternate as NAME` was **not** built. |
+> | **E5 `shadow` params + `font` cadence effect** | **Not built.** |
+> | **E6 burst-progress export** — the one runtime extension | **Not built.** |
+>
+> Re-authored built-ins: **`animation`** (the anchor — its still layer is now a real
+> trapezoid, 8f in / 17f hold / 8f out / 33f absent, ground-truthed by dumping compiled
+> per-frame alpha; 16/16/16 legs cannot fit a 64f clock, so the ramps were traded down to
+> preserve the full absence hole) and **`accelerate`** (2048f total, 140-step up-ramp,
+> 50% per-image theme swap via `alternate chance 0.5`, restored whole-run lean-in and
+> `anim every 4th`).
+>
+> **The other six built-ins' text lanes have not been re-authored.** That is what this
+> document is still *for*: §1–§8's screenplays are derived from the original `visual.cpp`
+> at commit `ae7d94c`, which is deleted, and reconstructing them is expensive. Whoever
+> finishes #42 should read the screenplay, ignore the "authorable?" column, and check the
+> current `builtin_patterns_v3.cpp` instead.
+
 Sources: originals read from `git show ae7d94c:src/trance/visual/visual.cpp` (cited below as
 `orig:<line>`); v3 built-ins from `src/trance/visual/builtin_patterns_v3.cpp`; envelope math
 derived from the actual render lambdas plus cycler semantics in `cyclers.cpp` (ActionCycler
@@ -405,7 +432,10 @@ Drifts:
 
 ## Systemic drift summary
 
-| # | Drift class | Visuals hit | Authorable in v3 today? |
+The "authorable?" column below is **as of the audit**, before E1-E4 shipped. Read it as the
+argument for building them, not as the current state of the grammar.
+
+| # | Drift class | Visuals hit | Authorable at audit time? |
 |---|---|---|---|
 | S1 | Text duty windows / blinks / reveals (on-off rhythm) | ALL EIGHT | **No** — no `when`/`show` surface, no text alpha |
 | S2 | SPLIT_LINE phrases (and SubText's type-out stream) | accelerate, slow_flash, flash_text, simple, animation, sub_text | **No** — split unreachable |
@@ -523,15 +553,18 @@ deferred and none of the above needs it).
 ## Prioritized work list (smallest change that restores each intent)
 
 Ordering: grammar surfaces first where ports were *forced* to degrade, then pure re-authoring.
+Items 1-3 and 5 have shipped as grammar surfaces; the re-authoring they unblock is mostly
+still outstanding (see the status box at the top). What remains open is: the text lanes of
+the six built-ins other than `animation` and `accelerate`, plus items 6, 7 and 8 entirely.
 
-1. **E1 `show`** (parser-only). Then re-author the text lanes of all eight: slow_flash
+1. ~~**E1 `show`** (parser-only).~~ **Shipped.** Then re-author the text lanes of all eight: slow_flash
    call-and-response (`caption ... show 0..0.5` + big text `show 0.5..1`), simple's middle
    window, flash_text second-half reveal, parallel/animation half-duty, accelerate 8f stabs,
    super_fast in-`base` words. Biggest felt win per line of code in the repo.
-2. **E3 `line`** (parser-only, ~10 lines). Re-point the five SPLIT_LINE sites; upgrade the
+2. ~~**E3 `line`** (parser-only, ~10 lines).~~ **Shipped** (`spell` was not). Re-point the five SPLIT_LINE sites; upgrade the
    dropped big-text layers in simple / slow_flash / animation / flash_text from `caption`
    back to real text.
-3. **E2 `env`** (parser-only sugar). Fix the anchor: `animation`'s still becomes
+3. ~~**E2 `env`** (parser-only sugar).~~ **Shipped, and the anchor is fixed.** Was: `animation`'s still becomes
    `env in 16f hold 16f out 16f` on the offset lane — restores the 32f animation-alone hold.
    (Interim zero-grammar fix if wanted today: `alpha [max(0, 1 - abs(4 * this.progress - 1))]`.)
 4. **Re-author with existing grammar (no extensions needed):**
@@ -542,11 +575,11 @@ Ordering: grammar surfaces first where ports were *forced* to degrade, then pure
      tail-ramp alpha `[expr]`; move `word` into `base { }`.
    - super_parallel: `anim` (unconditional) on lane a; solo windows via `show`/alpha
      `[expr]`s (see E1/S4 note).
-5. **E4 `alternate`** (parser-only): sub_text A/B images + subtext-follows-image,
+5. ~~**E4 `alternate`** (parser-only)~~ — **shipped** (statement-scoped; `alternate as NAME` was not built). Still to apply: sub_text A/B images + subtext-follows-image,
    flash_text 128f theme flip, animation's anim alternation, super_fast burst pivot.
-6. **E5 `shadow` + `font`** (parser-only): text depth-parallax everywhere the originals
+6. **E5 `shadow` + `font`** (parser-only) — **not built**: text depth-parallax everywhere the originals
    passed image zoom as shadow args; flash_text font churn.
-7. **E6 burst progress** (runtime, small): super_fast burst zoom crescendo.
+7. **E6 burst progress** (runtime, small) — **not built**: super_fast burst zoom crescendo.
 8. Leftovers, explicitly deprioritized: sub_text type-out (`spell`, E3 follow-up) and
    cross-wrap slowdown; flash_text per-activation animated mode; animation clean
    intro/outro bookends; flash_text spiral-never-changes opt-out. Each is real but small;

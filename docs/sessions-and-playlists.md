@@ -47,9 +47,13 @@ Key sub-messages:
 - **`PlaylistItem.NextItem`** (`:238`) — one weighted, optionally-conditional
   branch out of a playlist item (the heart of the VM, below).
 
-A `SessionArchive` (`:290`) is a session plus an embedded file archive, for
-shipping a self-contained bundle. (Archive export is currently a stub —
-`export_archive` in `main.cpp` returns 0.)
+The proto also carries a `SessionArchive` message (a session plus an embedded file
+table). It is **dead schema** — the shipped bundle format is a plain zip, not this.
+`--export_archive out.trance` (`export_session_archive`,
+`src/common/session_archive.{h,cpp}`) writes the session JSON as `session.json` at the
+zip root plus every asset it references under its existing root-relative path. There is
+deliberately no importer: any zip tool extracts a `.trance` straight back into a valid
+session root.
 
 ## Load path
 
@@ -59,13 +63,13 @@ shipping a self-contained bundle. (Archive export is currently a stub —
    path (a legacy `.session`/`.cfg` proto path is a fatal error with a
    `trance_convert` hint), parses it via `load_session_json()`
    (`src/common/session_json.cpp`), then runs `validate_session()`.
-2. `validate_session()` (`session.cpp:486`) is the repair pass: it fills empty
+2. `validate_session()` (`session.cpp`) is the repair pass: it fills empty
    maps with defaults, migrates deprecated fields (`enabled_theme_name` →
    `enabled_theme`, the old flat `program`/`play_time_seconds` →
    `Standard`), clamps numeric ranges, prunes dangling subroutine references and
    conditional variables, and repoints `first_playlist_item` if it names a missing
    item. A program with no usable themes or no visual weights is given defaults
-   (`validate_program`, `:108`).
+   (`validate_program`).
 3. On a load failure, `main()` falls back to `get_default_session()` plus
    `search_resources()`, which walks the directory next to the binary and builds one
    theme per directory that DIRECTLY contains at least one file, at any depth, named by
@@ -87,33 +91,52 @@ active set can swap without a stall. The active set is a 4-slot queue —
 (`get_image(true)`), `[3]` loading-next (`theme_bank.h:71`).
 
 Selection is weighted-random via `Shuffler` (one per theme for image loading,
-image picking, animations, and text lines; `ThemeInfo`, `theme_bank.h:92`). The
+image picking, animations, and text lines; `ThemeInfo`, `theme_bank.h`). The
 program's `enabled_theme` weights pick which themes become active; a `pinned`
 theme is always one of the two active, with the weights choosing only the other.
 The frame loop calls `change_themes()` when `swaps_to_match_theme()` reports a
-pending swap (`main.cpp:276`); `set_program` reweights the shuffler when the
-playlist switches programs.
+pending swap; `set_program` reweights the shuffler when the playlist switches
+programs.
+
+Within a single theme that inherits from an ancestor (`scan.inherit`), images are
+**tier-weighted, not drawn flat**: the pool is split into per-tier shufflers (tier 0
+is the theme's own files, then each ancestor in chain order) and `weighted_tier()`
+picks the tier by its source theme's `random_weight` before picking an image inside
+it. Both the draw path and the *load* path use the same weighting — that pairing is
+load-bearing, because weighting only the draw against a tier-blind cache made
+residency track tier size while selection tracked tier weight. A theme with fewer
+than two surviving tiers collapses to a single flat shuffle. Animations, text and
+audio still draw flat from the merged pool; only images are tiered. Full rules:
+[session-json-format.md](session-json-format.md) §3.2.
 
 ## The playlist VM
 
-The playlist is a directed graph of `PlaylistItem`s executed by a small stack
-machine in `play_session()` (`src/trance/main.cpp`). The state is a
-`std::vector<PlayStackEntry>` where each entry is `{item, subroutine_step}`
-(`main.cpp:107`); it starts with the `first_playlist_item` pushed (`:111`). The
-driver is the `while (true)` loop at `main.cpp:223`.
+The playlist is a directed graph of `PlaylistItem`s executed by `PlaylistRunner`
+(`src/trance/playlist_runner.{h,cpp}`) — a small stack machine extracted from
+`play_session()` so the transition logic is testable (`tests/playlist_runner_test.cpp`).
+The state is a `std::vector<Entry>` where each entry is `{item, subroutine_step}`;
+construction pushes `first_playlist_item`. The driver is the `while (true)` loop in
+`advance()`.
+
+The split of responsibility is the thing to remember: **the runner owns the stack and
+the switch clock; the caller owns every side effect.** `play_session()` feeds it a
+wall-clock timestamp in milliseconds and gets an `on_enter` callback per newly-entered
+item, which is where audio events, program switches and theme reweighting happen.
+A paused frame calls `freeze(elapsed_ms)`, shifting the switch clock forward so a held
+item doesn't time out behind frozen visuals.
 
 ### Standard items and timing
 
-A `Standard` item plays its `program` for `play_time_seconds`. The loop checks
-elapsed wall-clock since the last switch (`main.cpp:227`); while a standard item's
-time hasn't elapsed it keeps playing. When the time is up it follows a branch.
+A `Standard` item plays its `program` for `play_time_seconds`. `advance()` compares
+elapsed wall-clock since the last switch; while a standard item's time hasn't elapsed
+it breaks out of the loop and keeps playing. When the time is up it follows a branch.
 
 ### Branching (`next_item`)
 
 Each item has a list of `NextItem` branches (`trance.proto:238`). The next item is
 chosen by **weighted random** over the *enabled* branches —
-`next_playlist_item()` (`main.cpp:27`) sums `random_weight` across branches that
-pass their condition, rolls `random(total)`, and returns the matching branch's
+`next_playlist_item()` (`playlist_runner.cpp`) sums `random_weight` across branches
+that pass their condition, rolls `random(total)`, and returns the matching branch's
 `playlist_item_name`. A branch with total weight 0 (or no branches) ends the
 current item.
 
@@ -121,31 +144,36 @@ current item.
 
 A branch can gate on a session variable. `NextItem.condition_variable_name` /
 `condition_variable_value` reference an entry in `variable_map`;
-`is_enabled(next, variables)` (`src/common/session.cpp:286`) returns true when the
+`is_enabled(next, variables)` (`src/common/session.cpp`) returns true when the
 variable has no condition, or when the live variable's value equals the required
 value. Branches that fail the condition are dropped from the weighted pick — so
 variables steer which paths through the playlist are reachable.
 
 Variable values come from the `--variables` command-line flag, a
-semicolon-separated `key=value` list parsed by `parse_variables`
-(`main.cpp:309`, with `\` escaping for `;`, `=`, `\`). The last values per session
-persist in `System.last_session_map` (`trance.proto:76`).
+semicolon-separated `key=value` list parsed by `parse_variables` (`main.cpp`, with
+`\` escaping for `;`, `=`, `\`) and handed to the runner at construction. The last
+values per session persist in `System.last_session_map` (`trance.proto:76`).
 
 ### Subroutines
 
 A `Subroutine` item is a list of other item names (`trance.proto:225`). When the
 loop reaches a subroutine entry it **pushes** the named child onto the stack and
-advances the parent's `subroutine_step` (`main.cpp:232`). Each pushed child runs
-as its own item (standard or another subroutine — they nest). When a child has no
-enabled `next_item` and the stack is deeper than one, the loop **pops** back to
-the parent and continues to the parent's next step (`main.cpp:256`). The stack is
-bounded by `MAXIMUM_STACK` (256, `common/common.h`); overflow is reported and the
-subroutine is abandoned rather than recursing forever (`main.cpp:234`).
+advances the parent's `subroutine_step`. Each pushed child runs as its own item
+(standard or another subroutine — they nest). When a child has no enabled
+`next_item` and the stack is deeper than one, the loop **pops** back to the parent
+and continues to the parent's next step. The stack is bounded by `MAXIMUM_STACK`
+(256, `common/common.h`); overflow is reported and the subroutine is abandoned
+rather than recursing forever.
 
-Each switch (standard branch, subroutine push) also: fires the new item's audio
-events (`Audio::TriggerEvents`), reweights the theme bank and director for the new
-program (`set_program`), and re-applies the program's entrainment bed
+Each entry fires the runner's `on_enter` callback, and `play_session()`'s
+implementation of it does the rest: the new item's audio events
+(`Audio::TriggerEvents`), reweighting the theme bank and director for the new
+program (`set_program`), and re-applying the program's entrainment bed
 (`SetEntrainment`).
+
+**Known hole:** a weighted cycle of standard items that all have `play_time_seconds`
+of 0 never satisfies the hold condition, so `advance()` loops forever, firing audio
+events every pass. Only subroutine depth is bounded; there is no iteration cap.
 
 ### Summary
 

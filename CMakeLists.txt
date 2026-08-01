@@ -177,6 +177,7 @@ add_executable(trance
   src/trance/media/font.cpp
   src/trance/net/command_channel.cpp
   src/trance/net/command_protocol.cpp
+  src/trance/platform/display_info.cpp
   src/trance/platform/overlay_hints.cpp
   src/trance/playlist_runner.cpp
   src/trance/platform/system_control.cpp
@@ -287,6 +288,27 @@ if(TRANCE_BUILD_TESTS)
     target_compile_options(session_json_test PRIVATE /wd4267)
   endif()
   add_test(NAME session_json_test COMMAND session_json_test)
+
+  # ThemeBank tiered-selection regression test. The ONE test here that is not headless:
+  # ThemeBank::get_image uploads through Image::ensure_texture_uploaded, which needs a
+  # current OpenGL context (sf::Context -- no window), so it links SFML and GL and is
+  # labelled `gpu` so `ctest -LE gpu` stays green on a GPU-less runner. It skips loudly
+  # with success when no context can be created, rather than reddening CI.
+  add_executable(theme_bank_test
+    src/trance/media/async_streamer.cpp
+    src/trance/theme_bank.cpp
+    tests/theme_bank_test.cpp)
+  target_include_directories(theme_bank_test PRIVATE src/)
+  target_link_libraries(theme_bank_test PRIVATE
+    common_lib
+    trance_options
+    SFML::System SFML::Window SFML::Graphics
+    OpenGL::GL)
+  if(MSVC)
+    target_compile_options(theme_bank_test PRIVATE /wd4267)
+  endif()
+  add_test(NAME theme_bank_test COMMAND theme_bank_test)
+  set_tests_properties(theme_bank_test PROPERTIES LABELS gpu TIMEOUT 120)
 
   # #21 command channel protocol test (docs/spec-mcp-ambient-daemon.md sec 3/4). Bare
   # C++17 like v3_grammar_test above: command_protocol.{h,cpp} is the pure line->Verb

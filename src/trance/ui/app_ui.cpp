@@ -3,6 +3,7 @@
 #include <common/session_json.h>
 #include <trance/director.h>
 #include <trance/media/audio.h>
+#include <trance/platform/display_info.h>
 #include <trance/runtime_state.h>
 #include <trance/theme_bank.h>
 #include <trance/visual/builtin_patterns.h>
@@ -873,10 +874,44 @@ void AppUi::draw_program_section()
   }
   bool changed = false;
 
+  // This row used to read as a render-rate knob, which it has never been -- the number
+  // next to it is the whole point. global_fps is the CONTENT clock (how fast the cycler
+  // tree ticks); frames reach the screen at whatever vsync / the presentation cap in
+  // render.cpp allows, no matter what this says. So turning it down saves no GPU at all,
+  // it just stretches every `Nf` in the grammar and runs the visuals slower.
   int fps = static_cast<int>(program->global_fps());
   if (ImGui::DragInt("global fps", &fps, 0.25f, 15, 240, "%d", ImGuiSliderFlags_AlwaysClamp)) {
     program->set_global_fps(static_cast<uint32_t>(std::max(15, std::min(240, fps))));
     changed = true;
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Content tick rate -- NOT the render rate.\n"
+                      "Frames are presented at the display's refresh either way, so\n"
+                      "lowering this does not save GPU: it slows the visuals down,\n"
+                      "because every duration in a pattern is a tick count (`every 64f`).\n"
+                      "Ticks above the refresh are states the panel never gets to show.");
+  }
+  // Refresh comes from the OS, not SFML -- sf::VideoMode has no such field (display_info.h).
+  const uint32_t refresh_hz = display_refresh_hz();
+  if (!refresh_hz) {
+    ImGui::TextDisabled("display refresh: unknown");
+  } else {
+    ImGui::TextDisabled("display refresh: %u Hz", refresh_hz);
+    // +1 of slack before nagging. Display mode tables report an integer Hz truncated
+    // from a fractional rate -- the common 59.94/59.95 Hz "60 Hz" panel comes back as
+    // 59 (measured on this machine) -- so an exact `>` would put a warning next to the
+    // perfectly sensible setting of 60 and complain about one tick per second. Anything
+    // that is genuinely over-clocking the panel (the 120-on-60 case, 61 ticks/s) clears
+    // this by a mile.
+    if (program->global_fps() > refresh_hz + 1) {
+      // Stated as the concrete cost rather than a bare "too high": the surplus ticks are
+      // not wasted DRAW calls (the panel is presented at its own rate regardless), they
+      // are pattern states that are computed and then overwritten before any frame
+      // samples them.
+      ImGui::SameLine();
+      ImGui::TextColored(kWarnAmber, "-- %u tick/s never reach the panel",
+                         program->global_fps() - refresh_hz);
+    }
   }
 
   // Built-in visual weights used to live here, duplicating the Visuals section's list

@@ -615,11 +615,26 @@ void Director::change_visual(uint32_t length)
       }
     }
   }
-  // Like !random_chance(chance), but scaled to current speed and cycle length.
-  // Roughly 1/2 chance for a cycle of length 2048.
-  auto fps = program().global_fps();
-  uint32_t stick = (2 * fps * length) / 2048;  // guard random(0) for short cycles
-  if (included && length && stick && random(stick) >= 120) {
+  // Stickiness: having just finished a cycle of the visual we are already on, roughly
+  // 1/2 the time keep it for another one at the reference cycle length of 2048 authoring
+  // frames, tapering to never below 1024.
+  //
+  // Measured in AUTHORING frames, not raw ticks. `length` is a tick count at the
+  // program's global_fps, and the old form (`random((2 * fps * length) / 2048) >= 120`)
+  // compared it against a bare 120 that carried no meaning except that it happened to
+  // equal the default global_fps -- so the heuristic only held at exactly 120 fps. At 60
+  // the largest value the draw could produce was itself 120, the comparison could never
+  // be true, and stickiness silently vanished: the visual changed on EVERY cycle. Scaling
+  // the length back onto the authoring clock makes the odds depend on the cycle's
+  // wall-clock duration alone, which is what "roughly half the time" was always about.
+  //
+  // Same odds as the old form at 120 fps: there stick = 2*120*length/2048 = 15*length/128
+  // and P(keep) = 1 - 120/stick = 1 - 1024/length, which is what this computes directly.
+  // (The old integer division made that exact only for lengths that are multiples of 128
+  // -- which every shipped built-in is, so at the default nothing moves at all.)
+  const uint32_t fps = std::max(1u, program().global_fps());
+  const uint64_t authored = uint64_t(length) * kAuthoringFps / fps;
+  if (included && authored > 1024 && random(uint32_t(authored)) >= 1024) {
     return;
   }
 

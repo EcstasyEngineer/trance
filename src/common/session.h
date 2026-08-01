@@ -90,4 +90,22 @@ void save_session(const trance_pb::Session& session, const std::string& path,
 trance_pb::Session get_default_session();
 void validate_session(trance_pb::Session& session);
 
+// The clock every pattern in this engine is authored against, and the default a new
+// Program gets for `global_fps`.
+//
+// global_fps is the CONTENT clock -- how fast the cycler tree ticks -- and NOT the rate
+// at which frames reach the screen. The main loop drains however many content ticks the
+// elapsed wall-clock bought and then presents at most once (src/trance/main.cpp), so the
+// present rate is bounded by vsync / the presentation cap in render.cpp, never by this
+// number. Consequently lowering global_fps does not save a single GPU frame; it stretches
+// the grammar, whose only duration unit is the raw frame (`every 64f`), so every visual
+// literally runs slower. That is why this stays at the rate the shipped built-ins were
+// authored and measured against (builtin_patterns_v3.cpp quotes exact frame counts).
+//
+// It is a named constant rather than a bare literal because the number also has to be
+// quoted anywhere odds or rates are expressed per authored frame -- see the visual
+// stickiness heuristic in director.cpp, which previously compared against a loose `120`
+// that only worked because it happened to equal this.
+constexpr unsigned int kAuthoringFps = 120;
+
 #endif

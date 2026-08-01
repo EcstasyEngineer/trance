@@ -110,7 +110,7 @@ every playlist program change.
 
 ## Mute toggle
 
-`Audio::ToggleMute()` (bound to **M** in `handle_events`, `main.cpp:80`) flips a
+`Audio::ToggleMute()` (bound to **M** in `handle_events`, `main.cpp`) flips a
 global mute over **every channel and the entrainment bed at once**. It is
 implemented with SFML's listener global volume (`sf::Listener::setGlobalVolume`,
 0 or 100), so it sits above the per-channel fade logic and is exactly reversible —

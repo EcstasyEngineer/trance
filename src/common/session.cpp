@@ -72,7 +72,7 @@ namespace
   {
     auto& program = (*session.mutable_program_map())[name];
     set_default_visual_types(program);
-    program.set_global_fps(120);
+    program.set_global_fps(kAuthoringFps);
     program.set_zoom_intensity(.5f);
     *program.mutable_spiral_colour_a() = make_colour(255, 150, 200, 50);
     *program.mutable_spiral_colour_b() = make_colour(0, 0, 0, 50);

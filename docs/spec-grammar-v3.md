@@ -17,8 +17,8 @@
 > a register. Where this spec and any older prose disagree, **the parser and runtime enums are
 > the source of truth** (`pattern_ast.h`, `pattern_parser_v3.cpp`, `render_eval.cpp`, `api.cpp`).
 > §0 (locked decisions) governs the rest; §11's EBNF is regenerated directly from the parser and
-> is the current normative grammar. Honest-limits tone is kept throughout; §12 and Appendix A/B
-> remain as implementation history, not a live task list.
+> is the current normative grammar. Honest-limits tone is kept throughout; §12 and Appendix A
+> record what is still open, not a task list of what shipped.
 
 ---
 
@@ -47,7 +47,7 @@ warp amplitude (curve 0 -> 0.3)  wavelength 0.2  speed (curve 1 -> 3)
 runtime extension (bounded):** the shader lines + a `RenderStmt` warp-param trio (live `[expr]`
 like zoom) + uniform plumbing in `api.cpp`/`render.cpp` + a per-frame `warp_time`. This
 REPLACES §4.5's `Effect::Kind::Walk` register-walk design (and moots its fps-normalization /
-dead-zone gaps in A.1/§12, since time comes from the frame clock, though `warp_speed` still
+dead-zone gaps the pre-ship review raised, since time comes from the frame clock, though `warp_speed` still
 scales per-second). `drunk <intensity>` becomes sugar for `warp amplitude <intensity>` with a
 sensible default wavelength/speed. If this proves too costly it can be deferred without
 changing any other primitive.
@@ -63,7 +63,7 @@ The spiral fragment shader (`shaders.h:82-99`) has **7 types** (`spiral_type` 1�
 draft's "5"), `width` = arm count, `acolour`/`bcolour`, and a `time` uniform that spins it.
 - `look { spiral type=N width=W }` → a deterministic `SpiralSet` effect (Extension #3) pinning
   type/width (replacing `change_spiral`'s random roll). Hard-errors until Ext#3 lands (no
-  silent fallback — corrects the A.1 note). **[Ext#3 has since shipped — see §9/§4.12;
+  silent fallback). **[Ext#3 has since shipped — see §9/§4.12;
   `look { spiral type=N }` lowers today, it no longer hard-errors.]**
 - `spiral speed <curve>` → drives the `time` uniform's per-frame rate (Extension #1).
   **[Ext#1 has since shipped — see §4.4/§9; fully live, no stairstep.]**
@@ -72,8 +72,8 @@ draft's "5"), `width` = arm count, `acolour`/`bcolour`, and a `time` uniform tha
 **0.5 `super_fast`: commit to randomness primitives; delete `SuperFastTick`.** No `raw {}`
 escape hatch. Accept "same effect, not the same frames." Closes that §12 open question.
 
-**0.6 Register scoping — lexical, pattern-scoped, compile-time qualified (resolves the A.1
-collision).** A register name is **local to its nearest enclosing `pattern`**; cadence blocks
+**0.6 Register scoping — lexical, pattern-scoped, compile-time qualified (resolves the
+review's flagged collision risk).** A register name is **local to its nearest enclosing `pattern`**; cadence blocks
 (`every`/`loop`) do **not** open a new register scope (so a `copy cur -> prev` inside an
 `every` and the `draw cur` / `draw prev` statements in the same pattern hit the same registers — which
 is exactly what crossfade needs).
@@ -844,7 +844,7 @@ source. Anchoring these zooms to the whole `life` clock is the regression to avo
 image would enter already halfway zoomed, and the copied image would jump at the handoff.
 
 **No `crossfade` keyword and no `--expand` macro shipped.** This subsection's closing line in
-earlier drafts described a planned `crossfade`/`pulse` macro system (Appendix B Phase 4)
+earlier drafts described a planned `crossfade`/`pulse` macro system
 whose `--expand` output would print exactly the primitives above. That macro layer was never
 built — grep confirms no `crossfade`/`expand` token anywhere in `pattern_parser_v3.cpp`.
 Every v3 built-in (including the shipped `flash_text`, §10 EX6) writes the copy/draw/image
@@ -1344,13 +1344,14 @@ NAME` (a shared-phase toggle across two statements — §4.18 ships statement-sc
 
 ## 12. Open questions
 
-See `open_questions` in the accompanying plan (historical); most of these have since been
-settled by shipping: the drunk clamp-bias question is moot (drunk shipped as warp-sugar, §4.6
-— no register/clamp/RNG at all, §4.5's design was dropped rather than tuned), and spiral
-type/width stayed a `look {}` selector (§4.12) rather than being promoted to a proto field.
-Genuinely still open: whether `beats`/`locked` should remain a compile-time period or wait
-for a live audio clock (§9's non-goals; see `docs/authoring-v3-patterns.md` for the current
-compile-time semantics).
+The draft carried a longer list; most of it was settled by shipping. The drunk clamp-bias
+question is moot (drunk shipped as warp-sugar, §4.6 — no register/clamp/RNG at all, §4.5's
+design was dropped rather than tuned); `super_fast`'s fidelity question is closed by §0.5;
+and the macro-drift question is moot because no macro layer was ever built (§6).
+
+**What is still open is listed in Appendix A.** The most commonly hit of them: whether
+`beats`/`locked` should remain a compile-time period or wait for a live audio clock (§9's
+non-goals; see `docs/authoring-v3-patterns.md` for the current compile-time semantics).
 
 ---
 
@@ -1397,96 +1398,18 @@ prefer constants and generate-time bindings over live node attributes.
 
 ---
 
-## Appendix A — Historical review findings
+## Appendix A — Open design questions carried forward
 
-This appendix is retained as implementation history. The shipped behavior is defined by
-Sections 0-11 above and the parser/runtime source. Some findings below are now resolved or
-intentionally superseded.
+Questions the shipped design deliberately left unanswered. Everything in §0–§11 is
+settled; these are not. They are recorded so they get re-argued on purpose rather than
+re-discovered by accident.
 
-This spec is the output of a multi-agent design workflow (18 recon analysts, 5 divergent design proposals, 15 adversarial critiques, synthesis, then a completeness critic). **Note:** 5 recon analysts failed (including the dedicated *spiral* and *drunk-feasibility* readers), so those areas were grounded by the designers/critic reading the code directly rather than a dedicated pass. The completeness critic (confidence **76/100**) found the gaps below. Treat §1–§12 as a strong draft, **not** final, until these are resolved.
+(The original Appendix A — a completeness critic's findings against the pre-ship draft —
+and Appendix B — the phased implementation plan — have been deleted. Both were fully
+executed or superseded, and both cited `pattern_parser_v2.cpp`, a file that no longer
+exists. Git history holds them.)
 
-### A.1 Gaps (the load-bearing one is first: text cannot crossfade)
-- TEXT CANNOT CROSSFADE OR STASH — FATAL for the flagship example (EX6 §10, and §6/§4.6). `word`/`caption` lower to Effect::Kind::Text/SmallSub which call api.change_text()/change_small_subtext() mutating a SINGLE internal VisualControl text queue (_current_text in api.cpp:114-129). RenderStmt::Op::Text (render_eval.cpp:313-318) calls render_text(origin,zoom,shadow_origin,shadow_zoom) — it takes NO content register and NO alpha. Copy only moves images[] (compiled_visual.cpp:175-176), there is no text register. Therefore EX6's `word concept -> cur` + `image-reg prev/cur fade out/in` DOES NOT LOWER: text has exactly one live slot, cannot be Copy'd to `prev`, and cannot be alpha-faded at all. The doc presents flash_text (text crossfade) as built 'entirely from primitives' but the crossfade-from-primitives mechanism (§6) is image-only. The doc must either (a) restrict crossfade to images, (b) name a text-register + render_text-alpha runtime extension, or (c) re-author flash_text as image content. §4.2 lists `word`/`caption` as DRAW effects with `-> REG` and `alpha`/`fade` params as if symmetric with `image`; they are not.
-- The `-> REG` register-naming and `image-reg REG` (draw-without-pull) primitives (§4.2) are NOT verified to exist in the current parser/runtime. The runtime CAN draw any image register (RenderStmt.image_reg, render_eval.cpp:293-294 reads images[name], empty if unset), so image-reg lowers, but the v2 parser's `-> REG` path (pattern_parser_v2.cpp:783) defaults to 'current' and the doc never confirms an `image-reg` statement exists in v2 — it is a NEW parser surface the plan must build (Phase 1), not an existing lowering. The doc's framing ('omit the pull half') is sound for IMAGES only.
-- §4.1/§4.3 conflate cycler leaves with render statements when justifying 'parallel-by-default'. A DRAW is a flat RenderStmt evaluated every frame (render_eval.cpp:285), NOT a cycler child with a length. The Walk leaf (§4.5) and `every` cadence ARE cycler ActionCyclers. So 'a driver leaf and a persistent draw co-run over the box clock' is half-true: the draw never participates in the Par/LCM at all; only schedule-side effect leaves do. The parallel-default matters for co-running TWO effect leaves (e.g. a Walk leaf + an `every`-copy leaf), not for draws. The rationale in §2/§3 ('fixing mod's seq-default co-run bug') is correct for effect leaves but the doc's wording implies draws are scheduled.
-- §4.4 / §9 Ext#1 spiral stairstep degradation is under-specified for the continuous-curve case. The stairstep lowers `spiral speed M` to a Seq of SpiralRot literal-rate leaves sampled at segment boundaries — but the doc never says HOW MANY segments, what the segment length is, or how the sampling interacts with `over NAME` (a curve riding an ancestor clock cannot be statically sampled into fixed-rate segments without knowing the ancestor's period). build_ramp in v2 (the existing unroller) produces UN-ID'd segments (§4.7 honest limit, §7.5), so a spiral-speed curve `over life` has no defined stairstep lowering. Gap: stairstep segment count/length and its incompatibility with `over` curves.
-- §9 Ext#2 drunk clamp/BOUND and fixed-point milli-units are asserted but the int32 register range and frame-rate dependence are unverified. random(T) is std::uniform_int_distribution{0,max-1} (util.h:28-32) so `random(3)` gives 0/1/2 and `int(random(3))-1` gives -1/0/1 (correct, verified). BUT: the per-frame step is NOT normalized for global_fps (recon: rotate_spiral normalizes by 32*sqrt(width); the doc's Walk has no analogous normalization), so wander speed changes meaning if global_fps changes. The doc's open-question on clamp-bias (§12) acknowledges bias but not fps-dependence. Also `int(rate*1000)` truncates small intensities to 0 — at intensity 0.0005 the step is 0 every frame (dead zone). Gap: fps-normalization + small-intensity truncation in the milli-unit encoding.
-- §9 Ext#3 (SpiralSet deterministic selector) is required for `look { spiral type=N width=W }` (§8 table, EX6) but NO graceful-degradation path is given for it, unlike Ext#1/#2. change_spiral() re-rolls randomly and no-ops 25% (api.cpp:92,95-96); there is NO existing setter. So until Ext#3 ships, `look { spiral type=N }` cannot lower AT ALL (it can only re-roll). The doc claims (§9 intro) 'each has a graceful-degradation path so the grammar surface never changes' — false for Ext#3. EX6 uses `look { spiral type=3 width=6 }` as if it works.
-- §7.4 compile-time resolution check #3 ('warn when prev/cur zoom pair anchored to different-length clocks') is under-specified: how does the compiler know two draws form a 'dissolve pair'? There is no `prev`/`cur` typing in the runtime — register names are pure convention (recon: 'current/prev/next... are conventions established by the patterns, not types'). The compiler cannot generically detect a dissolve pair without hardcoding the `prev`/`cur` names, which re-introduces the baked-convention coupling the redesign wants to remove. Either the check is hardcoded to those names (a baked convention) or it cannot be implemented as stated.
-- spiral 'direction = magnitude vs sign' (§8 direction note, §5) is asserted but rotate_spiral already flips sign via reverse_spiral_direction (api.cpp:78). The doc says grammar `speed` is magnitude and the setting owns sign — but a curve `0.1 -> 1.0` produces only positive rates today; there is no defined behavior for a NEGATIVE speed curve, and the interaction with the existing sign-flip is documented but not lowered. Minor, but the 'avoid double-control' claim needs the Ext#1 implementation to actually drop the setting's sign or define precedence.
-- Resolved: the plan needed a golden around FLASH_TEXT's zoom-continuity invariant before deleting the baked crossfade branch. The shipped version uses explicit per-beat zoom halves (`cur` 0.0->0.5, copied `prev` 0.5->1.0) and `tests/v3_grammar_test.cpp` checks that fade and both zoom halves ride the same beat clock.
-
-### A.2 Verified-false / unverified claims
-- §4.2 / EX6 / §6: that `word`/`caption` (text) can be drawn from a named register with complementary fades. VERIFIED FALSE — text has one live slot, no register, no alpha (api.cpp:114-129,206-228; render_eval.cpp:313-318). Crossfade-from-primitives is IMAGE-ONLY.
-- §4.2: that an `image-reg REG` statement and `-> REG` register naming already exist as lowerings. The runtime supports drawing arbitrary image registers (render_eval.cpp:293-294) but the v2 parser hardcodes target='current' (pattern_parser_v2.cpp:783); these are NEW parser surfaces to build, not existing lowerings. Doc's 'lowers with zero runtime change' is true for the runtime, not for the parser.
-- §9 intro: 'each [extension] has a graceful-degradation path so the grammar surface never changes.' FALSE for Ext#3 (SpiralSet) — without it, `look { spiral type=N }` cannot select at all, only re-roll (api.cpp:90-97).
-- §4.5/EX5: that `int(rate*1000)*(int(random(3))-1)` is a well-behaved bounded walk. random(3) verified correct (-1/0/1), but the milli-unit truncation creates a dead zone for intensity < 0.001 and the step is not fps-normalized (unlike rotate_spiral, api.cpp:81).
-- §7.4 #3: that the compiler can detect a 'prev/cur zoom pair in a dissolve' generically. Register names are untyped conventions (pattern_runtime.h); detection requires hardcoding names.
-- §4.1: that `beats N` and `locked` lower today. `every locked` works (pattern_parser_v2.cpp:796) but `spiral locked` hard-errors unconditionally (pattern_parser_v2.cpp:677-683); the doc's §4.4 spiral does not claim `locked` but §4.1 `locked` len + §9 'live phase-accurate beat out of scope' should explicitly note spiral-locked is dead.
-- §3/§4.1: that a pattern body 'parallel by default' makes draws and drivers 'share one duration'. Draws are flat RenderStmts, not cycler children (render_eval.cpp:285); only effect leaves participate in the Par/LCM (cyclers.cpp:210-213).
-
-### A.3 Recommended fixes (do these before/early in implementation)
-- Resolve the TEXT crossfade gap before Phase 1: either (a) restrict §6 crossfade and EX6 flash_text to IMAGE content and re-author flash_text with images, or (b) add a named runtime extension (Ext#4) for a text-content register + an alpha param on render_text(). The doc currently presents flash_text (the flagship 'every line is <effect><param><modulator>' proof) on a substrate (text) that cannot crossfade. This is the single most load-bearing fix.
-- Add a graceful-degradation path for Ext#3 (SpiralSet) or move spiral type/width OUT of v3's must-ship surface. State explicitly that `look { spiral type=N }` is a hard-error (like `spiral locked`) until Ext#3 lands, mirroring the §9 honesty for the other extensions. Fix EX6 which uses it as if it works.
-- Specify the stairstep lowering for `spiral speed <curve>` precisely: segment count/length, and explicitly hard-error (or forbid) `spiral speed <curve> over NAME` until Ext#1, since build_ramp segments are un-id'd and an ancestor-anchored curve cannot be statically sampled (§4.7, §7.5).
-- Re-specify §7.4 check #3 without relying on untyped register-name conventions: either drop it, or make it a general 'two image draws of registers written by the same per-beat leaf, anchored to different-length clocks' structural check, and document that it is name-agnostic.
-- Tighten §4.5 drunk lowering: define fps-normalization for the Walk step (parallel to rotate_spiral's 32*sqrt(width)), define behavior for intensity below the milli-unit resolution (dead zone), and pick BOUND relative to the milli-unit scale and global_fps. Fold fps-dependence into the §12 open question.
-- Correct the §3/§4.1 'parallel-by-default co-run' rationale to distinguish schedule-side effect leaves (which Par/LCM) from flat render statements (which do not). The parallel default is justified by co-running multiple EFFECT leaves, not by co-running a draw with a driver.
-- Done: add a golden test asserting the v3 FLASH_TEXT zoom halves ride the same beat clock, preventing the copied image from jumping at the handoff.
-
-### A.4 Plan risks
-- Phase 1 ports EX6's crossfade-from-primitives as a smoke pattern, but EX6 uses `word` (text) which cannot crossfade. Phase 1 will either fail to lower or silently render wrong (render_text ignores the register and alpha). The text-vs-image asymmetry must be resolved BEFORE Phase 1, not discovered in it.
-- Phase 1 lists `image/word/caption/image-reg` draws as one unit lowering 'with zero runtime change', but word/caption text has no register/alpha and image-reg/`-> REG` are new parser surfaces. The phase under-scopes the text limitation and over-claims the zero-change property.
-- Phase 2b changes render_spiral() signature and all callers 'in one commit' with a stairstep fallback flag — but the stairstep path for CURVED (non-literal) speed is itself unbuilt and incompatible with `over NAME` curves. The fallback may not exist for the cases 2b is meant to replace.
-- Phase 2 bundles Ext#3 (SpiralSet / `look { spiral type/width }`) into the spiral phase but gives it no degradation path; if Ext#3 slips, every v3 builtin using `look { spiral ... }` (EX6) is unauthorable, blocking the Phase 4 cutover.
-- Phase 4 deletes the v2 crossfade branch after v3 goldens 'match v2 visual behavior', but the only stated tolerance is 'same effect not same frames' for super_fast — the zoom-continuity invariant (the +0.5 double-zoom fix) is frame-shape-sensitive and could regress legibly without a dedicated golden.
-- The plan keeps v2 and v3 parsers coexisting (Phase 0) and flips a director flag at Phase 4. Register-name collisions across nested v3 subpatterns sharing 'current'/'prev' (recon: registers are a single flat namespace, no scoping) are not addressed in any phase — nested patterns each minting `cur`/`prev` will clobber. This needs a register-mangling or scoping decision in Phase 1, not Phase 4.
-
-### A.5 Ambiguous decisions needing a call
-- Grammar-vs-settings for text: the doc puts image alpha/zoom/origin in GRAMMAR (§8) but never states that TEXT has no per-frame alpha/content-register at the runtime floor, so the grammar-vs-settings table implies text is symmetric with images when it is not. Decision needed: is text a draw-with-modulators (requires runtime extension) or a fixed-look draw (settings-tier, no fade)?
-- §7.4 check #3 (dissolve-pair warning) leaves ambiguous whether the compiler hardcodes the `prev`/`cur` register names (a baked convention) or detects pairs structurally. The doc wants no baked conventions but the check as written needs them.
-- spiral `speed` sign: §8 says grammar speed is magnitude and the setting owns sign, but whether a negative speed-curve is a parse error, clamped, or honored (overriding reverse_spiral_direction) is undecided.
-- Whether `every <curve>` (ramped cadence, §4.7) is even allowed in v3 given its un-id'd segments break `over` anchoring and per-flash wobble — the doc names it an honest limit but does not decide if v3 ships it or defers it (Extension #3 territory).
-- Register scoping for nested subpatterns: whether `cur`/`prev` are auto-mangled per subpattern or share one flat namespace (collision risk) is left unstated despite §7.1 claiming arbitrary-depth nesting.
-
-### A.6 Open questions
-- DRUNK clamp bias: a bounded zero-centered random walk on an int32 register biases toward the clamp center over long runs (unlike spiral's wrap), so a long-lived `drunk` may decay from 'staggers around' to 'hovers near middle'. Should the Walk effect wrap (like _spiral) instead of clamp, use a reflecting boundary, or add a weak restoring force? Needs empirical tuning of BOUND and intensity scaling against real footage.
-- Spiral selector home: should `look { spiral type=N width=W }` lower to a deterministic SpiralSet *effect* (Extension #3) or be promoted to per-Program proto fields edited in the wxWidgets ProgramPage? The effect keeps it per-(sub)pattern and grammar-local; the proto field gives editor support but crosses into session config. Pick one before Phase 2b.
+- Spiral selector home: should `look { spiral type=N width=W }` lower to a deterministic SpiralSet *effect* (Extension #3) or be promoted to per-Program proto fields edited in the session-config editor (the F2 panel)? The effect keeps it per-(sub)pattern and grammar-local; the proto field gives editor support but crosses into session config. (Originally phrased against the wxWidgets ProgramPage, which no longer exists; the design tension it names does not depend on which editor is doing the editing.)
 - `beat` modulator semantics: today `beat`/`locked` is a compile-time period (round(global_fps/pulse_hz)), not a live phase-accurate audio clock. v3 ships the compile-time version. Do we ever want true phase coincidence (a live audio->visual beat counter), which is a genuine runtime extension exposing the audio thread's pulse_phase to the render loop? Named but deferred.
-- Per-segment ramp ids (Extension #3): `every <curve>` unrolls to un-id'd leaves, so per-flash wobble inside an accelerate is unauthorable. Is this worth a runtime/unroller change (mint per-segment ids) in a later milestone, or is whole-ramp progress an acceptable permanent limitation? Carried forward, not solved.
-- Drunk as warp vs wobble: v3 confines drunk to origin/zoom (a zoom-pivot stagger). Some authors will expect positional jitter or image warp, which needs a new RenderStmt offset/rotation param + vertex-shader uniform. Is that demand strong enough to justify Extension #1b in a future version, or is the zoom-pivot wobble sufficient?
-- super_fast re-authoring fidelity: Phase 4 re-authors super_fast from chance/roll primitives, accepting 'same effect, not same frames' (the v2 decision). Do we keep super_fast's C++ FSM as a `raw {}` escape hatch for exact reproduction, or fully commit to the randomness-primitive approximation and delete SuperFastTick?
-- Macro/expansion drift: `crossfade`/`pulse` survive as printable macros whose expansion IS the lowering path. What enforces that the macro text and the primitive lowering never drift (the exact failure mode of the v2 crossfade keyword)? A golden test that the macro's --expand output re-parses to the identical Node/RenderStmt tree as hand-written primitives is the proposed guard — confirm it is sufficient.
----
-
-## Appendix B — Phased implementation plan (build stays green at each step)
-
-### Phase 0 — Spec + parser scaffolding (build stays green; no behavior change)
-
-**Work:** Land docs/spec-grammar-v3.md (this design). Add a v3 parser entry point alongside patternv2::parse (do NOT remove v2). The v3 parser produces the SAME pattern::Node + vector<RenderStmt> IR, so it compiles through the existing pattern_compiler with zero runtime change. Wire it behind a feature flag / separate builtin set so nothing in the shipping path calls it yet.
-
-**Stays green:** New code is additive and unreferenced by the live director path; existing v2 builtins and the equivalence tests are untouched, so the build and all current patterns compile and run exactly as before.
-
-### Phase 1 — Core nouns + the zero-runtime-change subset (pattern nesting, draws, zoom/fade/origin, copy)
-
-**Work:** Implement: `pattern NAME for len [seq|loop N] { body }` lowering to One/Seq/Par/Rep nodes with minted ids (parallel-by-default body); `image/word/caption/draw` statements; the curve-drive class (zoom/fade/origin/alpha) lowering to RenderStmt [expr] strings; modulators (literal/curve/beat/rawexpr) with `over NAME` anchor resolution; `every ... -> NAME` cadence minting per-beat leaf ids; `copy/set/inc/roll` state effects. Add the §7.4 compile-time resolution check (every `over NAME` and wired name resolves). Port EX1, EX3, and EX6's crossfade-from-primitives as v3 smoke patterns.
-
-**Stays green:** This entire subset lowers to existing runtime constructs (verified: Copy effect exists, Image RenderStmt has alpha/origin/zoom, resolve_ident reads any minted id). No Effect::Kind or RenderStmt::Op changes. Existing equivalence/golden tests for v2 still pass; new v3 patterns get their own golden tests asserting they lower to the expected Node/RenderStmt shape.
-
-### Phase 2 — Spiral speed (stairstep first, then Extension #1)
-
-**Work:** Step 2a: implement `spiral` draw + `spiral speed <mod>` lowering to the STAIRSTEP unroll (Seq of SpiralRot literal-rate leaves) — zero runtime change, ships first. Step 2b (Extension #1): add a `speed` [expr] field to RenderStmt::Op::Spiral and change render_spiral() to render_spiral(float speed) with a _spiral_speed read each frame; switch `spiral speed` lowering to the live RenderStmt path. Add the deterministic SpiralSet setter (Extension #3) and the `look { spiral type/width }` header.
-
-**Stays green:** 2a is additive and uses existing SpiralRot — green by construction. 2b changes one virtual signature (render_spiral) and all its callers in one commit, with the stairstep path kept as a fallback flag until the live path passes its golden test; the spiral draw default (parameterless behavior) is preserved when no speed expr is present, so existing patterns are unaffected.
-
-### Phase 3 — The drunk effect (Extension #2)
-
-**Work:** Add Effect::Kind::Walk to the enum and one run_effect case (clamped zero-centered milli-unit random walk using existing random()). Implement `drunk <intensity-mod> [on origin|zoom]` lowering to a length-1 Walk leaf + an origin/zoom [expr] reading the milli-unit register. Hard-error on `drunk warp` (declined Extension #1b). Port EX5. Validate clamp-bias behavior empirically and tune BOUND.
-
-**Stays green:** Adding an enum member + a switch case is localized and exhaustive-switch-safe (all existing run_effect cases untouched); no existing pattern emits Walk, so prior behavior is identical. New drunk patterns are gated behind v3-only goldens.
-
-### Phase 4 — crossfade/pulse macros, flash_text cutover, and v2 deprecation
-
-**Work:** Implement `crossfade`/`pulse` as printable (--expand) macros whose expansion IS the Phase-1 primitive lowering (copy + `draw prev` + source-over fade-in of `cur`). Re-author all 8 builtins in v3 (flash_text per EX6). Once v3 goldens match v2 visual behavior (accepting 'same effect, not same frames' for super_fast), flip the director path to v3 builtins and delete the baked `crossfade` keyword branch from the v2 parser.
-
-**Stays green:** Macros are sugar over already-tested primitives, so they add no new lowering risk. The v2 parser and its crossfade keyword are removed only AFTER the v3 builtins pass goldens and the director is switched, in a single commit with the old goldens retired; if anything regresses, the flag flips back to v2.
+- Per-segment ramp ids: `every ramp` unrolls to per-segment leaves with minted ids (`NAME_00`, `NAME_01`, …) — but a bare `every <curve>` still unrolls to un-id'd leaves, so per-flash wobble inside such a ramp is unauthorable. Is closing that worth an unroller change in a later milestone, or is whole-ramp progress an acceptable permanent limitation? Carried forward, not solved.
+- Drunk as warp vs positional wobble: `drunk`/`warp` shipped as a sinusoidal *sampling* displacement in the fragment shader (§0.2, §4.6). Some authors will instead expect the whole image to jitter or rotate, which needs a new `RenderStmt` offset/rotation param plus a vertex-shader uniform — Extension #1b, explicitly declined for v3 (§9.1b). Is that demand strong enough to justify #1b in a future version, or is the wave warp sufficient?

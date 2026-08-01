@@ -41,7 +41,7 @@ structures (`SessionArchive`, deprecated fields, `OCULUS`) cut.
 | Default session | `default.json` (`DEFAULT_SESSION_PATH`, `src/common/common.h`) — auto-created on a no-arg cold start, auto-migrated from a legacy `./default.session` when one is present (main.cpp) |
 | System config | `system.json` next to the exe (`SYSTEM_CONFIG_PATH`, `common.h:7`) |
 | Pattern source | `*.pattern`, plain UTF-8 v3 DSL text. Named by what it is, **not** by grammar revision — a future grammar bump must not force a mass rename. |
-| Archive (future wave) | `*.trance` — a zip of the session root with the session file stored as `session.json` at zip root. See §9. |
+| Archive | `*.trance` — a zip of the session root with the session file stored as `session.json` at zip root. Written by `--export_archive`; see §9.1. |
 
 There is **no** directory-per-session convention and **no** fixed `session.json` filename
 outside archives. A session is a file; its parent directory is the media root
@@ -379,12 +379,23 @@ are a *dispatch*, not an allowlist:
 | `wav`, `ogg`, `flac`, `aiff` | `audio_path` |
 | **everything else** | `image_path` |
 
-An unrecognized or extensionless file is scanned as an image on purpose: the decode layer
-already tolerates junk — a file that won't decode is marked `failed` once, dropped from
-the draw pool, and never retried — so an allowlist buys nothing but silently-missing
-media. The only files a scan skips are session machinery (`.json`, `.session`, `.pattern`,
-`.cfg`, `.trance`) and dotfiles / anything under a dotted directory (`.git`, `.DS_Store`),
-so a session file living next to its media never becomes a phantom image.
+An unrecognized file with a plausible extension is scanned as an image on purpose: the
+decode layer already tolerates junk — a file that won't decode is marked `failed` once,
+dropped from the draw pool, and never retried — so an allowlist buys nothing but
+silently-missing media. A `.xyz` stays content.
+
+What a scan skips is a **junk denylist**, not a media allowlist. It covers only things
+that recur in real media folders and are never content:
+
+| Skipped | Why |
+|---|---|
+| `.json`, `.session`, `.pattern`, `.cfg`, `.trance` | Session machinery — a session file living next to its media must never become a phantom image. |
+| Dotfiles, and anything under a dotted directory (`.git`, `.DS_Store`) | Never content. |
+| `thumbs.db`, `*.ini`, `*.log` | OS/shell droppings and config. `.ini` matters specifically because **trance itself** writes `imgui.ini` (the F2 panel's window state) into the working directory, so any folder you have ever played would otherwise scan a phantom of your own making. |
+| `*.bak`, `*.tmp`, `*.swp`, `*.part`, `*.crdownload`, and any name ending in `~` | Editor backups and partial downloads. These usually *shadow* a real media file (`foo.png.bak`), so admitting them double-counts the content. |
+| **Extensionless files** (`README`, `LICENSE`, `Makefile`, lock files) | The classifier's fall-through would call every one of them an image. Nothing trance can play is extensionless, so this costs no real media. **Accepted tradeoff:** SFML could in principle decode an extensionless file; extensionless files recur as junk far more often than as intentional media. Rename the file if it is real content. |
+
+The implementation is `is_scan_ignored` (`src/common/session.cpp`).
 
 **Cold start.** The no-arg bootstrap (no `./default.json`, no `./default.session`) scans the
 working directory and builds **one theme per directory that directly contains at least one
@@ -547,13 +558,13 @@ here with the ImGui editor (which lives inside trance.exe).
 | `animation_buffer_size` | uint, min 8 | `System.animation_buffer_size` |
 | `font_cache_size` | uint, min 2 | `System.font_cache_size` |
 | `last_root_directory` | string, absolute OK (machine-local file) | `System.last_root_directory` |
-| `last_export_settings` | object, all `ExportSettings` fields verbatim (`path`, `export_3d`, `width`, `height`, `fps`, `length`, `quality` 0–4, `threads`) | `System.last_export_settings` |
+| `last_export_settings` | object, all `ExportSettings` fields verbatim (`path`, `export_3d`, `width`, `height`, `fps`, `length`, `quality` 0–4, `threads`). **Deliberately-dead schema:** the video-export path it configured has been deleted and nothing reads these values. The key stays specified because `get_default_system()` writes it into every `system.json` and §2.5's strict loader throws on an unknown key — so removing it from the spec would make every existing config unloadable | `System.last_export_settings` |
 | `last_session_map` | object: session path → object: variable → value | `System.last_session_map`; the single-field `LastSession{variable_map}` wrapper is **flattened** to a direct string→string object |
 
-`last_root_directory`, `last_export_settings`, and `last_session_map` are unread by the
-2017 player but are the ImGui editor's file-dialog memory, export-dialog defaults, and
-per-session variable memory (a behaviour inherited from the deleted wx creator). They stay in
-system.json — do not invent a second state file for them.
+`last_root_directory` and `last_session_map` are unread by the 2017 player but are the
+ImGui editor's file-dialog memory and per-session variable memory (a behaviour inherited
+from the deleted wx creator). They stay in system.json — do not invent a second state file
+for them. `last_export_settings` is now read by nothing at all; see its table row.
 
 ## 7. Converter
 
@@ -586,8 +597,9 @@ Pipeline:
    `patterns/<slug(name)>.pattern` (slug rule in §5) and emit `file` references.
 5. Drops (no JSON form, by design): `AudioEvent.Type.NONE` events (no-ops in audio.cpp),
    zero-weight entries validate already prunes, `renderer: OCULUS` → `"monitor"` with a
-   printed warning, the entire `SessionArchive` message (dead: `export_archive` is a stub;
-   the zip archive wave replaces it), deprecated fields 100/101 (migrated above).
+   printed warning, the entire `SessionArchive` message (dead schema — the shipped bundle
+   format is the zip in §9.1, whose central directory subsumes the offset/length table),
+   deprecated fields 100/101 (migrated above).
 6. `system.cfg` → `system.json`: mechanical; `last_session_map` keys (old `.session`
    paths) are copied as-is — stale keys are a harmless convenience-cache miss.
 
@@ -618,27 +630,46 @@ in main.cpp, director, theme_bank, audio — consumes `trance_pb` objects and is
   the only component that writes sessions; playback never does.
 - Edits pattern text in a multiline widget; save writes the text to the pattern's `file`
   (§5), not into the JSON.
-- Reads/writes `system.json` for its own state: `last_root_directory` (file dialogs),
-  `last_export_settings` (export dialog defaults), `last_session_map` (pre-filling the
-  launch variable picker, keyed by session path).
+- Reads/writes `system.json` for its own state: `last_root_directory` (file dialogs) and
+  `last_session_map` (pre-filling the launch variable picker, keyed by session path).
 - Surfaces loader strict-mode errors (unknown key, bad path, missing pattern file,
   duplicate pattern name, both-oneof) with their JSON paths, and director parse warnings,
   in the UI rather than the console.
 
-## 9. Named future steps (plan of record, not this wave)
+## 9. Named steps beyond the JSON wave
 
-1. **Archive wave:** `*.trance` = zip of the session root, session file stored as
-   `session.json` at zip root; member names are the root-relative reference strings, so
-   the §1 path contract makes packing a plain `zip -r`. Replaces the dead
-   `SessionArchive` proto (offset/length table is subsumed by the zip central directory).
-   `scan` themes resolve against zip contents.
-2. **Theme audio (#23):** lands as an additive `audio_path` array on themes (grammar-first
-   `audio` effect owns when/volume). Additive key — no `format_version` bump. Reserved
-   here so nothing else claims the name.
-3. **trance_pb retirement wave:** native in-memory structs replace `trance_pb`; the §5
-   sidecar dissolves into real fields; comment preservation across editor saves becomes
-   possible. The spec in this file does not change shape at that point — that is the test
-   of the retirement wave.
+### 9.1 Archive — SHIPPED (export only)
+
+`*.trance` is a zip of the session root: the session file stored as `session.json` at the
+zip root, plus every asset the session references (theme media, `custom_visual_pattern`
+files resolved through the §5 sidecar, playlist `audio_event` paths) under its existing
+root-relative path. The §1 path contract is what makes this work — zip member names ARE
+the reference strings, so packing is conceptually a plain `zip -r`. Written by
+`export_session_archive` (`src/common/session_archive.{h,cpp}`, miniz), invoked as
+`trance.exe --export_archive out.trance my.session.json`. Members are **stored, not
+deflated**: session media is already compressed, so deflating it again burns CPU on
+multi-GB roots for almost no size win.
+
+**There is deliberately no importer.** A `.trance` is a standard zip and member names are
+exactly the root-relative paths `load_session_json()` already expects, so any zip tool
+extracts it back into a valid session root in one step. That IS the import story — no
+bespoke format the player must also read, and the bundle stays inspectable and moddable
+by hand after extraction.
+
+This replaces the `SessionArchive` proto message, which remains in `trance.proto` as dead
+schema.
+
+### 9.2 Theme audio (#23) — SHIPPED
+
+An additive `audio_path` array on themes (§3.3), with the grammar-first `audio` effect
+owning when and at what volume (`docs/authoring-v3-patterns.md`,
+`docs/spec-grammar-v3.md` §4.14). Additive key — no `format_version` bump.
+
+### 9.3 trance_pb retirement wave — not started
+
+Native in-memory structs replace `trance_pb`; the §5 sidecar dissolves into real fields;
+comment preservation across editor saves becomes possible. The spec in this file does not
+change shape at that point — that is the test of the retirement wave.
 
 ## 10. Migration notes for existing sessions
 
@@ -646,9 +677,8 @@ in main.cpp, director, theme_bank, audio — consumes `trance_pb` objects and is
    `patterns/` dir appear beside it. Media files are not moved — relative paths were
    already root-relative and copy through verbatim. Keep or delete the old `.session`
    afterward; the player no longer reads it.
-2. `system.cfg`: either convert it (preserves cache sizes, export defaults, variable
-   memory) or just delete it — a fresh `system.json` regenerates with defaults on next
-   launch.
+2. `system.cfg`: either convert it (preserves cache sizes and variable memory) or just
+   delete it — a fresh `system.json` regenerates with defaults on next launch.
 3. Custom patterns previously embedded in the `.session` become `patterns/*.pattern`
    files named by pattern-name slug; edit those files directly from now on.
 4. Sessions whose colours were hand-set to non-1/255-grid floats quantize to 8-bit on

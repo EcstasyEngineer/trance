@@ -1,7 +1,14 @@
 # Authoring v3 visual patterns
 
-V3 patterns are the shipped grammar for built-in visuals and custom `.session` patterns alike.
-It is the only grammar -- there is no legacy fallback parser.
+V3 patterns are the shipped grammar for built-in visuals and custom patterns alike. It is the
+only grammar -- there is no legacy fallback parser.
+
+Your patterns live in standalone `*.pattern` files (plain UTF-8, `#` line comments). A session
+references one per `custom_visual_pattern` entry by root-relative path; see
+[session-json-format.md](session-json-format.md) §4. To try one without touching a session at
+all, run `trance.exe --pattern=my_pattern.pattern some.session.json`, which forces every visual
+selection to that file and prints a `line:col` diagnostic instead of falling back if it does
+not parse.
 
 ## The Shape
 

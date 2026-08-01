@@ -1,4 +1,5 @@
 #include <trance/render/render.h>
+#include <trance/platform/display_info.h>
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
@@ -135,7 +136,21 @@ ScreenRenderer::ScreenRenderer(const trance_pb::System& system, const OverlayCon
   // so there's nothing for this window to usefully grab the cursor for.
   _window->setMouseCursorGrabbed(!overlay.enabled);
   _window->setVerticalSyncEnabled(system.enable_vsync());
-  _window->setFramerateLimit(0);
+  // Presentation cap -- the ONLY thing in the engine that bounds how many frames get
+  // drawn and swapped. global_fps does not: the main loop drains however many content
+  // ticks elapsed wall-clock bought and then presents at most once per iteration, and on
+  // a desktop run the F2 panel exists unconditionally, so its repaint term holds
+  // do_render true every single iteration (main.cpp). The loop therefore presents as
+  // fast as the swap lets it, whatever global_fps says.
+  //
+  // With vsync on the swap itself blocks at the panel and the limiter must stay OFF:
+  // SFML implements setFramerateLimit with a sleep, and sleeping on top of a blocking
+  // swap fights the driver's pacing instead of adding to it. With vsync off there was
+  // previously no cap at all -- the loop free-spun the GPU rendering frames the panel
+  // can never show -- so fall back to the display's own rate there. Unknown rate (off
+  // Windows, display_info.h) keeps the old uncapped behaviour rather than inventing one.
+  const uint32_t refresh_hz = display_refresh_hz();
+  _window->setFramerateLimit(system.enable_vsync() ? 0 : refresh_hz);
   _window->setVisible(false);
   if (!_window->setActive(true)) {
     std::cerr << "couldn't activate window OpenGL context" << std::endl;

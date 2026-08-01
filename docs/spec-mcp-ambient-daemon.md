@@ -82,7 +82,9 @@ only its own atomics; the render thread owns the mutations).
 
 **Transport:** TCP on `127.0.0.1` only. No token, no TLS — loopback is the trust boundary.
 Cross-platform, trivial to drive from a test, inspectable with `netcat`. Port comes from a
-launch flag (`--listen <port>`), default off (no socket unless asked).
+launch flag, default off (no socket unless asked). **The flag that shipped is
+`--command_port <port>`** — this spec drafted it as `--listen`; the implementation and all
+user-facing docs use `--command_port`.
 
 ---
 
@@ -146,12 +148,8 @@ make trance vanish instantly without killing the process**):
   last explicitly commanded pause state wins. Idempotent like `hide`.
 - Both verbs are available in **every** mode, including VR: the apply seam pauses and
   mutes without touching the headset's hidden GL-context helper window, so there is no
-  configuration in which the intent goes unapplied. (An earlier revision made them reply
-  `err ... unavailable in this mode (export)` under video export, on the grounds that an
-  `ok` flipping nothing — with `status` reporting `hidden=on` forever — would be a lie.
-  The video-export mode has since been removed, and with it the only mode that had no
-  window/seam to apply these to.) Contrast `ui`/`screenshot` below, which remain
-  capability-gated because VR genuinely has no flat pass to draw or grab.
+  configuration in which the intent goes unapplied. Contrast `ui`/`screenshot` below, which
+  remain capability-gated because VR genuinely has no flat pass to draw or grab.
 - Same state everywhere: `hide`/`show`, the global **Shift+F11** hotkey, and the tray's
   Hide-everything/Show item all drive one `hidden` flag reconciled at the main loop's apply
   seam, so the surfaces can never disagree. Hiding also forces the overlay off (clearing
@@ -171,16 +169,15 @@ Intensity:
   render params it scales, whether it's linear or curved) is **TBD at implementation time** —
   this spec fixes the verb and the `0..1` contract, not the internal formula.
 
-Settings (generic get/set — **note:** the settings surface itself is moving from the protobuf
-`Program`/`.session` shape to JSON later this sprint; key names are TBD by that migration and
-deliberately not enumerated here):
+Settings (generic get/set — key names were deliberately left unenumerated here pending the
+`.session`-to-JSON migration, which has since shipped; the key vocabulary is now the JSON
+schema in `docs/session-json-format.md`):
 - **`set KEY VALUE`** — set a settings key to a value; `ok` or `err unknown key: KEY`.
 - **`get KEY`** — read a settings key back; `ok KEY=VALUE` or `err unknown key: KEY`.
 
 Loading:
 - **`load pattern FILE`** — load/compile a single v3 pattern file as the active visual.
-- **`load session FILE`** — load a `.session` (or, post-migration, its JSON successor) as the
-  active program.
+- **`load session FILE`** — load a `*.session.json` as the active program.
 
 Status:
 - **`status`** — single-line, parseable reply: current visual name, entrainment-bed state,
@@ -224,9 +221,13 @@ the runtime or as a daemon.**
 
 ---
 
-## 7. Build order (each step independently testable)
+## 7. Build order (each step independently testable) — COMPLETE
 
-1. **`CommandChannel`** + a `--listen <port>` launch flag. Test with `netcat`: pipe a
+This ladder has been climbed; it is kept because it records *why* the pieces are layered
+the way they are, not as remaining work. The shipped verb surface is §4; the protocol
+parser has its own ctest (`tests/command_protocol_test.cpp`).
+
+1. **`CommandChannel`** + a `--command_port <port>` launch flag. Test with `netcat`: pipe a
    `status` line, get an `ok ...` reply. (No effects yet.)
 2. **Drain + verb dispatch** in `main.cpp`'s loop; wire `start`/`stop`/`pause`/`resume`.
    Test each over the socket.
@@ -234,8 +235,8 @@ the runtime or as a daemon.**
    apply/clear the click-through/translucency hints on the running window.
 4. **`intensity VALUE`** — wire to whatever global scaling hook exists at implementation
    time (see §4 note on TBD wiring).
-5. **`set KEY VALUE` / `get KEY`** — wire to the settings surface current at implementation
-   time (protobuf `Program` fields today, JSON keys after that migration lands).
+5. **`set KEY VALUE` / `get KEY`** — wire to the settings surface, now the JSON schema in
+   `docs/session-json-format.md`.
 6. **`load pattern FILE` / `load session FILE`** — reuse the existing load paths.
 7. **`status`** — single-line reply per §4/§5. <- **the v0 done-line: a controller drives
    playback and reads status end-to-end over the socket.**
@@ -275,6 +276,6 @@ these verbs, indistinguishable on the wire from a shell script.
 - **Overlay verbs drive issue #27's click-through overlay live**: `overlay on|off` /
   `overlay opacity` apply/clear the hints on the running window at runtime (same seam the
   F2 UI's Overlay section uses).
-- **Settings keys are TBD** pending the `.session`-to-JSON migration happening this sprint;
-  this spec fixes the `set KEY VALUE` / `get KEY` verb shape, not the key names.
+- **Settings keys are the JSON schema's**, not a parallel vocabulary; this spec fixes the
+  `set KEY VALUE` / `get KEY` verb shape, not the key names.
 - **MCP integration is an external, separate process**, out of this repo's scope (§8).

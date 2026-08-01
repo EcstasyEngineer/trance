@@ -8,7 +8,7 @@ A fullscreen visual hypnosis / media player (C++17, SFML 3). It plays **sessions
 (`*.session.json`, spec in `docs/session-json-format.md`; legacy protobuf `.session` files
 convert via `trance_convert`) that drive a stream of timed visuals — flashing images/text,
 spirals, animations — over audio with optional binaural/isochronic entrainment beds and
-theme audio. Also: an X11 click-through `--overlay` mode, an
+theme audio. Also: a click-through `--overlay` mode (X11 and Win32), an
 ImGui F2 in-app UI, a system tray icon (Windows) + global Shift+F11 hide-everything hotkey, and a
 `--command_port` line-protocol control channel. (The legacy wxWidgets **creator** editor has
 been deleted; the F2 panel plus hand-edited JSON is the editing story.)
@@ -20,7 +20,7 @@ nothing is vendored. Set `VCPKG_ROOT` to your vcpkg checkout first.
 
 ```sh
 # Configure (per CMakePresets.json)
-cmake --preset windows-msvc          # Windows: VS 2022, x64-windows-static-md
+cmake --preset windows-msvc          # Windows: VS 2026, x64-windows-static-md
 cmake --preset linux-gcc             # Linux/WSL: Ninja, Release
 
 # Build (multi-config on Windows; pick Release or Debug)
@@ -40,9 +40,22 @@ Headless, no SFML/protobuf, run via ctest:
 
 ```sh
 cmake --preset windows-msvc -DTRANCE_BUILD_TESTS=ON
-cmake --build --preset windows-release --target v3_grammar_test
+cmake --build --preset windows-release
 ctest --test-dir build/windows-msvc -C Release --output-on-failure
 ```
+
+Five tests: `v3_grammar_test`, `session_json_test`, `playlist_runner_test`,
+`command_protocol_test`, `theme_bank_test`. CI runs ctest on every pull request.
+
+`theme_bank_test` is the one that is **not** headless: it drives ThemeBank's tiered image
+selection against a real synthetic media tree, and `get_image` uploads textures, so it needs
+a current OpenGL context (`sf::Context` — no window). It is labelled `gpu`, so
+`ctest -LE gpu` skips it; run without a GPU it prints a loud SKIP banner and exits 0 rather
+than reddening CI.
+
+**Build the test targets, not just `trance`.** Building only the `trance` target leaves
+stale test binaries in place and `ctest` then reports false passes — that is exactly how
+`session_json_test` sat red on master unnoticed.
 
 `tests/v3_grammar_test.cpp` is a **sanity + behavioral** harness for the v3 grammar (parses &
 lowers the shipped built-ins; checks crossfade-from-primitives + register-scope isolation). It
@@ -94,7 +107,7 @@ render, media, main), `src/common` (proto `trance.proto`, session), `docs/`, `te
 - **Bi-thematic engine.** ThemeBank holds exactly **two live themes** (primary + alternate);
   every accessor is a `bool alternate`, not an index. The grammar exposes only `concept`
   (theme 0) and `reward` (theme 1). 3+ simultaneous themes is a **decided non-goal**
-  (`docs/spec-grammar-v3.md` §8 / `docs/archive/spec-grammar-v2.md` §7) — not deferred work.
+  (`docs/spec-grammar-v3.md` §9, "hard non-goals") — not deferred work.
 - **Supersede, not parity.** The v3 grammar *improves on* the original 8 built-ins rather than
   matching them byte-for-byte ("same effect, not the same frames"). Do not add tests that freeze
   the originals' compiled-tree shape; parity-locking is what kept dragging the design back to

@@ -15,8 +15,11 @@ randomly-generated patterns designed to aid induction and deepening.
 - Hardware-accelerated rendering via OpenGL
 - Audio support with multiple independent channels, plus binaural/isochronic entrainment beds
 - Programmable playlist with conditionals and subroutines
+- Session bundling: `--export_archive out.trance` writes a plain zip of the session file
+  plus every asset it references
 - VR output: SteamVR (OpenVR) stereo, or a head-locked OpenXR quad that stays straight
-  ahead and survives window occlusion — see [VR setup](#vr-setup)
+  ahead and survives window occlusion — **neither backend has been verified against a
+  physical headset**; see [VR setup](#vr-setup)
 
 ## Quick start
 
@@ -56,9 +59,22 @@ trance.exe --overlay some.session.json
 # pick the renderer for this run only (system.json is not modified):
 trance.exe --renderer=openxr some.session.json
 # valid names: monitor, openvr, openxr. An unknown name is a fatal error at startup.
+
+# bundle a session and every asset it references into a portable zip, then exit:
+trance.exe --export_archive out.trance some.session.json
+# `.trance` is a plain zip -- the session file is stored as session.json at the zip root
+# and every asset keeps its root-relative path, so any zip tool extracts it straight back
+# into a working session root. There is deliberately no importer to match.
 ```
 
 ## VR setup
+
+> **Status: unverified on hardware.** Both VR backends compile and have been reviewed and
+> corrected against the OpenXR/OpenVR specs, but **neither has ever run against a physical
+> headset** — the development machine has none. Treat everything in this section as the
+> intended behaviour rather than observed behaviour, and expect to debug. If you do run it
+> on a headset, the failure banner described at the end of this section is the first thing
+> to read.
 
 **Choosing a renderer.** Three ways, in increasing precedence:
 

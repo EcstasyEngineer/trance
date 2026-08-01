@@ -4,9 +4,6 @@ The visual engine turns a **pattern** — a timing schedule with effects — int
 flashing images, text, spirals, and animations on screen. Every visual is a
 **data-driven compiled pattern**: there are no hand-coded visual classes left in
 the playback path. This document is the reference for how that pipeline works.
-The earlier design narrative (the "Framing A vs Framing B" debate and the plan to
-delete the hardcoded visuals, which is now done) lives in
-[archive/visual-grammar.md](archive/visual-grammar.md) as history.
 
 To *write* a custom v3 pattern, see
 [authoring-v3-patterns.md](authoring-v3-patterns.md). The normative grammar spec
@@ -205,11 +202,13 @@ this frame. Visuals with no labelled section honestly show `section --`.
 
 ## Tests
 
-Three headless ctests (gated behind `-DTRANCE_BUILD_TESTS=ON`, run via `ctest`):
+Four headless ctests (gated behind `-DTRANCE_BUILD_TESTS=ON`, run via `ctest`; CI
+runs them on every pull request):
 
 - `v3_grammar_test` — sanity + behavioral harness for the v3 grammar: parses and
   lowers the shipped built-ins, checks crossfade-from-primitives and
   register-scope isolation. Deliberately **not** a parity test (see CLAUDE.md,
   "supersede, not parity").
 - `session_json_test` — the `*.session.json` loader round-trip.
+- `playlist_runner_test` — the playlist stack machine (`playlist_runner.{h,cpp}`).
 - `command_protocol_test` — the `--command_port` line→verb protocol parser.

@@ -21,14 +21,10 @@ The **on-disk format is JSON**: `*.session.json`, spec in
 legacy protobuf `.session` files are no longer read directly and convert via
 `trance_convert`.
 
-### The `creator` editor (deleted)
-
-A wxWidgets desktop editor (`src/creator/`) used to ship as a third binary. It
-predated the JSON cut and the v3 grammar, could not open the very sessions its
-own file dialogs listed, and had no custom-pattern or entrainment editing — so it
-was deleted rather than carried. Editing now happens in the in-app F2 (ImGui)
-panel or directly in the JSON. The three things it did that F2 still does not are
-tracked in [architecture-maturity.md](architecture-maturity.md).
+Editing happens in the in-app F2 (ImGui) panel or directly in the JSON. A third
+binary, a wxWidgets `creator` editor, used to ship and was deleted; the handful of
+things it did that F2 still does not are tracked in
+[architecture-maturity.md](architecture-maturity.md).
 
 ## Runtime data flow (the player)
 
@@ -60,8 +56,10 @@ The player's lifecycle lives in `play_session()` (`src/trance/main.cpp`):
    the program's `global_fps`, advances the playlist state machine, then per
    frame calls `director.update()` (advance the visual's cycler tree, pull
    images) and `director.render()`. The playlist "VM" (standard items,
-   subroutines, weighted/conditional branching) is driven by the `stack` in
-   `play_session()` — see [sessions-and-playlists.md](sessions-and-playlists.md).
+   subroutines, weighted/conditional branching) lives in `PlaylistRunner`
+   (`src/trance/playlist_runner.{h,cpp}`), which owns the stack and the switch
+   clock while `play_session()` supplies the wall clock and the per-item side
+   effects — see [sessions-and-playlists.md](sessions-and-playlists.md).
 
 ```
 *.session.json
@@ -76,7 +74,7 @@ play_session frame loop ──► Director ──► Visual (cycler tree + effec
    │                             │            ▼
    ├──► Audio (channels + entrainment bed)  VisualApiImpl (VisualControl + VisualRender)
    │                                          │
-   └──────────────────────────────────────► Renderer ──► screen / VR / video file
+   └──────────────────────────────────────► Renderer ──► screen / VR headset
 ```
 
 ## `src/` directory tour
@@ -85,10 +83,10 @@ play_session frame loop ──► Director ──► Visual (cycler tree + effec
 |---|---|
 | `src/common/` | Shared, executable-agnostic code: the `trance.proto` in-memory schema, the JSON loader/saver (`session_json.{h,cpp}`), session load/save/validate (`session.{h,cpp}`), the legacy-proto reader for `trance_convert` (`session_legacy.{h,cpp}`), small utilities (`util.h`, `common.h`). |
 | `src/common/media/` | Decoders shared by both binaries: `Image`, the `Streamer` animation interface (`streamer.{h,cpp}`). |
-| `src/trance/` | The realtime player: `main.cpp`, `director.{h,cpp}`, `theme_bank.{h,cpp}`, GLSL `shaders.h`. |
+| `src/trance/` | The realtime player: `main.cpp`, `director.{h,cpp}`, `theme_bank.{h,cpp}`, `playlist_runner.{h,cpp}` (the playlist stack machine), GLSL `shaders.h`. |
 | `src/trance/media/` | Player-side media: `audio.{h,cpp}`, `entrainment.{h,cpp}` (the synthesised bed), `font.{h,cpp}`, `async_streamer.{h,cpp}`. |
 | `src/trance/render/` | The `Renderer` interface and its subclasses: `render.{h,cpp}` (screen — also home of the click-through overlay window hints, `apply_overlay_hints` / `clear_overlay_hints`), `openvr.{h,cpp}` (SteamVR), `openxr.{h,cpp}` (OpenXR head-locked quad-layer backend — Quest Link, any conformant runtime). |
-| `src/trance/visual/` | The visual engine: the cycler/pattern system (~23 files). The pattern DSL parser/compiler, the `Cycler` tree, compiled visuals, the data-driven render blocks (`render_eval`), and the headless tests. |
+| `src/trance/visual/` | The visual engine: the cycler/pattern system. The v3 pattern DSL parser/compiler, the `Cycler` tree, compiled visuals, and the data-driven render blocks (`render_eval`). |
 | `src/trance/ui/` | The ImGui in-app control panel (`app_ui.{h,cpp}`), toggled with F2. |
 | `src/trance/net/` | The `--command_port` control channel: line→verb protocol (`command_protocol.{h,cpp}`) and the socket/mailbox (`command_channel.{h,cpp}`). |
 | `src/trance/platform/` | Out-of-window controls (`system_control.{h,cpp}`): the system tray icon (Windows) and the global Shift+F11 hide-everything hotkey (Win32/X11) — the control surface that keeps working while the overlay is click-through. |
@@ -97,7 +95,8 @@ play_session frame loop ──► Director ──► Visual (cycler tree + effec
 ## Where to start reading, per subsystem
 
 - **Player lifecycle / frame loop** → `src/trance/main.cpp`, function
-  `play_session()`. The playlist state machine is the per-frame loop inside it.
+  `play_session()`. The playlist state machine it drives is
+  `src/trance/playlist_runner.h`.
 - **Visual engine** → [visuals.md](visuals.md). Start at `Director::change_visual`
   (`src/trance/director.cpp`) for selection, then `compiled_visual.{h,cpp}`
   and `cyclers.{h,cpp}`.
@@ -119,7 +118,9 @@ play_session frame loop ──► Director ──► Visual (cycler tree + effec
   hide-everything hotkey that control it.
 - **Command channel** → `src/trance/net/command_protocol.h`; verb reference in
   [spec-mcp-ambient-daemon.md](spec-mcp-ambient-daemon.md).
-- **Editor** → `src/trance/ui/app_ui.h` (F2 panel; the old `creator` is gone).
+- **Editor** → `src/trance/ui/app_ui.h` (the F2 panel).
+- **Session bundling** → `src/common/session_archive.h` (`--export_archive`; the
+  header comment explains why there is no matching importer).
 
 ## Controls (realtime)
 
