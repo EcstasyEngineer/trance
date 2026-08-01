@@ -32,7 +32,7 @@ namespace pattern
   struct Effect
   {
     enum class Kind {
-      Image, Text, Anim, Themes, Font, SpiralNew, SpiralRot, Subtext, SmallSub, Upload,
+      Image, Text, Anim, Themes, Font, SpiralNew, SpiralRot, Subtext, SmallSub,
       // Scalar-register state ops:
       Set,       // scalars[target] = ivalue
       Inc,       // scalars[target] += ivalue

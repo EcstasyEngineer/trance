@@ -144,11 +144,6 @@ bool OpenVrRenderer::vr_enabled() const
   return true;
 }
 
-bool OpenVrRenderer::is_openvr() const
-{
-  return true;
-}
-
 uint32_t OpenVrRenderer::view_width() const
 {
   return _width;

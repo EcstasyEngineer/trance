@@ -69,11 +69,6 @@ Image VisualApiImpl::get_image(bool alternate) const
   return _themes.get_image(alternate);
 }
 
-void VisualApiImpl::maybe_upload_next() const
-{
-  _themes.maybe_upload_next();
-}
-
 const std::string& VisualApiImpl::get_theme_audio(bool alternate) const
 {
   return _themes.get_audio(alternate);
@@ -369,14 +364,4 @@ uint32_t VisualApiImpl::debug_spiral_type() const
 uint32_t VisualApiImpl::debug_spiral_width() const
 {
   return _spiral_width;
-}
-
-const std::string& VisualApiImpl::debug_font() const
-{
-  return _current_font;
-}
-
-const std::string& VisualApiImpl::debug_subfont() const
-{
-  return _current_subfont;
 }

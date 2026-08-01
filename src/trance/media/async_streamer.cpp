@@ -1,5 +1,4 @@
 #include <trance/media/async_streamer.h>
-#include <common/util.h>
 #include <chrono>
 #include <thread>
 
@@ -27,22 +26,6 @@ AsyncStreamer::AsyncStreamer(const std::function<std::unique_ptr<Streamer>()>& l
       ++_a.size;
     } else {
       _a.end = true;
-    }
-  }
-}
-
-void AsyncStreamer::maybe_upload_next(const std::function<void(const Image&)>& function)
-{
-  {
-    std::lock_guard<std::mutex> lock{_swap_mutex};
-    if (_current->size) {
-      function(_current->buffer[(_current->begin + random(_current->size)) % _buffer_size]);
-    }
-  }
-  {
-    std::lock_guard<std::mutex> lock{_swap_mutex};
-    if (_next->size) {
-      function(_next->buffer[(_next->begin + random(_next->size)) % _buffer_size]);
     }
   }
 }

@@ -28,7 +28,6 @@ public:
   };
 
   virtual Image get_image(bool alternate = false) const = 0;
-  virtual void maybe_upload_next() const = 0;
   // Random pick from the active theme's precanned audio pool (ThemeBank::get_audio),
   // same shape as get_image -- the v3 `audio` effect resolves content
   // (concept/reward/runtime) to a path with this before calling play_theme_audio.
@@ -118,7 +117,6 @@ public:
   void update();
 
   Image get_image(bool alternate = false) const override;
-  void maybe_upload_next() const override;
   const std::string& get_theme_audio(bool alternate = false) const override;
 
   void rotate_spiral(float amount) override;
@@ -156,8 +154,6 @@ public:
   float debug_spiral() const;
   uint32_t debug_spiral_type() const;
   uint32_t debug_spiral_width() const;
-  const std::string& debug_font() const;
-  const std::string& debug_subfont() const;
 
 private:
   float zoom_intensity(float zoom_origin, float zoom) const;

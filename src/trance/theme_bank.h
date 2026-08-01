@@ -60,14 +60,6 @@ public:
   // the grammar (not ThemeBank) decides when/how loud to play the result.
   const std::string& get_audio(bool alternate);
 
-  // Call to upload a random image from the next theme which has been loaded
-  // into RAM but not video memory.
-  //
-  // This has to happen on the main rendering thread since OpenGL contexts
-  // are single-threaded by default, but this function call can be timed to
-  // mitigate the upload cost of switching active themes.
-  void maybe_upload_next();
-
   // Allow an animation to change this frame.
   void change_animation(bool alternate);
   // If the next theme has been fully loaded, swap it out for one of the two

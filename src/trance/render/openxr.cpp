@@ -503,11 +503,6 @@ bool OpenXrRenderer::vr_enabled() const
   return true;
 }
 
-bool OpenXrRenderer::is_openvr() const
-{
-  return false;
-}
-
 uint32_t OpenXrRenderer::view_width() const
 {
   return _width;

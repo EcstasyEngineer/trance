@@ -9,9 +9,10 @@ namespace trance_pb
 }
 
 // Legacy textproto readers (the pre-JSON .session / system.cfg formats). Shared by
-// trance_convert (the one-shot CLI converter) and trance's no-arg cold-start path,
-// which auto-migrates a sibling ./default.session into ./default.json. Playback
-// itself stays JSON-only (session.cpp refuses legacy paths with a converter hint).
+// trance_convert (the one-shot CLI converter) and session.cpp's convert_legacy_session,
+// which is what auto-migrates a .session path (including a sibling ./default.session)
+// into JSON on load. Playback itself stays JSON-only -- everything downstream of
+// load_session only ever sees the converted JSON.
 // Both throw std::runtime_error on a missing file or parse failure; neither
 // validates -- callers run validate_session/validate_system, matching the spec
 // pipeline (docs/session-json-format.md sec 7).

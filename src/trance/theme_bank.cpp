@@ -490,20 +490,6 @@ const std::string& ThemeBank::get_audio(bool alternate)
   return theme.audio_paths[r];
 }
 
-void ThemeBank::maybe_upload_next()
-{
-  auto& theme = *_active_themes.back().load();
-  if (theme.size) {
-    std::lock_guard<std::mutex> lock{theme.load_mutex};
-    auto index = theme.image_shuffler.next();
-    if (_all_images[index].image) {
-      do_video_upload(*_all_images[index].image);
-    }
-  }
-  _streamer->maybe_upload_next([&](const Image& image) { do_video_upload(image); });
-  _alt_streamer->maybe_upload_next([&](const Image& image) { do_video_upload(image); });
-}
-
 void ThemeBank::change_animation(bool alternate)
 {
   if (alternate) {

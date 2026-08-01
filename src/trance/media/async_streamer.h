@@ -16,7 +16,6 @@ public:
   AsyncStreamer(const std::function<std::unique_ptr<Streamer>()>& load_function,
                 size_t buffer_size);
 
-  void maybe_upload_next(const std::function<void(const Image&)>& function);
   Image get_frame(const std::function<void(const Image&)>& function) const;
   void advance_frame(uint32_t global_fps, bool maybe_switch, bool force_switch);
 

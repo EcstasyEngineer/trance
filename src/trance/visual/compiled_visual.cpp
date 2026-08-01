@@ -96,9 +96,6 @@ namespace
     case K::SmallSub:
       api.change_small_subtext(e.force, slot_bool(e, regs));
       break;
-    case K::Upload:
-      api.maybe_upload_next();
-      break;
     case K::Set:
       regs.scalars[e.target] = e.ivalue;
       break;

@@ -86,7 +86,7 @@ as user-facing statements never shipped — spec §4.7).
 
 **Draw effects** (call `VisualControl` / write an image register):
 `Image`, `Text`, `Anim`, `Subtext`, `SmallSub`, `Themes`, `Font`, `SpiralNew`,
-`SpiralRot` (rotate), `SpiralSet` (deterministic spiral type + width), `Upload`.
+`SpiralRot` (rotate), `SpiralSet` (deterministic spiral type + width).
 Image effects write a named image register; the render block reads it.
 
 **Theme audio** (issue #23): `Audio` starts a precanned track from the theme's

@@ -70,7 +70,7 @@ public:
   const std::string& phase() const;
 
   // Mark this node as the lane/leaf that sources a displayed image, and from which
-  // theme slot. Set only on image-bearing nodes (not spiral/text/font/upload). The
+  // theme slot. Set only on image-bearing nodes (not spiral/text/font/timers). The
   // overlay reports the slot of the active image lanes as the theme(s) "on screen".
   void set_image_slot(ImageSlotHint hint, const char* label = "img");
   ImageSlotHint image_slot() const;

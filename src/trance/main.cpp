@@ -2,11 +2,9 @@
 #include <common/session.h>
 #include <common/session_archive.h>
 #include <common/session_json.h>
-#include <common/session_legacy.h>
 #include <common/util.h>
 #include <trance/director.h>
 #include <trance/media/audio.h>
-#include <common/media/image.h>
 #include <trance/net/command_channel.h>
 #include <trance/net/command_protocol.h>
 #include <trance/platform/overlay_hints.h>
@@ -28,7 +26,6 @@
 #include <iostream>
 #include <map>
 #include <optional>
-#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -982,68 +979,6 @@ std::map<std::string, std::string> parse_variables(const std::string& variables)
   return {};
 }
 
-int validate_session(const std::string& root_path, const trance_pb::Session& session)
-{
-  // TODO: report unused files or incorrect extensions.
-  std::set<std::string> image_paths;
-  std::set<std::string> animation_paths;
-  std::set<std::string> font_paths;
-  for (const auto& pair : session.theme_map()) {
-    for (const auto& path : pair.second.image_path()) {
-      image_paths.insert(root_path + "/" + path);
-    }
-    for (const auto& path : pair.second.animation_path()) {
-      animation_paths.insert(root_path + "/" + path);
-    }
-    for (const auto& path : pair.second.font_path()) {
-      font_paths.insert(root_path + "/" + path);
-    }
-  }
-
-  std::set<std::string> broken_paths;
-  for (const auto& path : image_paths) {
-    std::cout << "checking " << path << std::endl;
-    Image image = load_image(path);
-    if (!image) {
-      broken_paths.insert(path);
-      std::cerr << path << " failed to load" << std::endl;
-    }
-  }
-  for (const auto& path : animation_paths) {
-    std::cout << "checking " << path << std::endl;
-    auto streamer = load_animation(path);
-    while (true) {
-      if (!streamer || !streamer->success()) {
-        broken_paths.insert(path);
-        std::cerr << path << " failed to load" << std::endl;
-        break;
-      }
-      if (!streamer->next_frame()) {
-        break;
-      }
-    }
-  }
-  for (const auto& path : font_paths) {
-    std::cout << "checking " << path << std::endl;
-    sf::Font font;
-    if (!font.openFromFile(path)) {
-      broken_paths.insert(path);
-      std::cerr << path << " failed to load" << std::endl;
-    }
-  }
-
-  if (!broken_paths.empty()) {
-    std::cout << std::endl;
-  }
-  for (const auto& path : broken_paths) {
-    std::cerr << "FAILED: " << path << std::endl;
-  }
-  std::cout << "press any key to continue..." << std::endl;
-  char c;
-  std::cin >> c;
-  return broken_paths.empty() ? 0 : 1;
-}
-
 // SessionArchive: bundles the session JSON and every file it references into a
 // plain zip (src/common/session_archive.{h,cpp}). `session`/`root_path` (the already-
 // loaded/validated in-memory session and its media root) aren't reused here -- the
@@ -1060,7 +995,6 @@ int export_archive(const std::string& session_path, const std::string& archive_p
   return 0;
 }
 
-DEFINE_bool(validate_session, false, "validate session");
 DEFINE_string(export_archive, "", "export archive to this path");
 DEFINE_string(variables, "", "semicolon-separated list of key=value variable assignments");
 DEFINE_string(visual, "",
@@ -1229,36 +1163,32 @@ int main(int argc, char** argv)
       return 1;
     }
     // No-arg cold start with no ./default.json: bootstrap one, the same role
-    // ./default.session played in the original trance.exe. A legacy ./default.session
-    // sitting here is auto-migrated (converted in place, original left untouched);
-    // otherwise generate the built-in default over whatever media the directory holds.
+    // ./default.session played in the original trance.exe. Note a legacy
+    // ./default.session sibling never reaches here -- load_session migrates it
+    // transparently (convert_legacy_session) and SUCCEEDS, so this catch only runs
+    // when there is nothing loadable at all: generate the built-in default over
+    // whatever media the directory holds.
     sidecar = SessionJsonSidecar{};
-    if (std::filesystem::exists(LEGACY_DEFAULT_SESSION_PATH)) {
-      std::cout << "migrating legacy ./" << LEGACY_DEFAULT_SESSION_PATH << " -> ./"
-                << DEFAULT_SESSION_PATH << std::endl;
-      session = load_legacy_session(LEGACY_DEFAULT_SESSION_PATH);
-      validate_session(session);
-    } else {
-      std::cerr << e.what() << std::endl;
-      session = get_default_session();
-      // #36: keep the folder-ness. search_resources reports which themes are pure
-      // subdirectory references; seeding the sidecar with them makes the saver write
-      // {"scan": <subdir>} per theme instead of freezing a media list that goes stale
-      // the moment the user drops another image in.
-      search_resources(session, ".", sidecar.theme_scan);
-      // Record the tree the themes came FROM, not just each theme's own folder, so a
-      // directory added later becomes a theme on the next load instead of staying
-      // invisible until someone regenerates this file by hand.
-      sidecar.theme_scan_root = ".";
-      sidecar.theme_scan_root_auto = true;
-    }
+    std::cerr << e.what() << std::endl;
+    session = get_default_session();
+    // #36: keep the folder-ness. search_resources reports which themes are pure
+    // subdirectory references; seeding the sidecar with them makes the saver write
+    // {"scan": <subdir>} per theme instead of freezing a media list that goes stale
+    // the moment the user drops another image in.
+    search_resources(session, ".", sidecar.theme_scan);
+    // Record the tree the themes came FROM, not just each theme's own folder, so a
+    // directory added later becomes a theme on the next load instead of staying
+    // invisible until someone regenerates this file by hand.
+    sidecar.theme_scan_root = ".";
+    sidecar.theme_scan_root_auto = true;
     try {
       save_session(session, "./" + DEFAULT_SESSION_PATH, sidecar);
       std::cout << "wrote ./" << DEFAULT_SESSION_PATH << std::endl;
-      // Play what was WRITTEN, not the in-memory legacy proto: the JSON saver
-      // normalizes Windows backslash media paths to forward slashes (spec sec 1),
-      // and the legacy-authored originals don't resolve on non-Windows. Reset the
-      // sidecar first -- the reload rebuilds it from the file just written.
+      // Play what was WRITTEN, not the in-memory proto the generator produced: the
+      // JSON saver normalizes media paths (backslashes -> forward slashes, spec sec 1)
+      // and expands the theme_scan sidecar, so this first run plays exactly what every
+      // later run will. Reset the sidecar first -- the reload rebuilds it from the
+      // file just written.
       sidecar = SessionJsonSidecar{};
       session = load_session("./" + DEFAULT_SESSION_PATH, sidecar);
     } catch (const std::runtime_error& save_error) {
@@ -1279,9 +1209,6 @@ int main(int argc, char** argv)
   }
 
   auto root_path = std::filesystem::path{session_path}.parent_path().string();
-  if (FLAGS_validate_session) {
-    return validate_session(root_path, session);
-  }
   if (!FLAGS_export_archive.empty()) {
     return export_archive(session_path, FLAGS_export_archive);
   }

@@ -926,7 +926,7 @@ namespace
     for (const Cycler* kid : kids) {
       bool annotated = !kid->phase().empty() || kid->image_slot() != ImageSlotHint::None;
       if (kid->active()) {
-        // Collapse active, unannotated leaf actions (spiral/text/font/upload/timers)
+        // Collapse active, unannotated leaf actions (spiral/text/font/timers)
         // into a count: they are the "what is this?" noise, and the image/section
         // nodes carry the meaning. Recurse into everything else.
         if (kid->children().empty() && !annotated) {
