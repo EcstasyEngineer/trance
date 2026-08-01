@@ -244,35 +244,6 @@ void main(void)
 }
 )";
 
-const std::string yuv_vertex = R"(
-attribute vec2 position;
-
-void main() {
-  gl_Position = vec4(position.xy, 0.0, 1.0);
-}
-)";
-
-const std::string yuv_fragment = R"(
-uniform sampler2D source;
-uniform vec2 resolution;
-uniform float yuv_mix;
-
-const mat3 map = mat3(
-    .257, -.148, .439,
-    .504, -.291, -.368,
-    .098, .439, -.071);
-const vec3 offset = vec3(16., 128., 128.) / 255.;
-
-void main(void)
-{
-  vec2 coord = gl_FragCoord.xy / resolution;
-  coord.y *= -1.;
-  vec3 rgb = texture2D(source, coord).rgb;
-  vec3 yuv = clamp(offset + map * rgb, 0., 1.);
-  gl_FragColor = vec4(mix(rgb, yuv, yuv_mix), 1.);
-}
-)";
-
 }
 
 #endif

@@ -91,7 +91,7 @@ bool AppUi::wants_text_input() const
   return _initialized && ImGui::GetIO().WantTextInput;
 }
 
-void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Audio* audio,
+void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Audio& audio,
                    const ThemeBank& themes)
 {
   if (!_initialized) {
@@ -226,7 +226,7 @@ void AppUi::render(sf::RenderWindow& window)
   }
 }
 
-void AppUi::draw_status_section(Director& director, Audio* audio, const ThemeBank& themes)
+void AppUi::draw_status_section(Director& director, Audio& audio, const ThemeBank& themes)
 {
   // Reuses the same accessors draw_debug_overlay() (director.cpp, F1) reads --
   // no new Director surface added for this section. ThemeBank is passed in directly
@@ -247,7 +247,7 @@ void AppUi::draw_status_section(Director& director, Audio* audio, const ThemeBan
   } else {
     float master_db = entrainment.master_db() != 0.f ? entrainment.master_db() : -28.f;
     ImGui::Text("bed: %d layer(s), master %.1f dB%s", entrainment.layer_size(), master_db,
-               (audio && audio->Muted()) ? "  [MUTED]" : "");
+               audio.Muted() ? "  [MUTED]" : "");
   }
 }
 
@@ -1179,10 +1179,43 @@ void AppUi::draw_themes_section()
       }
       ImGui::TextDisabled("folder: %s", scan_it->second.c_str());
       auto& excludes = _sidecar.theme_exclude[name];
-      // Present = not excluded. The listing is the theme's CURRENT pool plus whatever is
-      // currently excluded, so an unchecked image can be checked again in the same run.
-      std::vector<std::string> listing{theme_it->second.image_path().begin(),
-                                       theme_it->second.image_path().end()};
+
+      // Only the theme's OWN images get a checkbox. image_path here is the RESOLVED pool:
+      // inheritance has already folded every ancestor's images into it, and an exclusion
+      // is matched against what THIS theme's own scan produces. Writing one for an
+      // inherited image therefore matches nothing on the next load -- the image comes
+      // straight back through inheritance -- so the box silently un-ticks itself, which is
+      // worse than not offering it. Tier 0 of the sidecar's layout is exactly the own
+      // content and the later spans name the ancestor each inherited image really belongs
+      // to, which is the theme to go and exclude it on.
+      const auto tiers_it = _sidecar.theme_tiers.find(name);
+      const auto& pool = theme_it->second.image_path();
+      std::vector<std::string> listing;
+      std::vector<std::pair<std::string, std::string>> inherited;  // {path, owning theme}
+      if (tiers_it != _sidecar.theme_tiers.end()) {
+        const auto& tiers = tiers_it->second;
+        std::size_t offset = 0;
+        for (std::size_t t = 0; t < tiers.size(); ++t) {
+          for (uint32_t n = 0;
+               n < tiers[t].second && offset < static_cast<std::size_t>(pool.size());
+               ++n, ++offset) {
+            const auto& path = pool[static_cast<int>(offset)];
+            if (t == 0) {
+              listing.push_back(path);
+            } else {
+              inherited.emplace_back(path, tiers[t].first);
+            }
+          }
+        }
+      } else {
+        // No recorded layout (a session that never went through resolve_theme_inheritance,
+        // e.g. a cold-start scrape): nothing was inherited, so the pool is all its own.
+        listing.assign(pool.begin(), pool.end());
+      }
+      // Present = not excluded. Currently-excluded paths are appended so an unchecked
+      // image can be re-checked in the same run -- including a stale exclusion the old
+      // build wrote against an inherited path, which shows up here unticked and is cleared
+      // by ticking it.
       for (const auto& p : excludes) {
         if (std::find(listing.begin(), listing.end(), p) == listing.end()) {
           listing.push_back(p);
@@ -1190,7 +1223,7 @@ void AppUi::draw_themes_section()
       }
       std::sort(listing.begin(), listing.end());
       if (listing.empty()) {
-        ImGui::TextDisabled("(no images)");
+        ImGui::TextDisabled(inherited.empty() ? "(no images)" : "(no images of its own)");
       }
       for (const auto& path : listing) {
         bool present = std::find(excludes.begin(), excludes.end(), path) == excludes.end();
@@ -1204,6 +1237,16 @@ void AppUi::draw_themes_section()
       }
       if (!excludes.empty()) {
         ImGui::TextDisabled("(%zu excluded -- takes effect on reload)", excludes.size());
+      }
+      if (!inherited.empty()) {
+        // Listed, not hidden: the pool really does contain these, so leaving them out
+        // entirely would make the count here disagree with the arrow on the row above.
+        // Deliberately not widgets -- there is nothing this theme can do about them.
+        ImGui::TextDisabled("inherited (%zu) -- exclude these on the theme that owns them:",
+                            inherited.size());
+        for (const auto& entry : inherited) {
+          ImGui::BulletText("%s  [%s]", entry.first.c_str(), entry.second.c_str());
+        }
       }
       ImGui::TreePop();
     }
@@ -1295,23 +1338,18 @@ void AppUi::draw_overlay_section()
   }
 }
 
-void AppUi::draw_entrainment_section(Audio* audio)
+void AppUi::draw_entrainment_section(Audio& audio)
 {
-  if (audio) {
-    bool muted = audio->Muted();
-    if (ImGui::Checkbox("Mute", &muted)) {
-      audio->ToggleMute();
-    }
-    // TODO: no volume slider. Audio only exposes a global on/off mute
-    // (ToggleMute -> sf::Listener::setGlobalVolume(0/100)); per-channel volume is
-    // driven by session AudioEvents / fades (audio.cpp), not a public setter. Add
-    // Audio::SetMasterVolume(float) (or similar) if a continuous slider is wanted,
-    // then wire it here.
-    ImGui::TextDisabled("(volume slider: no setter on Audio yet)");
-  } else {
-    // Null in export/video-render mode (see Director::set_audio's doc comment).
-    ImGui::TextDisabled("(no live audio -- export mode)");
+  bool muted = audio.Muted();
+  if (ImGui::Checkbox("Mute", &muted)) {
+    audio.ToggleMute();
   }
+  // TODO: no volume slider. Audio only exposes a global on/off mute
+  // (ToggleMute -> sf::Listener::setGlobalVolume(0/100)); per-channel volume is
+  // driven by session AudioEvents / fades (audio.cpp), not a public setter. Add
+  // Audio::SetMasterVolume(float) (or similar) if a continuous slider is wanted,
+  // then wire it here.
+  ImGui::TextDisabled("(volume slider: no setter on Audio yet)");
 }
 
 void AppUi::draw_system_section()

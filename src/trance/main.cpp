@@ -6,7 +6,6 @@
 #include <common/util.h>
 #include <trance/director.h>
 #include <trance/media/audio.h>
-#include <trance/media/export.h>
 #include <common/media/image.h>
 #include <trance/net/command_channel.h>
 #include <trance/net/command_protocol.h>
@@ -16,7 +15,6 @@
 #include <trance/render/openvr.h>
 #include <trance/render/openxr.h>
 #include <trance/render/render.h>
-#include <trance/render/video_export.h>
 #include <trance/runtime_state.h>
 #include <trance/theme_bank.h>
 #include <trance/ui/app_ui.h>
@@ -43,6 +41,35 @@
 #include <SFML/Graphics.hpp>
 #include <SFML/Window.hpp>
 #pragma warning(pop)
+
+#ifdef _WIN32
+// Hybrid-GPU opt-in. These two symbols look like dead code -- nothing in this program
+// ever reads them -- but the graphics drivers scan the EXE's export table for them at
+// process start, and their absence is what silently strands us on the integrated GPU.
+//
+// NVIDIA's documented Optimus policy is that an OpenGL application not present in the
+// driver's profile database renders on the INTEGRATED adapter; exporting
+// NvOptimusEnablement != 0 forces the discrete GPU instead.
+// AmdPowerXpressRequestHighPerformance is the equivalent for AMD switchable graphics.
+//
+// This matters far more than "the frame rate is lower on the iGPU": XR_KHR_opengl_enable
+// REQUIRES the runtime to fail xrCreateSession with XR_ERROR_GRAPHICS_DEVICE_INVALID when
+// the GL context lives on a different GPU than the one driving the headset, and unlike
+// D3D11 (XrGraphicsRequirementsD3D11KHR::adapterLuid) OpenGL exposes NO adapter-selection
+// mechanism at all -- XrGraphicsRequirementsOpenGLKHR carries only a version range. The
+// ONLY lever an OpenGL XR app has over which GPU it lands on is which one Windows assigns
+// the process, i.e. exactly these exports. The OpenVR path has the same exposure via the
+// compositor's shared-texture path.
+//
+// Declared as `unsigned long` rather than DWORD deliberately: that is DWORD's exact
+// underlying type on Windows, and it keeps <windows.h> out of this translation unit (the
+// same reason system_control.h stores its HWND as void*). The driver only reads the
+// symbol's name and value.
+extern "C" {
+__declspec(dllexport) unsigned long NvOptimusEnablement = 0x00000001;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+#endif
 
 // Overlay mode: the window is click-through by design, so it can never receive its
 // own in-window input (the Escape/F2 panel toggle in handle_events() below never
@@ -82,11 +109,11 @@ std::thread run_async_thread(std::atomic<bool>& running, ThemeBank& bank)
 void show_control_panel(CommandRuntimeState& state, AppUi* app_ui);
 
 void handle_events(std::atomic<bool>& running, sf::RenderWindow& window, Director& director,
-                   Audio* audio, AppUi* app_ui, CommandRuntimeState& state)
+                   Audio& audio, AppUi* app_ui, CommandRuntimeState& state)
 {
   while (const std::optional event = window.pollEvent()) {
     // ImGui gets first look at input so clicks/typing inside its panels don't also
-    // fall through to the F-key/Escape handling below. Null in VR/export mode; in
+    // fall through to the F-key/Escape handling below. Null in VR mode; in
     // overlay mode the click-through window simply never delivers events to this
     // loop while the overlay is engaged.
     if (app_ui) {
@@ -103,7 +130,7 @@ void handle_events(std::atomic<bool>& running, sf::RenderWindow& window, Directo
     // input: Escape's standard meaning inside an active InputText (e.g. the Session
     // section's Save As field) is "cancel the edit" -- ImGui already consumed it via
     // process_event above, and it must not ALSO tear down the app. With no panel at
-    // all (VR/export) there is no edit to cancel, so Escape still quits.
+    // all (VR) there is no edit to cancel, so Escape still quits.
     if (key_pressed && key_pressed->code == sf::Keyboard::Key::Escape &&
         !(app_ui && app_ui->wants_text_input())) {
       running = false;
@@ -122,26 +149,13 @@ void handle_events(std::atomic<bool>& running, sf::RenderWindow& window, Directo
         show_control_panel(state, app_ui);
       }
     }
-    if (key_pressed && key_pressed->code == sf::Keyboard::Key::M && audio) {
-      audio->ToggleMute();
+    if (key_pressed && key_pressed->code == sf::Keyboard::Key::M) {
+      audio.ToggleMute();
     }
     if (const auto* resized = event->getIf<sf::Event::Resized>()) {
       glViewport(0, 0, resized->size.x, resized->size.y);
     }
   }
-}
-
-void print_info(double elapsed_seconds, uint64_t frames, uint64_t total_frames)
-{
-  float completion = float(frames) / total_frames;
-  auto elapsed = uint64_t(elapsed_seconds + .5);
-  auto eta = uint64_t(.5 + (completion ? elapsed_seconds * (1. / completion - 1.) : 0.));
-  auto percentage = uint64_t(100 * completion);
-
-  std::cout << std::endl
-            << "frame: " << frames << " / " << total_frames << " [" << percentage
-            << "%]; elapsed: " << format_time(elapsed, true) << "; eta: " << format_time(eta, true)
-            << std::endl;
 }
 
 // Command dispatch threading (docs/spec-mcp-ambient-daemon.md sec 2): CommandChannel's
@@ -173,30 +187,29 @@ void show_control_panel(CommandRuntimeState& state, AppUi* app_ui)
 }
 
 // pause/stop suspends the audible side (music channels + entrainment bed); the
-// playlist clock is frozen separately in the main loop. Null audio (export mode)
-// just flips the flag. Shared by the command verbs and the SystemControl
-// (tray/hotkey) requests, so every control surface gets identical pause semantics.
+// playlist clock is frozen separately in the main loop. Shared by the command verbs
+// and the SystemControl (tray/hotkey) requests, so every control surface gets
+// identical pause semantics.
 // While hidden, only the INTENT flag changes: the hide seam owns the audio pause
 // (hidden means idle no matter what the paused flag says -- the frame drain gates
 // on paused-or-hidden), and `show` applies whatever pause intent the user last
 // expressed. That's what lets a pause/resume commanded while hidden -- or batched
 // in the same drain as `show` -- survive the restore instead of being clobbered
 // by a hide-time stash.
-void set_paused(CommandRuntimeState& state, Audio* audio, bool paused)
+void set_paused(CommandRuntimeState& state, Audio& audio, bool paused)
 {
   if (paused == state.paused) {
     return;
   }
   state.paused = paused;
-  if (audio && !state.hidden) {
-    paused ? audio->PauseAll() : audio->ResumeAll();
+  if (!state.hidden) {
+    paused ? audio.PauseAll() : audio.ResumeAll();
   }
 }
 
 std::string execute_command(const command_protocol::ParsedCommand& cmd, Director& director,
-                            Audio* audio, const ThemeBank& themes, AppUi* app_ui,
-                            bool realtime, bool screenshot_supported,
-                            CommandRuntimeState& state,
+                            Audio& audio, const ThemeBank& themes, AppUi* app_ui,
+                            bool screenshot_supported, CommandRuntimeState& state,
                             const std::chrono::steady_clock::time_point& start_time)
 {
   using command_protocol::Verb;
@@ -229,15 +242,9 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
   case Verb::kShow:
     // Silent-running primitive (spec sec 4): idempotent -- both verbs just write the
     // hidden intent; the apply seam in the main loop hides/shows the window, stashes/
-    // restores mute, and no-ops when the state already matches. The seam is realtime-
-    // only, so err in export mode rather than ack an intent nothing will ever apply
-    // (and have `status` claim hidden=on forever) -- same capability gating as the
-    // `ui`/`screenshot` verbs below.
-    if (!realtime) {
-      return command_protocol::format_err(
-          std::string{cmd.verb == Verb::kHide ? "hide" : "show"} +
-          ": unavailable in this mode (export)");
-    }
+    // restores mute, and no-ops when the state already matches. Unconditionally
+    // available -- unlike `ui`/`screenshot` below, the seam serves VR too (it pauses
+    // and mutes without touching the headset's helper window).
     state.hidden = cmd.verb == Verb::kHide;
     return command_protocol::format_ok();
   case Verb::kIntensity:
@@ -289,7 +296,7 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
   case Verb::kUiOn:
   case Verb::kUiOff:
     if (!app_ui) {
-      return command_protocol::format_err("ui: unavailable in this mode (VR/export)");
+      return command_protocol::format_err("ui: unavailable in this mode (VR)");
     }
     if (cmd.verb == Verb::kUiOn) {
       show_control_panel(state, app_ui);
@@ -301,7 +308,7 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
     // Only ack when a hook that will actually consume the request is installed
     // (realtime screen renderer) -- an `ok` that never writes a file is a lie.
     if (!screenshot_supported) {
-      return command_protocol::format_err("screenshot: unavailable in this mode (VR/export)");
+      return command_protocol::format_err("screenshot: unavailable in this mode (VR)");
     }
     state.screenshot_path = cmd.value;
     return command_protocol::format_ok("writing " + cmd.value + " after the next frame");
@@ -314,14 +321,14 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
 // Drains every line CommandChannel has received since the last frame, parses + dispatches
 // each one, and replies exactly once per command -- spec sec 3 ("always exactly one line
 // back per command line in"). Render-thread only (see CommandRuntimeState comment above).
-void handle_commands(CommandChannel& channel, Director& director, Audio* audio,
-                     const ThemeBank& themes, AppUi* app_ui, bool realtime,
-                     bool screenshot_supported, CommandRuntimeState& state,
+void handle_commands(CommandChannel& channel, Director& director, Audio& audio,
+                     const ThemeBank& themes, AppUi* app_ui, bool screenshot_supported,
+                     CommandRuntimeState& state,
                      const std::chrono::steady_clock::time_point& start_time)
 {
   for (const auto& command : channel.drain()) {
     auto parsed = command_protocol::parse_command(command.line);
-    auto reply = execute_command(parsed, director, audio, themes, app_ui, realtime,
+    auto reply = execute_command(parsed, director, audio, themes, app_ui,
                                  screenshot_supported, state, start_time);
     channel.reply(command.conn_id, reply);
   }
@@ -343,7 +350,6 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
                   const std::string& session_path, SessionJsonSidecar& sidecar,
                   trance_pb::System& system, const std::string& system_path,
                   const std::map<std::string, std::string> variables,
-                  const exporter_settings& settings,
                   const std::function<void(Director&)>& visual_override = {},
                   const OverlayConfig& overlay = {}, uint16_t command_port = 0,
                   const trance_pb::System_Renderer* renderer_override = nullptr)
@@ -392,7 +398,6 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       std::make_unique<ThemeBank>(root_path, session, system, program(), sidecar.theme_tiers);
 
   std::unique_ptr<Renderer> renderer;
-  bool realtime = settings.path.empty();
   // --renderer wins over system.json for this run only; neither is written back.
   const auto requested_renderer = renderer_override ? *renderer_override : system.renderer();
   const char* requested_renderer_name = requested_renderer == trance_pb::System::OPENVR
@@ -404,9 +409,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   // shows: hence the banner below plus the persistent line in the F2 panel. That panel
   // only exists in non-VR mode, which is exactly this case.
   std::string vr_failure;
-  if (!realtime) {
-    renderer.reset(new VideoExportRenderer(settings));
-  } else if (requested_renderer == trance_pb::System::OPENVR) {
+  if (requested_renderer == trance_pb::System::OPENVR) {
     auto openvr = new OpenVrRenderer(system);
     renderer.reset(openvr);
     if (!openvr->success()) {
@@ -441,7 +444,11 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
     renderer.reset(new ScreenRenderer(system, overlay));
   }
 
-  Director director{session, system, *theme_bank, program(), *renderer};
+  // Constructed before Director because Director holds it by reference (the grammar's
+  // theme-audio verbs relay through it) and must not outlive it. Audio itself has no
+  // window/GL dependency, so it is free to come first.
+  Audio audio{root_path};
+  Director director{session, system, *theme_bank, program(), *renderer, audio};
   if (visual_override) {
     visual_override(director);
   }
@@ -465,10 +472,9 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   // collapses it on engage), but SystemControl's tray (Show control panel) or the
   // command channel can disengage the overlay at runtime, and the panel must exist
   // to serve as the control surface afterwards. Still not wired for VR (per-eye
-  // render path, no single flat 2D pass to composite onto) or video-export mode (no
-  // interactive window loop).
+  // render path, no single flat 2D pass to composite onto).
   std::unique_ptr<AppUi> app_ui;
-  if (realtime && !director.vr_enabled()) {
+  if (!director.vr_enabled()) {
     // Mutable mirror of the program() lambda above, for the UI's Program/Themes
     // sections: resolves the ACTIVE program in the session's program_map, or nullptr
     // when the built-in default fallback is playing (the panel disables itself).
@@ -505,7 +511,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
     save_window_screenshot(renderer->window(), command_state.screenshot_path);
     command_state.screenshot_path.clear();
   };
-  const bool screenshot_supported = realtime && !director.vr_enabled();
+  const bool screenshot_supported = !director.vr_enabled();
   if (screenshot_supported) {
     renderer->set_ui_hook([&] {
       if (app_ui) {
@@ -518,23 +524,13 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
 
   // System tray icon (Windows) + global Shift+F11 hide-everything toggle (Win32/X11):
   // the out-of-window control surface -- the only kind that keeps working while the
-  // overlay is click-through. Realtime only; export mode has no window to hide or
-  // control.
-  std::unique_ptr<SystemControl> system_control;
-  if (realtime) {
-    system_control.reset(new SystemControl);
-  }
+  // overlay is click-through.
+  SystemControl system_control;
 
-  std::thread async_thread;
   std::atomic<bool> running = true;
-  std::unique_ptr<Audio> audio;
-  if (realtime) {
-    async_thread = run_async_thread(running, *theme_bank);
-    audio.reset(new Audio{root_path});
-    audio->TriggerEvents(playlist.current());
-    audio->SetEntrainment(program().entrainment());
-    director.set_audio(audio.get());
-  }
+  auto async_thread = run_async_thread(running, *theme_bank);
+  audio.TriggerEvents(playlist.current());
+  audio.SetEntrainment(program().entrainment());
   std::cout << std::endl << "-> " << session.first_playlist_item() << std::endl;
 
   // Live overlay: what's actually applied to the window right now, seeded from the
@@ -566,40 +562,26 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   bool show_fresh_frame = false;
 
   try {
-    uint64_t elapsed_export_frames = 0;
-    uint64_t async_update_residual = 0;
     double elapsed_frames_residual = 0;
     std::chrono::high_resolution_clock clock;
-    auto true_clock_time = [&] {
+    // One clock: wall time. (There used to be a second, synthetic one that derived the
+    // time from the encoded frame count so a video export could run faster or slower
+    // than realtime; the export path is gone and playback is always wall-clock paced.)
+    auto clock_time = [&] {
       return std::chrono::duration_cast<std::chrono::milliseconds>(clock.now().time_since_epoch())
           .count();
     };
-    auto clock_time = [&] {
-      if (realtime) {
-        return true_clock_time();
-      }
-      // Match true_clock_time()'s return type exactly so the lambda's two
-      // branches deduce a consistent type (chrono::milliseconds::rep differs
-      // between MSVC's `long long` and gcc/Linux's `long`).
-      return static_cast<decltype(true_clock_time())>(1000. * elapsed_export_frames /
-                                                      double(settings.fps));
-    };
-    const auto true_clock_start = true_clock_time();
     auto last_clock_time = clock_time();
     playlist.start(clock_time());
     // Side effects per newly-entered playlist item: audio events, the program push
     // into ThemeBank/Director, entrainment refresh. The runner owns only the
     // stack/transition logic.
     auto on_playlist_enter = [&](const std::string& name, const trance_pb::PlaylistItem& item) {
-      if (realtime) {
-        audio->TriggerEvents(item);
-      }
+      audio.TriggerEvents(item);
       std::cout << "\n-> " << name << std::endl;
       theme_bank->set_program(program());
       director.set_program(program());
-      if (realtime) {
-        audio->SetEntrainment(program().entrainment());
-      }
+      audio.SetEntrainment(program().entrainment());
     };
 
     while (running && !g_overlay_stop_requested) {
@@ -607,72 +589,70 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       // still true; it is flipped after the loop so the async ThemeBank thread's
       // `while (running)` loop terminates and the join at the bottom of
       // play_session is bounded.)
-      handle_events(running, renderer->window(), director, audio.get(), app_ui.get(),
+      handle_events(running, renderer->window(), director, audio, app_ui.get(),
                     command_state);
       // Command channel: parse + dispatch every line received since last frame, right
       // after handle_events (spec sec 3: "Parse + dispatch happens in the drain loop --
       // main.cpp's per-frame loop, right after handle_events").
       if (command_channel) {
-        handle_commands(*command_channel, director, audio.get(), *theme_bank, app_ui.get(),
-                        realtime, screenshot_supported, command_state, command_start_time);
+        handle_commands(*command_channel, director, audio, *theme_bank, app_ui.get(),
+                        screenshot_supported, command_state, command_start_time);
       }
       // SystemControl requests (tray menu / global Shift+F11): drained on the render
       // thread like the command mailbox above; both funnel into the same
       // CommandRuntimeState, and the apply seam below reconciles the window once.
-      if (system_control) {
-        for (auto request : system_control->drain()) {
-          switch (request) {
-          case ControlRequest::kSafety:
-            // Global hide-everything toggle (Shift+F11): only flips the intent; the
-            // hidden apply seam below does the actual hide/restore work. Never
-            // quits -- that's kQuit's job -- EXCEPT on hotkey-only configurations
-            // (no tray Quit item and no F2 panel: Linux VR, or Linux fullscreen
-            // after a failed ImGui init), where nothing else can ever push kQuit;
-            // there a press while already hidden quits instead of restoring,
-            // preserving the hotkey's old second-press-quits escape hatch as the
-            // one orderly exit.
-            if (command_state.hidden && !SystemControl::kHasTrayQuit && !app_ui) {
-              running = false;
-              break;
-            }
-            command_state.hidden = !command_state.hidden;
-            break;
-          case ControlRequest::kHide:
-          case ControlRequest::kShow:
-            // Tray Hide/Show item: explicit target state (see ControlRequest::kHide)
-            // so a menu whose label went stale while it sat open can never invert
-            // the user's intent; a request matching the current state is a no-op at
-            // the seam, like the idempotent `hide`/`show` verbs.
-            command_state.hidden = request == ControlRequest::kHide;
-            break;
-          case ControlRequest::kOverlayToggle:
-            command_state.overlay_on = !command_state.overlay_on;
-            // Requests are applied in arrival order, so the field already holds the
-            // batch's NET intent -- but a batch that nets to zero (a fast on/off/on
-            // burst landing in one frame) would leave the seam with nothing to diff
-            // while the user watched two transitions go by. Arm the re-assert so the
-            // window is resynchronized to that net intent exactly once, whatever the
-            // batch did on the way there (#39).
-            overlay_reassert_pending = true;
-            break;
-          case ControlRequest::kOverlayOpacityUp:
-          case ControlRequest::kOverlayOpacityDown:
-            // Tray opacity nudge: 0.1 steps through the same clamp the
-            // `overlay opacity` verb uses; the overlay apply seam pushes it live.
-            command_state.overlay_opacity = command_protocol::clamp01(
-                command_state.overlay_opacity +
-                (request == ControlRequest::kOverlayOpacityUp ? 0.1f : -0.1f));
-            break;
-          case ControlRequest::kPlayPauseToggle:
-            set_paused(command_state, audio.get(), !command_state.paused);
-            break;
-          case ControlRequest::kShowUi:
-            show_control_panel(command_state, app_ui.get());
-            break;
-          case ControlRequest::kQuit:
+      for (auto request : system_control.drain()) {
+        switch (request) {
+        case ControlRequest::kSafety:
+          // Global hide-everything toggle (Shift+F11): only flips the intent; the
+          // hidden apply seam below does the actual hide/restore work. Never
+          // quits -- that's kQuit's job -- EXCEPT on hotkey-only configurations
+          // (no tray Quit item and no F2 panel: Linux VR, or Linux fullscreen
+          // after a failed ImGui init), where nothing else can ever push kQuit;
+          // there a press while already hidden quits instead of restoring,
+          // preserving the hotkey's old second-press-quits escape hatch as the
+          // one orderly exit.
+          if (command_state.hidden && !SystemControl::kHasTrayQuit && !app_ui) {
             running = false;
             break;
           }
+          command_state.hidden = !command_state.hidden;
+          break;
+        case ControlRequest::kHide:
+        case ControlRequest::kShow:
+          // Tray Hide/Show item: explicit target state (see ControlRequest::kHide)
+          // so a menu whose label went stale while it sat open can never invert
+          // the user's intent; a request matching the current state is a no-op at
+          // the seam, like the idempotent `hide`/`show` verbs.
+          command_state.hidden = request == ControlRequest::kHide;
+          break;
+        case ControlRequest::kOverlayToggle:
+          command_state.overlay_on = !command_state.overlay_on;
+          // Requests are applied in arrival order, so the field already holds the
+          // batch's NET intent -- but a batch that nets to zero (a fast on/off/on
+          // burst landing in one frame) would leave the seam with nothing to diff
+          // while the user watched two transitions go by. Arm the re-assert so the
+          // window is resynchronized to that net intent exactly once, whatever the
+          // batch did on the way there (#39).
+          overlay_reassert_pending = true;
+          break;
+        case ControlRequest::kOverlayOpacityUp:
+        case ControlRequest::kOverlayOpacityDown:
+          // Tray opacity nudge: 0.1 steps through the same clamp the
+          // `overlay opacity` verb uses; the overlay apply seam pushes it live.
+          command_state.overlay_opacity = command_protocol::clamp01(
+              command_state.overlay_opacity +
+              (request == ControlRequest::kOverlayOpacityUp ? 0.1f : -0.1f));
+          break;
+        case ControlRequest::kPlayPauseToggle:
+          set_paused(command_state, audio, !command_state.paused);
+          break;
+        case ControlRequest::kShowUi:
+          show_control_panel(command_state, app_ui.get());
+          break;
+        case ControlRequest::kQuit:
+          running = false;
+          break;
         }
       }
       // Hide-everything apply seam: the single reconcile point for the `hide`/`show`
@@ -680,11 +660,11 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       // command_state.hidden). Hiding forces the overlay off, and its click-through
       // hints are cleared HERE, while the window is still mapped -- no stuck
       // click-through state can survive a hide/restore cycle.
-      if (realtime && command_state.hidden != hidden_applied) {
+      if (command_state.hidden != hidden_applied) {
         if (command_state.hidden) {
           // Stash mute so `show` restores what the user had, not defaults. (Pause
           // deliberately not stashed -- see the pre_hide_muted declaration above.)
-          pre_hide_muted = audio && audio->Muted();
+          pre_hide_muted = audio.Muted();
           command_state.overlay_on = false;
           // Clear the click-through hints BEFORE setVisible(false): on X11 the
           // _NET_WM_STATE remove ClientMessage is only honoured for MAPPED windows
@@ -700,11 +680,9 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
           // The seam owns the audio pause while hidden (not set_paused, which only
           // records intent while hidden): hidden means idle regardless of the
           // paused flag.
-          if (audio) {
-            audio->PauseAll();
-            if (!audio->Muted()) {
-              audio->ToggleMute();
-            }
+          audio.PauseAll();
+          if (!audio.Muted()) {
+            audio.ToggleMute();
           }
           // Same rationale as the overlay-engage collapse below: never leave the
           // panel logically open on a window that can't deliver it input.
@@ -722,17 +700,15 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
           if (!director.vr_enabled()) {
             renderer->window().setVisible(true);
           }
-          if (audio) {
-            if (audio->Muted() != pre_hide_muted) {
-              audio->ToggleMute();
-            }
-            // Resume iff the CURRENT pause intent says play: that's the pre-hide
-            // state unless the user explicitly paused/resumed while hidden (or in
-            // this very drain batch alongside `show`), in which case their last
-            // explicit command wins.
-            if (!command_state.paused) {
-              audio->ResumeAll();
-            }
+          if (audio.Muted() != pre_hide_muted) {
+            audio.ToggleMute();
+          }
+          // Resume iff the CURRENT pause intent says play: that's the pre-hide
+          // state unless the user explicitly paused/resumed while hidden (or in
+          // this very drain batch alongside `show`), in which case their last
+          // explicit command wins.
+          if (!command_state.paused) {
+            audio.ResumeAll();
           }
           show_fresh_frame = true;
           // The window was just re-mapped: same DWM re-evaluation risk as the startup
@@ -748,8 +724,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       }
       // Live overlay apply seam: the single reconcile point for the
       // `overlay on|off|opacity` verbs, the F2 UI's Overlay section, and the
-      // SystemControl requests above (each only writes command_state). Realtime
-      // only -- export mode has no real window to overlay.
+      // SystemControl requests above (each only writes command_state).
       //
       // The trigger is a transition, an opacity change, or an explicit re-assert
       // request -- NOT overlay_applied alone. overlay_applied is a belief about the
@@ -759,10 +734,9 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       // desync sources: hints applied to a not-yet-mapped window at startup, and a
       // window that has just come back from hidden. Steady state still costs zero
       // native calls -- the flag is one-shot.
-      if (realtime &&
-          (command_state.overlay_on != overlay_applied || overlay_reassert_pending ||
-           (command_state.overlay_on &&
-            command_state.overlay_opacity != overlay_opacity_applied))) {
+      if (command_state.overlay_on != overlay_applied || overlay_reassert_pending ||
+          (command_state.overlay_on &&
+           command_state.overlay_opacity != overlay_opacity_applied)) {
         if (command_state.overlay_on) {
           // Unconditional on every engage/re-assert: apply_overlay_hints rewrites the
           // ex-styles AND SetLayeredWindowAttributes, so a stuck-opaque or
@@ -803,12 +777,12 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       // The hidden/overlay_on guards are TRANSIENT -- the request legitimately stays
       // pending across them and fires once the window becomes interactive. Everything
       // else here is INAPPLICABLE for the whole run (VR has no visible sf::Window to
-      // focus at all; export has no window), so the request can never be satisfied and
-      // must be dropped rather than left pending forever (#39). Same one-shot semantics
-      // either way: the flag never survives a frame in which it was actionable-or-moot.
+      // focus at all), so the request can never be satisfied and must be dropped rather
+      // than left pending forever (#39). Same one-shot semantics either way: the flag
+      // never survives a frame in which it was actionable-or-moot.
       if (command_state.focus_requested && !command_state.hidden &&
           !command_state.overlay_on) {
-        if (realtime && !director.vr_enabled()) {
+        if (!director.vr_enabled()) {
           renderer->window().requestFocus();
           focus_window(renderer->window().getNativeHandle());
         }
@@ -817,10 +791,8 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       // Mirror live state back to the tray AFTER the apply seams, so the menu's
       // checkmarks/label never reflect a half-applied frame (the hide seam mutates
       // overlay_on above; mirroring before it would briefly report pre-seam values).
-      if (system_control) {
-        system_control->set_status(command_state.overlay_on, command_state.paused,
-                                   command_state.hidden);
-      }
+      system_control.set_status(command_state.overlay_on, command_state.paused,
+                                command_state.hidden);
       // The F2 panel's "Quit trance" button (set during last frame's app_ui->update):
       // same clean exit as the window close button and the tray's Quit item.
       if (app_ui && app_ui->quit_requested()) {
@@ -837,25 +809,9 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
         --elapsed_frames_residual;
         ++frames_this_loop;
       }
-      ++elapsed_export_frames;
-
-      if (!realtime) {
-        auto total_export_frames = uint64_t(settings.length) * uint64_t(settings.fps);
-        if (elapsed_export_frames % 8 == 0) {
-          auto elapsed_seconds = double(true_clock_time() - true_clock_start) / 1000.;
-          print_info(elapsed_seconds, elapsed_export_frames, total_export_frames);
-        }
-        if (elapsed_export_frames >= total_export_frames) {
-          running = false;
-          break;
-        }
-      }
-
-      async_update_residual += uint64_t(1000. * frames_this_loop / double(settings.fps));
-      while (!realtime && async_update_residual >= async_millis) {
-        async_update_residual -= async_millis;
-        theme_bank->async_update();
-      }
+      // (No inline theme_bank->async_update() pumping here: run_async_thread above owns
+      // loading/unloading on its own thread. The export path used to drive it from this
+      // loop instead, because it had no async thread of its own.)
 
       // Paused OR hidden: freeze the playlist clock too. time_since_switch is
       // wall-clock, so without this a paused session's items keep timing out and
@@ -879,8 +835,8 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       bool continue_playing = true;
       // `pause`/`stop`: freeze the current frame -- program state retained (spec sec 4)
       // -- by simply not draining frames_this_loop while paused. The window still repaints
-      // the last frame every iteration below (`!realtime` / event-driven), so a paused
-      // process stays visibly alive, it just stops advancing.
+      // the last frame every iteration below (event-driven), so a paused process stays
+      // visibly alive, it just stops advancing.
       while (!playback_paused && frames_this_loop > 0) {
         update = true;
         --frames_this_loop;
@@ -915,33 +871,45 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       // the hide seam anyway; the idle branch below takes over. show_fresh_frame
       // guarantees the first post-restore iteration repaints even when playback
       // stays paused, so the un-hidden window is never stale/black.
-      const bool do_render = update || !realtime ||
-          (app_ui != nullptr && !command_state.hidden) || show_fresh_frame ||
-          !command_state.screenshot_path.empty();
+      const bool do_render = update || (app_ui != nullptr && !command_state.hidden) ||
+          show_fresh_frame || !command_state.screenshot_path.empty();
       if (app_ui && do_render) {
-        app_ui->update(renderer->window(), ui_clock.restart(), director, audio.get(),
-                       *theme_bank);
+        app_ui->update(renderer->window(), ui_clock.restart(), director, audio, *theme_bank);
       }
       if (do_render) {
         director.render();
         show_fresh_frame = false;
-      } else if (playback_paused) {
-        // Paused or hidden with nothing rendered: nothing above blocks, so don't
-        // spin a core. OpenXR first gets render_idle() -- a running XR session must
-        // keep submitting (layerless) frames or the runtime flags the app
-        // unresponsive, and those blank frames are also what actually removes the
-        // content from the headset; it paces via xrWaitFrame, replacing the sleep.
-        // Everywhere else (screen window, OpenVR, no-UI fallback) render_idle is a
-        // no-op returning false and the 10ms sleep engages. Only while paused/
-        // hidden -- unpaused between-frames timing is the longstanding TODO above
-        // and 10ms granularity would jitter it.
-        if (!renderer->render_idle()) {
+      } else if (!renderer->render_idle(playback_paused)) {
+        // Nothing was drawn this iteration. render_idle() runs on EVERY such iteration,
+        // not just the paused ones: the VR frame loop is a handshake with the runtime,
+        // and it must not be coupled to the visual tick rate. do_render only goes true
+        // when a visual frame is due at global_fps (in VR there is no F2 panel to force
+        // a repaint), so gating the runtime handshake on it starves the compositor
+        // outright at a low global_fps -- exactly the case the OpenXR spec's "applications
+        // SHOULD keep the frame loop running to maintain synchronisation, even if that
+        // means xrEndFrame with no layers" is about. It also matters before the session
+        // reaches READY: nothing else in this iteration blocks, so without an idle call
+        // the loop hot-spins a core waiting for a state change (each backend's pre-READY
+        // anti-spin sleep lives inside its own idle path).
+        //
+        // playback_paused is passed through as the `blank` flag so pause/hide semantics
+        // survive the change unaltered: paused or hidden still submits blank frames (which
+        // is what actually removes the content from the headset), while a merely
+        // between-visual-frames iteration re-presents the existing content. Without that
+        // distinction, decoupling the loop would blank the view on every gap between
+        // visual frames and strobe the headset.
+        //
+        // The sleep stays paused-only, exactly as before. render_idle() returning true
+        // means the renderer did its own frame pacing (xrWaitFrame / WaitGetPoses block
+        // to the runtime's cadence), so adding a sleep on top would fight it. Where it
+        // returns false -- the screen window and the no-UI fallback -- only the paused/
+        // hidden case sleeps; unpaused between-frames timing is the longstanding TODO
+        // above, and 10ms granularity would jitter it.
+        if (playback_paused) {
           std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
       }
-      if (realtime) {
-        audio->Update();
-      }
+      audio.Update();
     }
   } catch (std::bad_alloc&) {
     std::cerr << bad_alloc << std::endl;
@@ -952,10 +920,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   // still true; flip it so the async ThemeBank thread (gated on `running`) terminates
   // and the join below cannot hang.
   running = false;
-
-  if (realtime) {
-    async_thread.join();
-  }
+  async_thread.join();
   // No explicit window().close() here: ~OpenXrRenderer must run while the hidden
   // window's GL context is still alive -- the runtime holds the hDC/hGLRC handed
   // over in the graphics binding, and the FBO / xrDestroySwapchain / session
@@ -1098,14 +1063,6 @@ int export_archive(const std::string& session_path, const std::string& archive_p
 DEFINE_bool(validate_session, false, "validate session");
 DEFINE_string(export_archive, "", "export archive to this path");
 DEFINE_string(variables, "", "semicolon-separated list of key=value variable assignments");
-DEFINE_string(export_path, "", "export video to this path");
-DEFINE_bool(export_3d, false, "export side-by-side 3D video");
-DEFINE_uint64(export_width, 1280, "export video resolution width");
-DEFINE_uint64(export_height, 720, "export video resolution height");
-DEFINE_uint64(export_fps, 60, "export video frames per second");
-DEFINE_uint64(export_length, 300, "export video length in seconds");
-DEFINE_uint64(export_quality, 2, "export video quality (0 to 4, 0 is best)");
-DEFINE_uint64(export_threads, 4, "export video threads");
 DEFINE_string(visual, "",
               "force every visual selection to this one built-in (by its v3 name: accelerate, "
               "slow_flash, sub_text, flash_text, simple, super_parallel, animation, super_fast).");
@@ -1254,15 +1211,6 @@ int main(int argc, char** argv)
     std::cout << "variable " << pair.first << " = " << pair.second << std::endl;
   }
 
-  exporter_settings settings{FLAGS_export_path,
-                             FLAGS_export_3d,
-                             uint32_t(FLAGS_export_width),
-                             uint32_t(FLAGS_export_height),
-                             uint32_t(FLAGS_export_fps),
-                             uint32_t(FLAGS_export_length),
-                             std::min(uint32_t(4), uint32_t(FLAGS_export_quality)),
-                             uint32_t(FLAGS_export_threads)};
-
   std::string session_path{argc >= 2 ? argv[1] : "./" + DEFAULT_SESSION_PATH};
   trance_pb::Session session;
   // Loaded WITH the sidecar (pattern file paths / theme scan dirs) so the F2 UI's
@@ -1355,7 +1303,6 @@ int main(int argc, char** argv)
     };
   }
   play_session(root_path, session, session_path, sidecar, system, system_path, variables,
-              settings, visual_override, overlay, uint16_t(FLAGS_command_port),
-              renderer_override);
+              visual_override, overlay, uint16_t(FLAGS_command_port), renderer_override);
   return 0;
 }

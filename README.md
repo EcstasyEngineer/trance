@@ -15,7 +15,6 @@ randomly-generated patterns designed to aid induction and deepening.
 - Hardware-accelerated rendering via OpenGL
 - Audio support with multiple independent channels, plus binaural/isochronic entrainment beds
 - Programmable playlist with conditionals and subroutines
-- Video export (`.webm`, `.h264`, frame-by-frame `.jpg`/`.png`/`.bmp`)
 - VR output: SteamVR (OpenVR) stereo, or a head-locked OpenXR quad that stays straight
   ahead and survives window occlusion — see [VR setup](#vr-setup)
 
@@ -54,9 +53,6 @@ trance.exe --pattern=my_pattern.v3 some.session.json
 # escape routes -- the window intentionally ignores clicks and keys once engaged):
 trance.exe --overlay some.session.json
 
-# video export instead of a window:
-trance.exe --export_path out.webm --export_length 60 some.session.json
-
 # pick the renderer for this run only (system.json is not modified):
 trance.exe --renderer=openxr some.session.json
 # valid names: monitor, openvr, openxr. An unknown name is a fatal error at startup.
@@ -79,8 +75,11 @@ trance.exe --renderer=openxr some.session.json
 
 **The two VR backends.** `openvr` renders a stereo projection through SteamVR.
 `openxr` submits a head-locked quad one metre ahead of the view — the image stays
-centred wherever you look, and nothing on the desktop can occlude it. The OpenXR path
-is currently Windows-only and mono (stereo parallax is tracked in #41).
+centred wherever you look, and nothing on the desktop can occlude it. Both paths are
+stereo: the OpenXR path renders the scene once per eye and submits one eye-restricted
+quad each, so the parallax lives in the rendered content while the quads themselves
+share a single head-locked pose. The OpenXR path is currently Windows-only (the
+`XR_KHR_opengl_enable` binding it uses is the Win32 one).
 
 **Which OpenXR runtime is used is not ours to pick.** We create a plain OpenXR
 instance, so whichever runtime is registered **active** on the machine wins — Oculus /
@@ -106,7 +105,7 @@ just above the banner.
 Sessions are plain JSON ([docs/session-json-format.md](docs/session-json-format.md) is the
 normative spec) — edit them live from the in-app **F2** panel or in any text editor. Legacy
 protobuf `.session` files from older versions convert with `trance_convert`. (The old
-`creator.exe` graphical editor is deprecated.)
+`creator.exe` graphical editor has been removed; F2 and a text editor replace it.)
 
 ## Supported file formats
 
@@ -117,7 +116,6 @@ protobuf `.session` files from older versions convert with `trance_convert`. (Th
 | Fonts | `.ttf` |
 | Text | `.txt` (for auto-generated sessions) |
 | Audio | `.wav` `.flac` `.ogg` `.aiff` |
-| Video export | `.webm` `.h264` `.jpg` `.png` `.bmp` |
 
 ## Building from source
 
@@ -136,15 +134,22 @@ git clone https://github.com/EcstasyEngineer/trance && cd trance
 
 ### Windows (primary platform)
 
-**Requirements:** Windows 10/11 x64, Visual Studio 2022 or later (with the C++ and
-CMake components), vcpkg. The `windows-msvc` preset pins the `Visual Studio 17 2022`
-generator — on VS 2026 change that line in `CMakePresets.json` to
-`Visual Studio 18 2026`.
+**Requirements:** Windows 10/11 x64, Visual Studio 2026 (with the C++ and CMake
+components), vcpkg. The `windows-msvc` preset pins the `Visual Studio 18 2026`
+generator — on an older Visual Studio, change that line in `CMakePresets.json` to
+match (e.g. `Visual Studio 17 2022`).
 
 ```sh
 cmake --preset windows-msvc
 cmake --build --preset windows-release
 ```
+
+If you have Visual Studio but have not set up vcpkg separately, run **`build.bat`**
+instead: the preset's toolchain file requires `VCPKG_ROOT`, and MSVC requires a
+vcvars64 environment, neither of which is set on a fresh VS-only box. `build.bat`
+discovers both (via `vswhere`, using VS's bundled vcpkg and CMake) and then runs the
+two preset commands above unchanged. It is a bootstrap wrapper, not a separate build
+path — once `VCPKG_ROOT` is set, use the presets directly.
 
 Outputs land in `build/windows-msvc/Release/`. The Windows build links dependencies statically
 against the dynamic CRT (`x64-windows-static-md`), so the executables are largely
@@ -152,8 +157,8 @@ self-contained; vcpkg auto-deploys the few remaining runtime DLLs next to them.
 
 ### Linux / WSL (experimental)
 
-Linux support is best-effort — the realtime renderer and the `creator` editor both
-build, but there is no packaged release. Useful for development on WSL.
+Linux support is best-effort — the realtime renderer builds, but there is no packaged
+release. Useful for development on WSL.
 
 **Requirements:** a C++17 compiler (gcc 11+), CMake 3.25+, Ninja, vcpkg, and the
 system packages vcpkg builds its ports against:

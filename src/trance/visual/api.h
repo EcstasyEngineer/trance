@@ -49,8 +49,8 @@ public:
   // Grammar-driven theme audio: bridges to Audio::play_theme_audio /
   // stop_theme_audio / set_theme_audio_volume via the director. Single-slot v0,
   // same shape as the single live text slot -- starting a new play stops
-  // whatever grammar audio was already playing. No-op (graceful) when there is
-  // no live Audio object (export/muted case).
+  // whatever grammar audio was already playing. Audio is always live (Director
+  // holds it by reference), so these always reach a real Audio.
   virtual void play_theme_audio(const std::string& path, bool loop) = 0;
   virtual void stop_theme_audio() = 0;
   virtual void set_theme_audio_volume(float volume) = 0;
@@ -104,7 +104,7 @@ public:
   // ACCUMULATES state -- rotate_spiral's angle, set_warp's time base -- would advance
   // twice per frame, running at double speed and desyncing the two eyes. eval_render
   // consults this and skips those advances on the second pass. Every other state
-  // (NONE / VR_MONO / VR_LEFT / export) is the frame's only pass and ticks normally.
+  // (NONE / VR_LEFT) is the frame's only pass and ticks normally.
   // Note this gates only the RENDER-path callers: the same rotate_spiral reached from a
   // cycler action already runs once per frame and must keep ticking.
   virtual bool render_mutations_enabled() const = 0;

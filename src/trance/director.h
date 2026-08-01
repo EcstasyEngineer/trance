@@ -30,7 +30,7 @@ class Director
 {
 public:
   Director(const trance_pb::Session& session, const trance_pb::System& system, ThemeBank& themes,
-           const trance_pb::Program& program, Renderer& renderer);
+           const trance_pb::Program& program, Renderer& renderer, Audio& audio);
   ~Director();
 
   // Called from play_session() in main.cpp.
@@ -46,13 +46,10 @@ public:
   // entrainment bed layers configured (not muted/playing state; just "is there a bed").
   std::string status_visual_name() const;
   bool status_bed_active() const;
-  // Optional audio handle: used by the debug overlay to report the live
-  // entrainment bed and mute state, and bridged to VisualApiImpl for the
-  // grammar-driven theme-audio verbs. Null in export mode (no
-  // realtime audio) -- callers must treat that as a graceful no-op.
-  void set_audio(Audio* audio);
   // Theme-audio bridge for VisualApiImpl (mirrors set_warp/render_image's
-  // director-as-relay shape). No-ops when _audio is null (export/muted case).
+  // director-as-relay shape). Held by reference, not pointer: audio is always live
+  // now that the offline video-export path (the one configuration that ran without
+  // an Audio) is gone, so there is no null case left to guard.
   void play_theme_audio(const std::string& path, bool loop);
   void stop_theme_audio();
   void set_theme_audio_volume(float volume);
@@ -84,7 +81,7 @@ public:
   // that ACCUMULATES per call (the spiral angle, the warp time base) would advance twice
   // per frame -- spinning/waving at double speed, and differently between the eyes.
   // Mutating render ops consult this and skip the advance on the second pass; every other
-  // state (NONE / VR_MONO / VR_LEFT / export) is the frame's one-and-only pass and ticks.
+  // state (NONE / VR_LEFT) is the frame's one-and-only pass and ticks.
   bool render_mutations_enabled() const;
 
   sf::Vector2f text_size(const Font& font, const std::string& text, bool large) const;
@@ -160,7 +157,7 @@ private:
   mutable bool _debug_font_loaded;
   mutable bool _debug_font_ok;
   mutable sf::Font _debug_font;
-  Audio* _audio;
+  Audio& _audio;
 };
 
 #endif

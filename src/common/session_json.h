@@ -38,8 +38,14 @@ struct SessionJsonSidecar
   // theme name -> media paths (root-relative) held OUT of its scan expansion. Inverted
   // persistence: a scan theme stores what to leave out, so a file dropped into the
   // folder later is included automatically instead of being invisible until someone
-  // re-freezes the list. Paths that no longer exist in the expansion are dropped on
-  // save rather than accumulating forever.
+  // re-freezes the list. Applies to the theme's OWN expansion only -- an inherited image
+  // has to be excluded on the theme that owns it, since that is where the scan producing
+  // it runs.
+  //
+  // Entries are never dropped automatically, not on load and not on save: a name the scan
+  // did not produce is equally "deleted" and "not synced yet", and a half-materialized
+  // cloud folder would take the whole list with it. They accumulate at one short string
+  // per file ever excluded, and re-checking the box in F2 removes one.
   std::map<std::string, std::vector<std::string>> theme_exclude;
   // Media directory the theme SET itself is derived from (root-relative; "." is the
   // session root). Empty means the session's themes are a fixed manifest -- the

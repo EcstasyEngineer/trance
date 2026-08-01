@@ -20,7 +20,7 @@ Escape quits outright; the other ways out are closing the window, the tray menu'
 field is being edited, Escape cancels that edit instead of quitting.
 
 The F2 panel is **not built in VR mode** (there is no single flat 2D pass to composite
-it onto) or during video export. Its **System → Renderer** radios persist to
+it onto). Its **System → Renderer** radios persist to
 `system.json` immediately but only take effect on the next launch;
 `--renderer=monitor|openvr|openxr` overrides them for a single run. See the README's
 [VR setup](../README.md#vr-setup) section — in particular, a `system.json` with no

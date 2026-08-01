@@ -7,8 +7,8 @@
 // and the switch clock; the caller owns the side effects -- it gets an on_enter
 // callback per newly-entered item (audio events, program push, logging).
 //
-// Clocking: the caller feeds a millisecond timestamp (wall clock in realtime,
-// frame-derived in export). Pause is the caller's concern too: freeze() shifts the
+// Clocking: the caller feeds a wall-clock timestamp in milliseconds.
+// Pause is the caller's concern too: freeze() shifts the
 // switch clock forward by the paused frame's elapsed time, so held items don't time
 // out under frozen visuals.
 #include <cstdint>

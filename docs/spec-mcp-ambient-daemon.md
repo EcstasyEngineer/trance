@@ -144,10 +144,14 @@ make trance vanish instantly without killing the process**):
   toggle) issued *while* hidden updates that restored pause state instead of being
   discarded — playback stays idle for as long as the window is hidden, and on `show` the
   last explicitly commanded pause state wins. Idempotent like `hide`.
-- Both verbs reply `err ... unavailable in this mode (export)` in video-export mode: there
-  is no window/seam to apply them to, and an `ok` that flips nothing (with `status`
-  reporting `hidden=on` forever) would be a lie — same capability gating as
-  `ui`/`screenshot` below.
+- Both verbs are available in **every** mode, including VR: the apply seam pauses and
+  mutes without touching the headset's hidden GL-context helper window, so there is no
+  configuration in which the intent goes unapplied. (An earlier revision made them reply
+  `err ... unavailable in this mode (export)` under video export, on the grounds that an
+  `ok` flipping nothing — with `status` reporting `hidden=on` forever — would be a lie.
+  The video-export mode has since been removed, and with it the only mode that had no
+  window/seam to apply these to.) Contrast `ui`/`screenshot` below, which remain
+  capability-gated because VR genuinely has no flat pass to draw or grab.
 - Same state everywhere: `hide`/`show`, the global **Shift+F11** hotkey, and the tray's
   Hide-everything/Show item all drive one `hidden` flag reconciled at the main loop's apply
   seam, so the surfaces can never disagree. Hiding also forces the overlay off (clearing
@@ -187,8 +191,9 @@ Status:
 Debug/validation (same line protocol, not part of the settings surface proper):
 - **`ui on|off`** — show/hide the F2 ImGui panels remotely (same state the F2 key
   toggles; `ui on` also un-hides and disengages the overlay, since a panel on an invisible
-  or click-through window is unreachable); `err` in modes with no UI (VR/export — the
-  panel exists in `--overlay` runs, where `ui on` disengages the overlay to reach it).
+  or click-through window is unreachable); `err ... unavailable in this mode (VR)` in
+  modes with no UI (VR only — the panel exists in `--overlay` runs, where `ui on`
+  disengages the overlay to reach it).
 - **`screenshot FILE.png`** — dump the next fully-composited rendered frame (scene + UI,
   pre-swap glReadPixels) to a PNG. Works when the physical display is locked/headless —
   this is what makes remote visual validation possible without keyboard access.

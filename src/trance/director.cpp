@@ -45,7 +45,8 @@ namespace
 #include "shaders.h"
 
 Director::Director(const trance_pb::Session& session, const trance_pb::System& system,
-                   ThemeBank& themes, const trance_pb::Program& program, Renderer& renderer)
+                   ThemeBank& themes, const trance_pb::Program& program, Renderer& renderer,
+                   Audio& audio)
 : _session{session}
 , _system{system}
 , _themes{themes}
@@ -59,7 +60,7 @@ Director::Director(const trance_pb::Session& session, const trance_pb::System& s
 , _debug_overlay{false}
 , _debug_font_loaded{false}
 , _debug_font_ok{false}
-, _audio{nullptr}
+, _audio{audio}
 {
   static const std::size_t gl_preload = 1000;
   for (std::size_t i = 0; i < gl_preload; ++i) {
@@ -211,30 +212,19 @@ void Director::toggle_debug_overlay()
   _debug_overlay = !_debug_overlay;
 }
 
-void Director::set_audio(Audio* audio)
-{
-  _audio = audio;
-}
-
 void Director::play_theme_audio(const std::string& path, bool loop)
 {
-  if (_audio) {
-    _audio->play_theme_audio(path, loop);
-  }
+  _audio.play_theme_audio(path, loop);
 }
 
 void Director::stop_theme_audio()
 {
-  if (_audio) {
-    _audio->stop_theme_audio();
-  }
+  _audio.stop_theme_audio();
 }
 
 void Director::set_theme_audio_volume(float volume)
 {
-  if (_audio) {
-    _audio->set_theme_audio_volume(volume);
-  }
+  _audio.set_theme_audio_volume(volume);
 }
 
 const trance_pb::Program& Director::program() const
@@ -1048,7 +1038,7 @@ void Director::draw_debug_overlay() const
     float master_db = entrainment.master_db() != 0.f ? entrainment.master_db() : -28.f;
     std::snprintf(buf, sizeof(buf), "%.1f", master_db);
     out << "bed    : " << entrainment.layer().size() << " layer(s)   master " << buf << " dB"
-        << (_audio && _audio->Muted() ? "   [MUTED]" : "") << "\n";
+        << (_audio.Muted() ? "   [MUTED]" : "") << "\n";
     int idx = 0;
     for (const auto& l : entrainment.layer()) {
       out << "  L" << idx++ << " : carrier ";

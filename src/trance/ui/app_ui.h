@@ -148,7 +148,7 @@ public:
 
   // Builds this frame's UI (ImGui calls only -- no GL draw calls happen here; those
   // are issued by render()). No-op if !visible().
-  void update(sf::RenderWindow& window, sf::Time dt, Director& director, Audio* audio,
+  void update(sf::RenderWindow& window, sf::Time dt, Director& director, Audio& audio,
              const ThemeBank& themes);
 
   // Issues ImGui's GL draw calls into `window`'s currently-bound buffer. Runs via
@@ -158,7 +158,7 @@ public:
   void render(sf::RenderWindow& window);
 
 private:
-  void draw_status_section(Director& director, Audio* audio, const ThemeBank& themes);
+  void draw_status_section(Director& director, Audio& audio, const ThemeBank& themes);
   void draw_visuals_section(Director& director);
   // The body of one built-in's expander: Force now, Copy, and its read-only v3 source
   // (word-wrapped). Shared by the editable path and the read-only one taken when the
@@ -176,7 +176,7 @@ private:
   uint32_t predicted_pool_size(const std::string& name) const;
   void draw_session_section();
   void draw_overlay_section();
-  void draw_entrainment_section(Audio* audio);
+  void draw_entrainment_section(Audio& audio);
   void draw_system_section();
   // First "custom_N" not already used by a custom_visual_pattern in `program`.
   // Duplicate names are a load-time error (session_json.cpp), so "+ New pattern"

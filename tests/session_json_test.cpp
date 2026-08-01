@@ -638,6 +638,11 @@ namespace
   // relative to the SCAN DIRECTORY. Every consumer of theme.image_path() -- ThemeBank's
   // loader and the archive's file walk alike -- resolves against the SESSION ROOT, so the
   // expansion has to be root-relative ("media/a.png"), not scan-relative ("a.png").
+  //
+  // ONE theme model: the walk is not recursive in the STRING form either. A subdirectory
+  // is a theme in its own right, so a parent that swallowed it would put the same file in
+  // two pools and draw it at both themes' weights. The nested file is therefore absent
+  // from "all" and present in its own theme -- redistributed, not lost.
   void test_scan_expands_to_root_relative_paths()
   {
     auto root = make_scan_session("scan_paths");
@@ -649,7 +654,17 @@ namespace
       images.insert(p);
     }
     check(images.count("media/a.png") == 1, "scan image path is root-relative");
-    check(images.count("media/nested/b.png") == 1, "nested scan image path is root-relative");
+    check(images.count("a.png") == 0, "scan image path is not left scan-relative");
+    check(images.count("media/nested/b.png") == 0,
+          "a nested file is not swallowed by its parent's scan");
+
+    auto nested = session.theme_map().find("media/nested");
+    check(nested != session.theme_map().end(), "a nested directory becomes a theme of its own");
+    if (nested != session.theme_map().end()) {
+      check(nested->second.image_path_size() == 1 &&
+                nested->second.image_path(0) == "media/nested/b.png",
+            "the nested theme holds the nested image, root-relative");
+    }
   }
 
   // #37: the archive walks the in-memory session's theme media lists and resolves each
@@ -808,6 +823,105 @@ namespace
     check(images.count("media/a.png") == 1, "the real image is untouched by the denylist");
   }
 
+  // One short-lived build wrote `"recursive": true` into the scan object. An unknown key
+  // is a FATAL load error, so rejecting it would mean those sessions never open again --
+  // it is accepted, ignored (there is one walk now), and gone after the next save.
+  void test_legacy_recursive_key_still_loads()
+  {
+    auto root = scratch_root() / "legacy_recursive";
+    std::filesystem::remove_all(root);
+    write_file(root / "s.session.json", R"json({
+      "format": "trance-session", "format_version": 1,
+      "first_playlist_item": "main",
+      "playlist": { "main": { "standard": { "program": "p" } } },
+      "program_map": { "p": { "enabled_theme": [ { "theme_name": "all" } ] } },
+      "theme_map": { "all": { "scan": { "dir": "media", "recursive": true } } }
+    })json");
+    write_png(root / "media" / "a.png");
+
+    SessionJsonSidecar sidecar;
+    try {
+      auto session = load_session_json((root / "s.session.json").string(), root.string(), sidecar);
+      check(session.theme_map().at("all").image_path_size() == 1,
+            "a session carrying the retired 'recursive' key still loads");
+      save_session_json(session, (root / "out.session.json").string(), root.string(), sidecar);
+      check(read_file(root / "out.session.json").find("recursive") == std::string::npos,
+            "the retired 'recursive' key is not written back");
+    } catch (const std::exception& e) {
+      check(false, std::string{"a session carrying the retired 'recursive' key still loads: "} +
+                e.what());
+    }
+  }
+
+  // Legacy migration adopts a folder WHOLESALE, discarding the frozen list -- so it must
+  // only fire when the folder actually produces something. A pure container (equally: a
+  // folder of nothing but denylisted junk, or a drive mounted but not yet synced) passes
+  // is_directory and expands to nothing; adopting it would clear the curated list, add a
+  // scan sidecar entry, and write {"scan": ...} on the next save, deleting the only copy
+  // of that list from disk.
+  void test_migration_does_not_adopt_an_empty_folder()
+  {
+    auto root = scratch_root() / "migrate_empty_folder";
+    std::filesystem::remove_all(root);
+    write_file(root / "s.session.json", R"json({
+      "format": "trance-session", "format_version": 1,
+      "first_playlist_item": "main",
+      "playlist": { "main": { "standard": { "program": "p" } } },
+      "program_map": { "p": { "enabled_theme": [ { "theme_name": "hypno" } ] } },
+      "theme_map": { "hypno": { "image_path": ["pics/x.png"] } }
+    })json");
+    write_png(root / "pics" / "x.png");
+    // "hypno" exists but holds only a subdirectory -- a pure container.
+    write_png(root / "hypno" / "sub" / "y.png");
+
+    SessionJsonSidecar sidecar;
+    auto session = load_session_json((root / "s.session.json").string(), root.string(), sidecar);
+    const auto& hypno = session.theme_map().at("hypno");
+    check(hypno.image_path_size() == 1 && hypno.image_path(0) == "pics/x.png",
+          "a container folder does not clear the curated image list");
+    check(sidecar.theme_scan.count("hypno") == 0,
+          "a container folder does not turn the theme into a scan theme");
+
+    save_session_json(session, (root / "out.session.json").string(), root.string(), sidecar);
+    check(read_file(root / "out.session.json").find("pics/x.png") != std::string::npos,
+          "the curated list survives the save");
+  }
+
+  // Exclusions are never pruned automatically. A name the scan did not produce is equally
+  // "deleted" and "not synced yet"; the old all-or-nothing guard passed a folder holding
+  // one of its files and erased every exclusion naming the rest, which the next save then
+  // wrote out with no way back.
+  void test_exclusions_survive_a_partial_folder()
+  {
+    auto root = scratch_root() / "exclude_partial";
+    std::filesystem::remove_all(root);
+    write_file(root / "s.session.json", R"json({
+      "format": "trance-session", "format_version": 1,
+      "first_playlist_item": "main",
+      "playlist": { "main": { "standard": { "program": "p" } } },
+      "program_map": { "p": { "enabled_theme": [ { "theme_name": "all" } ] } },
+      "theme_map": { "all": { "scan": {
+        "dir": "media",
+        "exclude": ["media/a.png", "media/not_synced_yet.png"]
+      } } }
+    })json");
+    write_png(root / "media" / "a.png");
+    write_png(root / "media" / "b.png");
+
+    SessionJsonSidecar sidecar;
+    auto session = load_session_json((root / "s.session.json").string(), root.string(), sidecar);
+    const auto& theme = session.theme_map().at("all");
+    check(theme.image_path_size() == 1 && theme.image_path(0) == "media/b.png",
+          "an exclusion naming a present file is honoured");
+
+    save_session_json(session, (root / "out.session.json").string(), root.string(), sidecar);
+    auto saved = read_file(root / "out.session.json");
+    check(saved.find("media/a.png") != std::string::npos,
+          "the exclusion for the present file is kept");
+    check(saved.find("media/not_synced_yet.png") != std::string::npos,
+          "the exclusion for the absent file is kept too");
+  }
+
   // #36: the worst case for junk is at the scan ROOT, where it lands in the /wildcards/
   // pseudo-theme. A nonempty wildcards theme both merges the phantom into EVERY theme and
   // suppresses scan reporting -- so a stray Thumbs.db at the root would silently freeze every
@@ -872,12 +986,15 @@ namespace
           "the reloaded scan theme re-derives its text");
   }
 
-  // #36 guard: once loose files at the root are merged into every theme (the /wildcards/
-  // pseudo-theme), no single directory reproduces a theme's content -- so nothing may be
-  // reported as a scan and the explicit lists stay the faithful record.
-  void test_bootstrap_wildcards_suppresses_scan_themes()
+  // The /wildcards/ pseudo-theme is retired, and this is the test that used to pin its
+  // behaviour. Loose files at the scan root are now the first-class /root/ theme and
+  // NOTHING is folded into anything else. Both halves are load-bearing: the merge diluted
+  // every theme with the same content, and -- because no single directory then reproduced
+  // a theme -- it suppressed scan reporting for the whole folder, freezing every theme as
+  // an explicit list that goes stale the moment a file is added.
+  void test_bootstrap_root_files_are_their_own_theme()
   {
-    auto root = scratch_root() / "bootstrap_wildcards";
+    auto root = scratch_root() / "bootstrap_root_theme";
     std::filesystem::remove_all(root);
     write_png(root / "ocean" / "a.png");
     write_png(root / "loose.png");
@@ -886,9 +1003,21 @@ namespace
     SessionJsonSidecar sidecar;
     search_resources(session, root.string(), sidecar.theme_scan);
 
-    check(sidecar.theme_scan.empty(), "a merged wildcards theme suppresses scan reporting");
+    check(sidecar.theme_scan.size() == 2, "a loose root file does not suppress scan reporting");
+    check(sidecar.theme_scan.count("ocean") == 1, "the subdirectory is still a scan theme");
+    check(sidecar.theme_scan.count(kRootThemeName) == 1,
+          "loose root files are a scan theme in their own right");
+    check(sidecar.theme_scan[kRootThemeName] == ".",
+          "the root theme's scan directory is the scan root itself");
+
+    // Size only: the session-level scrape leaves paths in NATIVE separator form (the save
+    // path is what normalizes them), so an "ocean/a.png" compare would be a Windows-only
+    // failure that says nothing about merging.
     const auto& ocean = session.theme_map().at("ocean");
-    check(ocean.image_path_size() == 2, "the wildcards image still merges into the folder theme");
+    check(ocean.image_path_size() == 1, "a loose root file does not merge into a folder theme");
+    const auto& loose = session.theme_map().at(kRootThemeName);
+    check(loose.image_path_size() == 1 && loose.image_path(0) == "loose.png",
+          "the loose root file is the /root/ theme's own content");
   }
 
 } // namespace
@@ -919,9 +1048,12 @@ int main()
   test_scan_theme_includes_text_and_audio();
   test_scan_does_not_filter_on_extension();
   test_scan_excludes_junk_files();
+  test_legacy_recursive_key_still_loads();
+  test_migration_does_not_adopt_an_empty_folder();
+  test_exclusions_survive_a_partial_folder();
   test_bootstrap_root_junk_preserves_scan_themes();
   test_bootstrap_scan_writes_scan_themes();
-  test_bootstrap_wildcards_suppresses_scan_themes();
+  test_bootstrap_root_files_are_their_own_theme();
 
   if (g_fail) {
     std::cout << g_fail << " check(s) failed\n";

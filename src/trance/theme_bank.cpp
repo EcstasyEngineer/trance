@@ -63,6 +63,39 @@ namespace
     }();
     return result;
   }
+
+  // Weighted pick over `weights`, skipping any entry `eligible` marks false (an EMPTY
+  // `eligible` means every entry is). Returns size_t(-1) when nothing is selectable.
+  //
+  // Shared by the draw path and the load path deliberately: the tier scheme only works if
+  // residency is built with the same distribution selection samples with, and two
+  // hand-rolled copies of this loop are exactly how the two drifted apart in the first
+  // place.
+  std::size_t weighted_tier(const std::vector<uint32_t>& weights,
+                            const std::vector<char>& eligible)
+  {
+    uint64_t total = 0;
+    for (std::size_t i = 0; i < weights.size(); ++i) {
+      if (eligible.empty() || eligible[i]) {
+        total += weights[i];
+      }
+    }
+    if (!total) {
+      return static_cast<std::size_t>(-1);
+    }
+    auto r = static_cast<uint64_t>(random(static_cast<std::size_t>(total)));
+    uint64_t running = 0;
+    for (std::size_t i = 0; i < weights.size(); ++i) {
+      if (!eligible.empty() && !eligible[i]) {
+        continue;
+      }
+      running += weights[i];
+      if (r < running) {
+        return i;
+      }
+    }
+    return static_cast<std::size_t>(-1);
+  }
 }
 
 ThemeBank::ThemeBank(const std::string& root_path, const trance_pb::Session& session,
@@ -123,6 +156,10 @@ ThemeBank::ThemeBank(const std::string& root_path, const trance_pb::Session& ses
                                        {static_cast<std::size_t>(theme.text_line().size())}});
     ThemeInfo& theme_info = *_themes.back();
     theme_info.name = pair.first;
+    // Fonts and audio alone put nothing on screen, so they don't count. See set_program:
+    // a theme that can't draw is kept out of the rotation entirely.
+    theme_info.drawable =
+        !images.empty() || !animations.empty() || !theme_info.text_lines.empty();
     // Disable images not in this theme in both shufflers so that they can
     // never be chosen.
     for (std::size_t i = 0; i < _all_images.size(); ++i) {
@@ -142,6 +179,10 @@ ThemeBank::ThemeBank(const std::string& root_path, const trance_pb::Session& ses
       std::size_t offset = 0;
       for (const auto& tier : tiers_it->second) {
         Shuffler tier_shuffler{_all_images.size()};
+        // Same membership, second copy: one shuffler tracks what is RESIDENT (the draw
+        // side), the other what is still worth LOADING. They move in opposite directions
+        // on the same event, so they cannot be one structure.
+        Shuffler tier_load_shuffler{_all_images.size()};
         std::unordered_set<std::size_t> members;
         for (uint32_t n = 0; n < tier.second && offset < static_cast<std::size_t>(
                                                      theme.image_path_size());
@@ -156,22 +197,27 @@ ThemeBank::ThemeBank(const std::string& root_path, const trance_pb::Session& ses
           // pulled it back down.
           if (members.insert(index_it->second).second) {
             tier_shuffler.modify(index_it->second, last_image_count);
+            tier_load_shuffler.modify(index_it->second, last_image_count);
           }
         }
         // An empty tier (a parent folder with no images of its own) would otherwise be
         // selectable and hand back nothing.
         if (!members.empty()) {
           theme_info.tier_shufflers.push_back(std::move(tier_shuffler));
+          theme_info.tier_load_shufflers.push_back(std::move(tier_load_shuffler));
           theme_info.tier_sources.push_back(tier.first);
           theme_info.tier_weights.push_back(1);
+          theme_info.tier_loaded_count.push_back(0);
           theme_info.tier_members.push_back(std::move(members));
         }
       }
       // One surviving tier is not a hierarchy -- drop back to the flat shuffle.
       if (theme_info.tier_shufflers.size() < 2) {
         theme_info.tier_shufflers.clear();
+        theme_info.tier_load_shufflers.clear();
         theme_info.tier_sources.clear();
         theme_info.tier_weights.clear();
+        theme_info.tier_loaded_count.clear();
         theme_info.tier_members.clear();
       }
     }
@@ -252,6 +298,18 @@ void ThemeBank::set_program(const trance_pb::Program& program)
     theme->enabled = false;
   }
   for (const auto& theme : program.enabled_theme()) {
+    // A row can name a theme that isn't in theme_map at all (a hand-edited session, or a
+    // folder that went missing and left its enabled_theme row behind -- discovery keeps
+    // those on purpose), and a theme that IS there can have nothing to draw: a directory
+    // that turned out to be a pure container expands to an empty theme, as does one whose
+    // drive is not mounted. Honouring the weight anyway hands that share of the rotation
+    // to a husk that renders black, and the tier scheme makes the empty case ordinary
+    // rather than exotic. Skipped at RUNTIME only -- the session keeps the row, so the
+    // theme comes straight back the moment its content does.
+    auto index_it = _theme_map.find(theme.theme_name());
+    if (index_it == _theme_map.end() || !_themes[index_it->second]->drawable) {
+      continue;
+    }
     if (theme.random_weight()) {
       _enabled_theme_weights[theme.theme_name()] = theme.random_weight();
     }
@@ -259,8 +317,7 @@ void ThemeBank::set_program(const trance_pb::Program& program)
       _pinned_theme = theme.theme_name();
     }
     if (theme.random_weight() || theme.pinned()) {
-      auto index = _theme_map[theme.theme_name()];
-      _themes[index]->enabled = true;
+      _themes[index_it->second]->enabled = true;
     }
   }
   // Refresh every tier's weight from the program's rotation weights. Deliberately the
@@ -322,27 +379,22 @@ Image ThemeBank::get_image(bool alternate)
     // equal-sized folders weighted 4:1 you get 50/50, and a small folder inheriting a
     // large one is drowned entirely.
     //
-    // Falls through to the flat shuffle when the theme has no tiers, and when every tier
-    // weight is zero (rather than returning nothing at all).
+    // Falls through to the flat shuffle when the theme has no tiers, when every tier
+    // weight is zero, and when the chosen tier has nothing RESIDENT (rather than returning
+    // nothing at all).
     index = static_cast<std::size_t>(-1);
     if (!theme.tier_shufflers.empty()) {
-      uint64_t total = 0;
-      for (auto weight : theme.tier_weights) {
-        total += weight;
-      }
-      if (total) {
-        auto r = random(static_cast<std::size_t>(total));
-        uint64_t running = 0;
-        for (std::size_t i = 0; i < theme.tier_shufflers.size(); ++i) {
-          running += theme.tier_weights[i];
-          if (static_cast<uint64_t>(r) < running) {
-            index = theme.tier_shufflers[i].next();
-            break;
-          }
-        }
+      static const std::vector<char> all_eligible;
+      auto tier = weighted_tier(theme.tier_weights, all_eligible);
+      if (tier != static_cast<std::size_t>(-1)) {
+        index = theme.tier_shufflers[tier].next();
       }
     }
-    if (index == static_cast<std::size_t>(-1)) {
+    // The miss case is the important half. A tier whose members are all unloaded hands
+    // back a perfectly valid index, so testing for -1 alone never fired: every miss became
+    // a repeated frame AND skipped the _last_images bookkeeping below, which left the same
+    // tier free to miss again on the very next call.
+    if (index >= _all_images.size() || !_all_images[index].image) {
       index = theme.image_shuffler.next();
     }
     if (index < _all_images.size() && _all_images[index].image) {
@@ -610,8 +662,36 @@ void ThemeBank::do_load(ThemeInfo& theme)
   if (theme.loaded_size >= theme.size) {
     return;
   }
-  auto index = theme.load_shuffler.next();
+  // Residency is built with the SAME weighted draw get_image selects with. Loading flat
+  // over the merged pool spends cache slots in proportion to tier SIZE while selection
+  // spends picks in proportion to tier WEIGHT, so the tier the weights favour is usually
+  // not in RAM when it comes up: 10 images inheriting 280 at 4:1 with a 21-image cache
+  // measured 0.9 of the 10 resident, 75% of picks missing, and the own tier taking 4% of
+  // frames rather than 80%. Tiers with everything already resident are held out of the
+  // draw so it can't spend the cache re-loading them.
+  std::size_t index = static_cast<std::size_t>(-1);
+  if (!theme.tier_load_shufflers.empty()) {
+    // tier_weights is refreshed by set_program on the main thread under this same lock.
+    std::lock_guard<std::mutex> lock{theme.load_mutex};
+    std::vector<char> eligible(theme.tier_load_shufflers.size());
+    for (std::size_t t = 0; t < eligible.size(); ++t) {
+      eligible[t] = theme.tier_loaded_count[t] < theme.tier_members[t].size() ? 1 : 0;
+    }
+    auto tier = weighted_tier(theme.tier_weights, eligible);
+    if (tier != static_cast<std::size_t>(-1)) {
+      index = theme.tier_load_shufflers[tier].next();
+    }
+  }
+  if (index >= _all_images.size()) {
+    index = theme.load_shuffler.next();
+  }
   theme.load_shuffler.decrease(index);
+  for (std::size_t t = 0; t < theme.tier_load_shufflers.size(); ++t) {
+    if (theme.tier_members[t].count(index)) {
+      theme.tier_load_shufflers[t].decrease(index);
+      ++theme.tier_loaded_count[t];
+    }
+  }
   theme.loaded_index.emplace_back(index);
 
   auto& image = _all_images[index];
@@ -632,10 +712,13 @@ void ThemeBank::do_load(ThemeInfo& theme)
         std::lock_guard<std::mutex> lock{other_theme->load_mutex};
         other_theme->image_shuffler.modify(index, -static_cast<int32_t>(last_image_count));
         // Strip it from the tier shufflers too, and ONLY from the tiers that own it --
-        // a tier left holding a dead index keeps offering an image that can never draw.
+        // a tier left holding a dead index keeps offering an image that can never draw,
+        // and one left holding it on the LOAD side keeps spending cache slots on it.
         for (std::size_t t = 0; t < other_theme->tier_shufflers.size(); ++t) {
           if (other_theme->tier_members[t].count(index)) {
             other_theme->tier_shufflers[t].modify(index, -static_cast<int32_t>(last_image_count));
+            other_theme->tier_load_shufflers[t].modify(index,
+                                                       -static_cast<int32_t>(last_image_count));
           }
         }
       }
@@ -669,6 +752,17 @@ void ThemeBank::do_unload(ThemeInfo& theme)
   }
   auto index = theme.loaded_index.front();
   theme.load_shuffler.increase(index);
+  // Mirror of do_load's load-side bookkeeping: the image is a candidate for loading again,
+  // and its tier has one fewer resident member (so it becomes eligible for the weighted
+  // load draw again once it was full).
+  for (std::size_t t = 0; t < theme.tier_load_shufflers.size(); ++t) {
+    if (theme.tier_members[t].count(index)) {
+      theme.tier_load_shufflers[t].increase(index);
+      if (theme.tier_loaded_count[t]) {
+        --theme.tier_loaded_count[t];
+      }
+    }
+  }
   theme.loaded_index.erase(theme.loaded_index.begin());
 
   auto& image = _all_images[index];

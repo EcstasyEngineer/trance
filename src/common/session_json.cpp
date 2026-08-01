@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 #include <stdexcept>
 
@@ -579,17 +580,29 @@ namespace
 
     if (const json* scan = find(obj, "scan")) {
       auto sp = json_path + "/scan";
-      // Two forms. A STRING is the legacy one: a whole-subtree walk, no exclusions, no
-      // inheritance -- kept working verbatim so existing sessions load unchanged. An
-      // OBJECT is the hierarchy form, where one directory is one theme: it walks only
-      // that directory's own files unless `recursive` says otherwise, and carries the
-      // per-theme `inherit` flag and `exclude` list.
+      // Two forms, ONE model. A STRING is shorthand for {"dir": <string>}; the OBJECT form
+      // adds the per-theme `inherit` flag and `exclude` list. Both walk that directory's
+      // OWN files and nothing else.
+      //
+      // The subtree walk the string form performed before the folder hierarchy landed is
+      // gone, and is not coming back: a subdirectory is a theme in its own right now, so
+      // recursing would put every nested file in two pools at once and hand a parent its
+      // children's weight. What a pre-hierarchy session sees instead is its nested content
+      // REDISTRIBUTED -- the scan root's discovery pass turns each subdirectory into a
+      // theme of its own at weight 1 -- and `inherit` is how you fold it back together
+      // where the old shape was actually wanted. A directory that holds nothing but
+      // subdirectories therefore expands to an empty theme, which ThemeBank::set_program
+      // keeps OUT of the rotation rather than giving it frames it can only draw black.
       std::string dir;
       if (scan->is_string()) {
-        // Legacy shorthand, still accepted so old sessions load: just the directory.
         dir = scan->get<std::string>();
       } else if (scan->is_object()) {
-        check_unknown_keys(*scan, {"dir", "inherit", "exclude"}, sp);
+        // "recursive" is accepted and ignored on purpose. The one-day build between the
+        // folder hierarchy landing and this model WROTE `"recursive": true`, and an
+        // unknown key is a FATAL load error -- rejecting it would mean those sessions no
+        // longer open at all. There is one walk now, so the value has nothing to select.
+        // Never written back, so the key disappears on the first save.
+        check_unknown_keys(*scan, {"dir", "recursive", "inherit", "exclude"}, sp);
         const json* dir_value = find(*scan, "dir");
         if (!dir_value || !dir_value->is_string()) {
           throw std::runtime_error(sp + "/dir: expected a string");
@@ -630,10 +643,10 @@ namespace
   }
 
   // Expands one scan theme in place: records the scan in the sidecar, walks the directory,
-  // rebases results onto the session root, drops the theme's exclusions, and prunes
-  // exclusions that no longer name anything. Factored out of load_theme so the auto-rescan
-  // pass (discover_new_themes) can materialize a newly-appeared folder exactly the way a
-  // hand-written `scan` entry would be loaded -- one expansion rule, not two.
+  // rebases results onto the session root, and drops the theme's exclusions. Exclusions are
+  // never pruned here -- see the note at the end of the walk. Factored out of load_theme so
+  // the auto-rescan pass (discover_new_themes) can materialize a newly-appeared folder
+  // exactly the way a hand-written `scan` entry would be loaded -- one rule, not two.
   void expand_scan_theme(trance_pb::Theme& theme, const std::string& theme_name,
                           const std::string& dir, const std::string& root,
                           SessionJsonSidecar& sidecar)
@@ -670,13 +683,9 @@ namespace
         auto excluded = [&excludes](const std::string& p) {
           return std::find(excludes.begin(), excludes.end(), p) != excludes.end();
         };
-        // Every path this scan produced, so exclusions that no longer name anything can
-        // be pruned below instead of accumulating forever across renames and deletions.
-        std::vector<std::string> produced;
         auto add_unless_excluded = [&](const std::string& p, void (trance_pb::Theme::*add)(
                                                                  const std::string&)) {
           auto rebased = rebase(p);
-          produced.push_back(rebased);
           if (!excluded(rebased)) {
             (theme.*add)(rebased);
           }
@@ -698,26 +707,39 @@ namespace
           theme.add_text_line(t);
         }
 
-        // Garbage-collect exclusions that no longer match anything the scan produces:
-        // a file that was renamed, moved or deleted leaves an entry that can never fire
-        // again, and without this they pile up forever in the session file.
+        // DELIBERATELY no garbage-collection of exclusions that name nothing this scan
+        // produced -- the same call the removal pass in discover_new_themes makes, for the
+        // same reason.
         //
-        // Guarded on `produced` being non-empty: an empty scan means the directory is
-        // present but unreadable/emptied (a detached drive, a half-synced folder), and
-        // pruning against nothing would silently discard EVERY exclusion the user set --
-        // so an unexpectedly-empty folder is treated as "no information" rather than as
-        // "nothing is excluded any more".
-        if (exclude_it != sidecar.theme_exclude.end() && !produced.empty()) {
-          auto& list = exclude_it->second;
-          list.erase(std::remove_if(list.begin(), list.end(),
-                                    [&produced](const std::string& p) {
-                                      return std::find(produced.begin(), produced.end(), p) ==
-                                          produced.end();
-                                    }),
-                     list.end());
-        }
+        // "The file was deleted" and "the file has not materialized yet" are one
+        // observation from here: a name the walk did not yield. Cloud-synced and network
+        // folders produce the second constantly. The all-or-nothing guard this replaces
+        // (prune unless the scan found NOTHING) passes a OneDrive folder holding 3 of its
+        // 200 files and then erases every exclusion naming the other 197; the next save
+        // writes that out and the user's blacklist is gone with no way back.
+        //
+        // The cost of not pruning is bounded and cheap: one short string per file the user
+        // ever excluded, matched by an exact string compare, and re-checking the box in
+        // F2 removes it. Untidy beats unrecoverable.
       }
     }
+  }
+
+  // The directory a theme's name refers to, session-root-relative. Theme names are
+  // SCAN-ROOT-relative (that is what the scrape produces), and kRootThemeName means the
+  // scan root itself -- so the directory is the name rebased onto the scan root. One
+  // function because migration and discovery disagreeing about it means a theme is
+  // expanded from one directory and saved with another.
+  std::string theme_dir_for(const std::string& theme_name, const std::string& scan_root)
+  {
+    const std::string relative = theme_name == kRootThemeName ? std::string{"."} : theme_name;
+    if (scan_root.empty() || scan_root == ".") {
+      return relative;
+    }
+    if (relative == ".") {
+      return normalize_path_for_save(scan_root);
+    }
+    return normalize_path_for_save((std::filesystem::path(scan_root) / relative).string());
   }
 
   // Turns a legacy frozen theme -- an explicit media list with no `scan` -- into a folder
@@ -743,12 +765,28 @@ namespace
       if (sidecar.theme_scan.count(pair.first)) {
         continue;  // already a folder theme
       }
-      const auto dir = pair.first == kRootThemeName ? std::string{"."} : pair.first;
+      const auto dir = theme_dir_for(pair.first, sidecar.theme_scan_root);
       if (!std::filesystem::is_directory(std::filesystem::path(root) / dir)) {
         continue;
       }
-      pair.second.Clear();
-      expand_scan_theme(pair.second, pair.first, dir, root, sidecar);
+      // Expand into a scratch theme and adopt the folder only if it actually produced
+      // something. is_directory() alone is not enough, and the failure is permanent: a
+      // pure container, a folder whose every file is denylisted junk, or one on a drive
+      // that is mounted but not yet synced would clear the curated list, gain a scan
+      // sidecar entry, and be written back on the next save as {"scan": ...} -- deleting
+      // the only copy of that list from disk. An empty expansion is "no information", the
+      // same reading the never-remove-a-missing-theme rule takes.
+      trance_pb::Theme expanded;
+      expand_scan_theme(expanded, pair.first, dir, root, sidecar);
+      if (!expanded.image_path_size() && !expanded.animation_path_size() &&
+          !expanded.font_path_size() && !expanded.text_line_size() &&
+          !expanded.audio_path_size()) {
+        // expand_scan_theme records the scan up front; take it back so the theme stays a
+        // frozen list and still round-trips as its explicit media entries.
+        sidecar.theme_scan.erase(pair.first);
+        continue;
+      }
+      pair.second = std::move(expanded);
     }
   }
 
@@ -786,12 +824,11 @@ namespace
       // A directory that appeared since the last save. Materialize it the same way a
       // hand-written scan theme loads, and enable it at the default weight in every
       // program: a folder the user has is content the user wants until they say
-      // otherwise.
-      auto rebased_dir = sidecar.theme_scan_root == "." || sidecar.theme_scan_root.empty()
-          ? pair.second
-          : normalize_path_for_save(
-                (std::filesystem::path(sidecar.theme_scan_root) / pair.second).string());
-      expand_scan_theme(themes[pair.first], pair.first, rebased_dir, root, sidecar);
+      // otherwise. The directory comes from theme_dir_for, the same helper migration
+      // uses, so the two can't expand the same theme from different places.
+      expand_scan_theme(themes[pair.first], pair.first, theme_dir_for(pair.first,
+                                                                     sidecar.theme_scan_root),
+                        root, sidecar);
       for (auto& program : *session.mutable_program_map()) {
         // Only if the program has no row for this name already. A theme_map entry can be
         // absent while an enabled_theme row survives -- a hand-edited file, or a folder
@@ -942,6 +979,36 @@ namespace
     }
     for (const auto& name : names) {
       resolve(name, resolve);
+    }
+  }
+
+  // The tier spans must PARTITION image_path exactly: ThemeBank splits the pool back into
+  // tiers by OFFSET and has no per-image tag to fall back on, so a span that is short or
+  // long doesn't fail -- it silently re-tags images into a neighbouring ancestor's tier and
+  // draws them at that ancestor's weight. It holds today (every span is recorded from the
+  // pool it is about to append), but nothing enforced it, and a future filtering pass over
+  // image_path is exactly the kind of change that would break it without a symptom.
+  //
+  // Repaired rather than thrown: collapsing to one flat tier costs the weighting, which is
+  // a nuisance, where drawing from the wrong tier is unexplainable -- and a load-time throw
+  // on a mismatch nobody can act on would just make the session unopenable.
+  void check_tier_spans(const trance_pb::Session& session, SessionJsonSidecar& sidecar)
+  {
+    for (auto& pair : sidecar.theme_tiers) {
+      auto theme_it = session.theme_map().find(pair.first);
+      if (theme_it == session.theme_map().end()) {
+        continue;
+      }
+      uint64_t span = 0;
+      for (const auto& tier : pair.second) {
+        span += tier.second;
+      }
+      const auto pool = static_cast<uint64_t>(theme_it->second.image_path_size());
+      if (span != pool) {
+        std::cerr << "theme '" << pair.first << "': tier spans cover " << span << " of " << pool
+                  << " images; falling back to an unweighted pool" << std::endl;
+        pair.second = {{pair.first, static_cast<uint32_t>(pool)}};
+      }
     }
   }
 
@@ -1335,6 +1402,7 @@ trance_pb::Session load_session_json(const std::string& path, const std::string&
   {
     // After every theme exists: a theme can only inherit a pool that has been loaded.
     resolve_theme_inheritance(session, sidecar);
+    check_tier_spans(session, sidecar);
   }
 
   if (const json* variables = find(root_json, "variable_map")) {
@@ -1438,6 +1506,12 @@ trance_pb::System load_system_json(const std::string& path)
   }
 
   require_format(root_json, "trance-system");
+  // `last_export_settings` is DEAD SCHEMA deliberately retained. The video-export path
+  // it configured is gone, and nothing reads these values any more -- but every
+  // system.json ever written by get_default_system() contains the key, and
+  // check_unknown_keys THROWS on anything not listed here. Dropping it from the
+  // allow-list would make trance.exe fail to start on every existing install. It goes
+  // when the format_version is bumped and old configs are migrated, not before.
   check_unknown_keys(root_json,
                       {"format", "format_version", "enable_vsync", "renderer", "windowed",
                        "draw_depth", "eye_spacing", "image_cache_size", "animation_buffer_size",

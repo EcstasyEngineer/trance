@@ -509,12 +509,6 @@ bool is_enabled(const trance_pb::PlaylistItem_NextItem& next,
   return value == next.condition_variable_value();
 };
 
-void search_resources(trance_pb::Session& session, const std::string& root)
-{
-  std::map<std::string, std::string> ignored;
-  search_resources(session, root, ignored);
-}
-
 void search_resources(trance_pb::Session& session, const std::string& root,
                       std::map<std::string, std::string>& theme_scan)
 {
@@ -678,6 +672,10 @@ trance_pb::System get_default_system()
   system.set_animation_buffer_size(32);
   system.set_font_cache_size(8);
 
+  // Dead schema, deliberately still written: the video-export path is gone, but the
+  // system.json loader's allow-list still accepts this key precisely so existing
+  // configs keep loading (see check_unknown_keys in session_json.cpp). Keeping the
+  // writer and the reader in step costs nothing and avoids a one-way format skew.
   auto& export_settings = *system.mutable_last_export_settings();
   export_settings.set_width(1280);
   export_settings.set_height(720);
@@ -751,12 +749,6 @@ void save_session(const trance_pb::Session& session, const std::string& path,
 {
   auto root = std::filesystem::path{path}.parent_path().string();
   save_session_json(session, path, root, sidecar);
-}
-
-void save_session(const trance_pb::Session& session, const std::string& path)
-{
-  SessionJsonSidecar sidecar;
-  save_session(session, path, sidecar);
 }
 
 trance_pb::Session get_default_session()

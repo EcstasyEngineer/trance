@@ -3,8 +3,8 @@
 Player-side audio is two independent things mixed under the visuals: a set of
 **music channels** triggered by the playlist, and a continuously-synthesised
 **entrainment bed**. Both are owned by the `Audio` class
-(`src/trance/media/audio.{h,cpp}`), which exists only in realtime mode — video
-export has no audio.
+(`src/trance/media/audio.{h,cpp}`), which is constructed for every run — `Director`
+holds it by reference, so there is no audio-less configuration.
 
 ## Channels
 

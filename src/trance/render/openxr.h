@@ -25,10 +25,16 @@ public:
   void init() override;
   bool update() override;
   void render(const std::function<void(State)>& render_fn) override;
-  // Layerless frame submission while paused/hidden (see Renderer::render_idle).
-  bool render_idle() override;
+  // Keep-alive frame submission when nothing was drawn: layerless while paused/hidden,
+  // re-presenting the last quads otherwise (see Renderer::render_idle).
+  bool render_idle(bool blank) override;
 
 private:
+  // The two head-locked quad layers, rebuilt identically by render() and render_idle().
+  // Nothing in them varies per frame, which is precisely why the idle path can
+  // re-present the last rendered frame without touching a swapchain.
+  void fill_quads(XrCompositionLayerQuad (&quads)[2]) const;
+
   bool _success;
   uint32_t _width;
   uint32_t _height;
@@ -49,9 +55,13 @@ private:
   // (release requires a successful wait), so the swapchain is one slot shorter for
   // good -- treat it as session loss and make the next update() exit cleanly.
   bool _lost;
-  // Swapchain textures are runtime-owned; never glDeleteTextures them. The FBOs
-  // wrapping them are ours. Indexed per eye, matching _swapchain.
-  std::vector<uint32_t> _swapchain_tex[2];
+  // True once render() has released an image into both swapchains. Until then the
+  // swapchains hold nothing, so render_idle has no last frame to re-present and must
+  // submit layerlessly.
+  bool _has_content;
+  // One FBO per swapchain image, per eye, wrapping the runtime-owned texture. The FBOs
+  // are ours to delete; the textures they wrap are not (xrDestroySwapchain frees those).
+  // Indexed [eye][swapchain image index], matching _swapchain.
   std::vector<uint32_t> _fbo[2];
 };
 

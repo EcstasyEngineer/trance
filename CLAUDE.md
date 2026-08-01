@@ -8,10 +8,10 @@ A fullscreen visual hypnosis / media player (C++17, SFML 3). It plays **sessions
 (`*.session.json`, spec in `docs/session-json-format.md`; legacy protobuf `.session` files
 convert via `trance_convert`) that drive a stream of timed visuals — flashing images/text,
 spirals, animations — over audio with optional binaural/isochronic entrainment beds and
-theme audio. Also: a video **export** path, an X11 click-through `--overlay` mode, an
+theme audio. Also: an X11 click-through `--overlay` mode, an
 ImGui F2 in-app UI, a system tray icon (Windows) + global Shift+F11 hide-everything hotkey, and a
-`--command_port` line-protocol control channel. The legacy
-wxWidgets **creator** (Windows-only, still proto-based) is deprecated pending ImGui parity.
+`--command_port` line-protocol control channel. (The legacy wxWidgets **creator** editor has
+been deleted; the F2 panel plus hand-edited JSON is the editing story.)
 
 ## Build & run
 
@@ -29,8 +29,6 @@ cmake --build --preset linux-release          # or linux-debug
 
 # Run (realtime windowed; needs a real GPU — software GL won't do)
 ./build/windows-msvc/Release/trance.exe "C:\path\to\some.session"
-# video export instead of a window:
-trance.exe --export_path out.webm --export_length 60 some.session
 ```
 
 There are exactly two build configurations: **Debug** and **Release**. Do not add bespoke
@@ -83,8 +81,7 @@ v3 intent grammar  ──parse──▶  pattern::Node AST  ──compile──�
 - **main loop** (`src/trance/main.cpp`): events → update → render, per frame.
 
 Layout: `src/trance/visual` (grammar, cyclers, render), `src/trance` (director, theme_bank,
-render, media, main), `src/common` (proto `trance.proto`, session), `src/creator` (wxWidgets
-editor), `docs/`, `tests/`.
+render, media, main), `src/common` (proto `trance.proto`, session), `docs/`, `tests/`.
 
 ## Key invariants & principles
 

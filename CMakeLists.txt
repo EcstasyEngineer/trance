@@ -74,19 +74,6 @@ endif()
 find_package(OpenVR REQUIRED)
 find_package(OpenXR CONFIG REQUIRED)
 
-# x264 ships pkg-config metadata, not a first-class CMake config. Prefer
-# pkg-config (Linux); fall back to cmake/Findx264.cmake (MSVC) — never hardcode.
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-  pkg_check_modules(X264 QUIET IMPORTED_TARGET x264)
-endif()
-if(TARGET PkgConfig::X264)
-  set(X264_TARGET PkgConfig::X264)
-else()
-  find_package(x264 REQUIRED)
-  set(X264_TARGET x264::x264)
-endif()
-
 # ---------------------------------------------------------------------------
 # Shared build options (per-target, not global) — INTERFACE library that every
 # target links against.
@@ -179,7 +166,7 @@ target_link_libraries(common_lib PUBLIC
   miniz::miniz)
 
 # ---------------------------------------------------------------------------
-# trance executable (realtime renderer + video export)
+# trance executable (realtime renderer)
 # ---------------------------------------------------------------------------
 add_executable(trance
   src/trance/director.cpp
@@ -187,7 +174,6 @@ add_executable(trance
   src/trance/media/async_streamer.cpp
   src/trance/media/audio.cpp
   src/trance/media/entrainment.cpp
-  src/trance/media/export.cpp
   src/trance/media/font.cpp
   src/trance/net/command_channel.cpp
   src/trance/net/command_protocol.cpp
@@ -197,7 +183,6 @@ add_executable(trance
   src/trance/render/openvr.cpp
   src/trance/render/openxr.cpp
   src/trance/render/render.cpp
-  src/trance/render/video_export.cpp
   src/trance/theme_bank.cpp
   src/trance/ui/app_ui.cpp
   src/trance/visual/api.cpp
@@ -221,8 +206,7 @@ target_link_libraries(trance PRIVATE
   unofficial::libwebm::libwebm
   GIF::GIF
   OpenVR::OpenVR
-  OpenXR::openxr_loader
-  ${X264_TARGET})
+  OpenXR::openxr_loader)
 
 if(WIN32)
   # avrt: used by WASAPI-backed audio paths on Windows.
@@ -256,57 +240,6 @@ add_executable(trance_convert
 target_link_libraries(trance_convert PRIVATE
   common_lib
   trance_options)
-
-# ---------------------------------------------------------------------------
-# creator executable (wxWidgets session editor)
-#
-# Defaults ON for Windows (the primary platform for the editor) and OFF
-# elsewhere: wxWidgets pulls the whole GTK3 chain (~80 vcpkg ports, the long
-# pole of a Linux build) and the editor has near-zero non-Windows use. Linux
-# devs who want it can configure with -DTRANCE_BUILD_CREATOR=ON, but must also
-# add `wxwidgets` to vcpkg.json (it is platform-gated to windows there).
-# ---------------------------------------------------------------------------
-if(WIN32)
-  set(_creator_default ON)
-else()
-  set(_creator_default OFF)
-endif()
-option(TRANCE_BUILD_CREATOR "Build the wxWidgets session editor (creator)" ${_creator_default})
-
-if(TRANCE_BUILD_CREATOR)
-  find_package(wxWidgets CONFIG REQUIRED)
-
-  add_executable(creator WIN32
-    src/creator/export.cpp
-    src/creator/launch.cpp
-    src/creator/main.cpp
-    src/creator/playlist.cpp
-    src/creator/program.cpp
-    src/creator/settings.cpp
-    src/creator/theme.cpp
-    src/creator/variables.cpp)
-
-  target_compile_definitions(creator PRIVATE _UNICODE)
-  if(MSVC)
-    target_compile_definitions(creator PRIVATE _CRT_SECURE_NO_WARNINGS)
-  endif()
-
-  target_link_libraries(creator PRIVATE
-    common_lib
-    trance_options
-    SFML::System SFML::Window SFML::Graphics
-    GLEW::GLEW
-    OpenGL::GL
-    unofficial::libvpx::libvpx
-    unofficial::libwebm::libwebm
-    GIF::GIF
-    ${X264_TARGET}
-    wx::core wx::base)
-
-  if(WIN32)
-    target_link_libraries(creator PRIVATE ws2_32 winmm shlwapi)
-  endif()
-endif()
 
 # ---------------------------------------------------------------------------
 # Headless tests (no SFML/protobuf). Default OFF; enable with -DTRANCE_BUILD_TESTS=ON

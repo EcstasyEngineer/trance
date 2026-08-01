@@ -128,8 +128,8 @@ variables steer which paths through the playlist are reachable.
 
 Variable values come from the `--variables` command-line flag, a
 semicolon-separated `key=value` list parsed by `parse_variables`
-(`main.cpp:309`, with `\` escaping for `;`, `=`, `\`). `creator` persists the last
-values per session in `System.last_session_map` (`trance.proto:76`).
+(`main.cpp:309`, with `\` escaping for `;`, `=`, `\`). The last values per session
+persist in `System.last_session_map` (`trance.proto:76`).
 
 ### Subroutines
 

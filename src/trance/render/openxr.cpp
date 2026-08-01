@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <iostream>
 #include <thread>
 
@@ -77,6 +78,25 @@ namespace
     }
     return false;
   }
+
+#ifdef _WIN32
+  // Whether the loader has any runtime to load at all. The OpenXR loader resolves the
+  // active runtime's manifest from SOFTWARE\Khronos\OpenXR\1\ActiveRuntime (HKCU
+  // consulted before HKLM); with neither set, nothing is loaded into the process and
+  // enumeration succeeds while reporting nothing. We only ever READ this -- runtime
+  // selection is the user's, made in the Oculus or SteamVR desktop app.
+  bool active_openxr_runtime_registered()
+  {
+    for (HKEY root : {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE}) {
+      DWORD size = 0;
+      if (RegGetValueA(root, "SOFTWARE\\Khronos\\OpenXR\\1", "ActiveRuntime", RRF_RT_REG_SZ,
+                       nullptr, nullptr, &size) == ERROR_SUCCESS) {
+        return true;
+      }
+    }
+    return false;
+  }
+#endif
 }
 
 OpenXrRenderer::OpenXrRenderer(const trance_pb::System& system)
@@ -93,6 +113,7 @@ OpenXrRenderer::OpenXrRenderer(const trance_pb::System& system)
 , _session_state{XR_SESSION_STATE_UNKNOWN}
 , _session_running{false}
 , _lost{false}
+, _has_content{false}
 {
 #ifdef _WIN32
   (void) system;
@@ -101,6 +122,27 @@ OpenXrRenderer::OpenXrRenderer(const trance_pb::System& system)
   if (!xr_check(XR_NULL_HANDLE,
                 xrEnumerateInstanceExtensionProperties(nullptr, 0, &extension_count, nullptr),
                 "xrEnumerateInstanceExtensionProperties")) {
+    return;
+  }
+  if (extension_count == 0) {
+    // Zero extensions from a SUCCESSFUL enumeration is the loader saying it has no
+    // runtime to ask -- it is NOT a runtime saying it lacks a feature. This used to
+    // fall through to the "runtime does not support XR_KHR_opengl_enable" message
+    // below, which sends the reader hunting for a driver or headset problem that does
+    // not exist; a machine with no ActiveRuntime key at all produces exactly this.
+    // (A runtime that is registered but not running usually fails the call outright
+    // with XR_ERROR_RUNTIME_UNAVAILABLE, which xr_check names above.)
+    std::cerr << "no active OpenXR runtime is registered: the loader enumerated zero "
+                 "instance extensions"
+              << std::endl;
+    if (!active_openxr_runtime_registered()) {
+      std::cerr << "  SOFTWARE\\Khronos\\OpenXR\\1\\ActiveRuntime is set in neither "
+                   "HKEY_CURRENT_USER nor HKEY_LOCAL_MACHINE"
+                << std::endl;
+    }
+    std::cerr << "  set the active OpenXR runtime in the Oculus (Quest Link) or SteamVR "
+                 "desktop app, then relaunch"
+              << std::endl;
     return;
   }
   std::vector<XrExtensionProperties> extensions(extension_count,
@@ -163,8 +205,24 @@ OpenXrRenderer::OpenXrRenderer(const trance_pb::System& system)
 
   // Hidden window owns the OpenGL context (same pattern as OpenVrRenderer).
   // Vsync stays off unconditionally: xrWaitFrame is the frame pacing authority.
+  //
+  // The context version is REQUESTED explicitly rather than left to SFML's default,
+  // which is 1.1: WglContext only appends WGL_CONTEXT_MAJOR/MINOR_VERSION_ARB when the
+  // request exceeds 1.1, so with the default we never ask for a version at all and
+  // simply accept whatever compatibility context the driver hands out. Under
+  // XR_KHR_opengl_enable that is a correctness problem rather than a performance one:
+  // the runtime publishes a [minApiVersionSupported, maxApiVersionSupported] range
+  // (checked below) and a context outside it is grounds to reject the session. 4.5 sits
+  // inside every desktop runtime's range and is universally available on hardware that
+  // can drive a headset, and the request is safe on anything older -- SFML retries with
+  // successively lower versions, then plain wglCreateContext, if the driver refuses.
+  // Attribute flags stay Default (compatibility) deliberately: SFML's graphics module,
+  // which this pipeline draws through, does not work on a Core profile context.
+  sf::ContextSettings context_settings;
+  context_settings.majorVersion = 4;
+  context_settings.minorVersion = 5;
   _window.reset(new sf::RenderWindow);
-  _window->create({}, "trance", sf::Style::None);
+  _window->create({}, "trance", sf::Style::None, sf::State::Windowed, context_settings);
   _window->setVerticalSyncEnabled(false);
   _window->setFramerateLimit(0);
   _window->setVisible(false);
@@ -193,11 +251,60 @@ OpenXrRenderer::OpenXrRenderer(const trance_pb::System& system)
   GLint gl_minor = 0;
   glGetIntegerv(GL_MAJOR_VERSION, &gl_major);
   glGetIntegerv(GL_MINOR_VERSION, &gl_minor);
-  XrVersion gl_version =
+  if (gl_major == 0) {
+    // GL_MAJOR_VERSION / GL_MINOR_VERSION are 3.0+ queries. On an older context they
+    // are not accepted enums: glGetIntegerv raises GL_INVALID_ENUM and leaves the
+    // outputs untouched, so the naive read reports version 0.0 -- which then compares
+    // "below minimum" for reasons that have nothing to do with the actual context.
+    // GL_VERSION exists on every context and is specified to start with
+    // "<major>.<minor>", so parse that instead. (strtol, not sscanf: MSVC treats the
+    // latter as deprecated and /W3 /WX turns that into a build failure.)
+    glGetError();  // Swallow the GL_INVALID_ENUM the two failed queries just raised.
+    const auto* version_string = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+    if (version_string) {
+      char* after_major = nullptr;
+      const long parsed_major = std::strtol(version_string, &after_major, 10);
+      if (after_major && *after_major == '.') {
+        gl_major = static_cast<GLint>(parsed_major);
+        gl_minor = static_cast<GLint>(std::strtol(after_major + 1, nullptr, 10));
+      }
+    }
+  }
+  const XrVersion gl_version =
       XR_MAKE_VERSION(static_cast<uint16_t>(gl_major), static_cast<uint16_t>(gl_minor), 0);
-  if (gl_version < graphics_requirements.minApiVersionSupported) {
-    std::cerr << "OpenGL context version " << gl_major << "." << gl_minor
-              << " is below the OpenXR runtime's minimum; attempting to continue" << std::endl;
+  const XrVersion min_version = graphics_requirements.minApiVersionSupported;
+  const XrVersion max_version = graphics_requirements.maxApiVersionSupported;
+  std::cerr << "OpenGL context: " << gl_major << "." << gl_minor << " (OpenXR runtime accepts "
+            << XR_VERSION_MAJOR(min_version) << "." << XR_VERSION_MINOR(min_version) << " to "
+            << XR_VERSION_MAJOR(max_version) << "." << XR_VERSION_MINOR(max_version) << ")"
+            << std::endl;
+  if (gl_major == 0) {
+    std::cerr << "couldn't determine the OpenGL context version; refusing to create an "
+                 "OpenXR session against an unknown context"
+              << std::endl;
+    return;
+  }
+  if (gl_version < min_version) {
+    // Hard failure, where this used to print "attempting to continue" and call
+    // xrCreateSession regardless. Continuing buys nothing: the runtime is entitled to
+    // reject the session, and if it doesn't, the mismatch resurfaces later as a
+    // swapchain or submit failure with no trace of the real cause. A clear stop here,
+    // with the VR-unavailable banner main.cpp prints on a failed backend, beats a
+    // confusing failure three hundred lines downstream.
+    std::cerr << "OpenGL context is below the OpenXR runtime's minimum; not creating a session"
+              << std::endl;
+    return;
+  }
+  if (gl_version > max_version) {
+    // Above the ceiling is only a warning, unlike below the floor. A context newer than
+    // the runtime was tested against is very likely still fine (GL compatibility
+    // profiles are backward compatible), and hard-failing here would break machines
+    // where this works today purely on a conservative number in the runtime's manifest.
+    // Surfaced because it is the first thing to suspect if xrCreateSession then fails
+    // with XR_ERROR_GRAPHICS_DEVICE_INVALID or similar.
+    std::cerr << "OpenGL context is above the OpenXR runtime's maximum tested version; "
+                 "continuing, but this is the first thing to suspect if the session fails"
+              << std::endl;
   }
 
   HDC hdc = wglGetCurrentDC();
@@ -348,7 +455,6 @@ OpenXrRenderer::OpenXrRenderer(const trance_pb::System& system)
         return;
       }
       glBindFramebuffer(GL_FRAMEBUFFER, 0);
-      _swapchain_tex[eye].push_back(image.image);
       _fbo[eye].push_back(fbo);
     }
   }
@@ -370,8 +476,8 @@ OpenXrRenderer::~OpenXrRenderer()
     for (auto fbo : _fbo[eye]) {
       glDeleteFramebuffers(1, &fbo);
     }
-    // _swapchain_tex textures are runtime-owned; destroying the swapchain frees
-    // them. Never glDeleteTextures them.
+    // The textures those FBOs wrapped are runtime-owned; destroying the swapchain
+    // frees them. Never glDeleteTextures them.
     if (_swapchain[eye] != XR_NULL_HANDLE) {
       xr_check(_instance, xrDestroySwapchain(_swapchain[eye]), "xrDestroySwapchain");
     }
@@ -602,14 +708,33 @@ void OpenXrRenderer::render(const std::function<void(State)>& render_fn)
     return;
   }
 
+  XrCompositionLayerQuad quads[2];
+  fill_quads(quads);
+  const XrCompositionLayerBaseHeader* layers[] = {
+      reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quads[0]),
+      reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quads[1])};
+  end_info.layerCount = 2;
+  end_info.layers = layers;
+  xr_check(_instance, xrEndFrame(_session, &end_info), "xrEndFrame");
+  // Both swapchains now hold a released image, so the idle path may re-present these
+  // same layers without acquiring anything.
+  _has_content = true;
+}
+
+void OpenXrRenderer::fill_quads(XrCompositionLayerQuad (&quads)[2]) const
+{
   // Head-locked stereo quads: identical identity-orientation pose and size in VIEW
   // space, one per eye, differing only in eyeVisibility and source swapchain. The
   // head-lock is deliberate -- the parallax lives in the rendered content, not in
   // the layer placement, so the two quads must NOT be posed apart.
-  XrCompositionLayerQuad quads[2] = {XrCompositionLayerQuad{XR_TYPE_COMPOSITION_LAYER_QUAD},
-                                     XrCompositionLayerQuad{XR_TYPE_COMPOSITION_LAYER_QUAD}};
+  //
+  // Every field here is a constant of the configuration, which is what lets render_idle
+  // rebuild the identical layers to re-present the last frame -- there is no per-frame
+  // state (no swapchain image index: a quad names its swapchain, and the runtime composes
+  // whichever image was most recently released from it).
   for (int eye = 0; eye < 2; ++eye) {
     auto& quad = quads[eye];
+    quad = XrCompositionLayerQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
     quad.layerFlags = 0;
     quad.space = _view_space;
     quad.eyeVisibility = eye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT;
@@ -621,22 +746,23 @@ void OpenXrRenderer::render(const std::function<void(State)>& render_fn)
     quad.pose.position = {0.f, 0.f, -kQuadDistanceMetres};
     quad.size = {kQuadWidthMetres, kQuadWidthMetres * float(_height) / float(_width)};
   }
-
-  const XrCompositionLayerBaseHeader* layers[] = {
-      reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quads[0]),
-      reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quads[1])};
-  end_info.layerCount = 2;
-  end_info.layers = layers;
-  xr_check(_instance, xrEndFrame(_session, &end_info), "xrEndFrame");
 }
 
-bool OpenXrRenderer::render_idle()
+bool OpenXrRenderer::render_idle(bool blank)
 {
-  // Paused/hidden keep-alive: a running session must keep the
-  // xrWaitFrame/xrBeginFrame/xrEndFrame loop going (stalling it makes the runtime
-  // flag the app unresponsive), and submitting layerCount=0 frames blanks the quad
-  // so hide/pause actually removes the content from the headset instead of
-  // freezing the last submitted frame there.
+  // Keep-alive for any iteration that drew nothing: a running session must keep the
+  // xrWaitFrame/xrBeginFrame/xrEndFrame loop going regardless of whether the app has
+  // new content, or the runtime flags it unresponsive.
+  //
+  // `blank` decides what the frame carries, and getting this wrong is visible:
+  //   paused/hidden -> layerCount=0, which is what actually removes the content from
+  //     the headset rather than freezing the last submitted frame there.
+  //   between visual frames -> the SAME quads render() submitted. They name swapchains,
+  //     not images, so re-presenting the most recently released image needs no acquire
+  //     and no redraw. Submitting layerless frames in this case instead would blank the
+  //     view on every gap between visual frames -- a strobe at (runtime rate -
+  //     global_fps), which is most of the frames whenever global_fps is below the
+  //     headset's refresh rate.
   if (_instance == XR_NULL_HANDLE) {
     return false;
   }
@@ -661,7 +787,20 @@ bool OpenXrRenderer::render_idle()
   XrFrameEndInfo end_info{XR_TYPE_FRAME_END_INFO};
   end_info.displayTime = frame_state.predictedDisplayTime;
   end_info.environmentBlendMode = _blend_mode;
-  end_info.layerCount = 0;
+  // shouldRender false means the runtime wants nothing composed this frame anyway, and
+  // _has_content false means no image has ever been released, so there is nothing to
+  // re-present -- both collapse to the layerless frame.
+  XrCompositionLayerQuad quads[2];
+  const XrCompositionLayerBaseHeader* layers[2];
+  if (!blank && _has_content && frame_state.shouldRender == XR_TRUE) {
+    fill_quads(quads);
+    layers[0] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quads[0]);
+    layers[1] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quads[1]);
+    end_info.layerCount = 2;
+    end_info.layers = layers;
+  } else {
+    end_info.layerCount = 0;
+  }
   xr_check(_instance, xrEndFrame(_session, &end_info), "xrEndFrame");
   return true;
 }

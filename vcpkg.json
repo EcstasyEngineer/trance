@@ -1,13 +1,12 @@
 {
   "name": "trance",
   "version": "0.1.0",
-  "description": "Dependency manifest for the trance renderer and creator (vcpkg manifest mode).",
+  "description": "Dependency manifest for the trance renderer (vcpkg manifest mode).",
   "dependencies": [
     "protobuf",
     "glew",
     "libvpx",
     "libwebm",
-    "x264",
     "giflib",
     "gflags",
     "openvr",
@@ -15,11 +14,7 @@
     "sfml",
     "imgui-sfml",
     "nlohmann-json",
-    "miniz",
-    {
-      "name": "wxwidgets",
-      "platform": "windows"
-    }
+    "miniz"
   ],
   "builtin-baseline": "a7acc4f979f2afde60757e0f9b572b5710ac08b1"
 }

@@ -25,8 +25,22 @@ public:
   void init() override;
   bool update() override;
   void render(const std::function<void(State)>& render_fn) override;
+  // Compositor keep-alive when nothing was drawn (see Renderer::render_idle). NOTE the
+  // `blank` argument is accepted and ignored here: SteamVR has no layerless-submit
+  // equivalent, so this path can only resubmit the last frame against fresh poses --
+  // pause/hide freeze the image in the headset rather than removing it, unlike OpenXR.
+  bool render_idle(bool blank) override;
 
 private:
+  // WaitGetPoses (the compositor's pacing + liveness call) and the two-eye Submit +
+  // PostPresentHandoff, shared by render() and render_idle(); the only difference
+  // between them is whether new content is drawn into the eye textures in between.
+  void wait_get_poses();
+  void submit_eyes();
+
+  // False once VR_Shutdown has run -- either from the destructor or from a runtime quit
+  // event in update(). Guards every later use of _system / the compositor, both of which
+  // are dangling after shutdown.
   bool _initialised;
   bool _success;
   uint32_t _width;

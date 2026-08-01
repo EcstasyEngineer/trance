@@ -1,4 +1,11 @@
 @echo off
+rem Bootstrap wrapper for the windows-msvc preset -- NOT an alternative build system.
+rem CMakePresets.json hard-requires $env{VCPKG_ROOT} in its toolchainFile, and MSVC needs
+rem a vcvars64 environment. On a fresh VS-only box neither is set, so `cmake --preset
+rem windows-msvc` fails before it starts. This script discovers both via vswhere (VS's
+rem bundled vcpkg + its bundled cmake + vcvars64), points the vcpkg download/binary caches
+rem at build/, and then runs exactly the documented preset commands. Once VCPKG_ROOT is
+rem set in your environment, invoke the presets directly and skip this.
 setlocal
 pushd "%~dp0" || exit /b 1
 

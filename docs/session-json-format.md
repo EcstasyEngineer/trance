@@ -8,9 +8,11 @@ replacing the text-format protobuf `.session` / `.cfg` files.
 populates the proto structs and runs the existing `validate_session()` /
 `validate_system()` repair passes (`src/common/session.cpp:448,486`) unchanged. Replacing
 trance_pb with native structs is a named future step — the **trance_pb retirement wave** —
-which lands after the ImGui editor reaches creator parity. Until then, every JSON field
-below has an exact proto mapping, and the proto file stays the schema of record for
-in-memory shapes.
+which lands once `trance_convert` is the *only* remaining proto consumer: i.e. when the
+validate/repair passes and every runtime reader work on native structs, leaving the proto
+purely as the legacy `.session`/`.cfg` import schema. Until then, every JSON field below
+has an exact proto mapping, and the proto file stays the schema of record for in-memory
+shapes.
 
 Design lineage: verbatim-proto-names living-subset spine, with the hand-editing surface
 (pattern files, hex colours, comment keys, `scan` themes) grafted on, and dead proto
@@ -272,8 +274,18 @@ directory. The **object** form adds the optional parts:
 }
 ```
 
-A scan is never recursive: one directory is one theme, so recursing would make a parent
-swallow its children's content when those children are themes in their own right.
+A scan is never recursive, in either form: one directory is one theme, so recursing would
+make a parent swallow its children's content when those children are themes in their own
+right, and put every nested file in two pools at once.
+
+Sessions written before the folder hierarchy landed used the string form for a whole-subtree
+walk. Their nested content is not lost, it is **redistributed**: the scan root's discovery
+pass turns each subdirectory into a theme of its own at weight 1, and `inherit` is how you
+fold it back together where the old shape was actually wanted. A directory that holds
+nothing but subdirectories consequently expands to an empty theme; the runtime keeps an
+empty theme out of the rotation rather than giving it frames it can only draw black. A
+`"recursive"` key inside the object form is accepted and ignored — one short-lived build
+wrote it, and rejecting an unknown key is fatal — and is dropped on the next save.
 
 **`inherit`** folds the theme named by this theme's parent DIRECTORY into its pool, and it
 **composes transitively**: `hypno/spam` reaches the root's loose files only if `hypno`
@@ -295,10 +307,18 @@ runtime never sees the distinction.
 **`exclude`** inverts persistence: a scan theme records what to leave OUT, so a file added
 to the folder later is picked up with no edit. This is the point of the object form — a
 frozen `image_path` list silently ignores everything added after it was written. Paths are
-compared post-rebase (root-relative, the same form every other reference uses). Exclusions
-naming paths the scan no longer produces are dropped on save rather than accumulating. A
-theme that is mostly-excluded is the wrong shape for this: convert it to an explicit
-`image_path` list instead (the F2 Themes section offers exactly that).
+compared post-rebase (root-relative, the same form every other reference uses).
+
+An exclusion applies to the theme's **own** expansion only. An inherited image has to be
+excluded on the theme that owns it — that is where the scan producing it runs — and the F2
+Themes section reflects that: own images get a checkbox, inherited ones are listed with the
+theme to go and exclude them on.
+
+Exclusions are **never dropped automatically**, on load or on save. A path the scan did not
+produce is equally "deleted" and "not synced yet", and pruning against a half-materialized
+cloud folder would take the whole list with it. They accumulate at one short string per file
+ever excluded; unchecking is undone by re-checking the box in F2. (Same call as the
+never-remove-a-missing-theme rule below: untidy beats unrecoverable.)
 
 Inherited content is **tier-weighted, not merged flat**: selection picks the source theme
 by its `random_weight` first and an image within it second, so a small folder inheriting a
@@ -314,6 +334,12 @@ exists to remove. Deliberate omission has a real representation now (`exclude`);
 frozen list has none, so there is nothing to carry across. A theme with no directory of its
 name is left alone — it is a hand-written list spanning unrelated folders, which no single
 directory can reproduce, and it is the one shape this model does not cover.
+
+The directory has to actually *produce* something for the conversion to happen. A folder
+that exists but expands to nothing — a pure container, a folder of nothing but denylisted
+junk, a drive that is mounted but not yet synced — leaves the theme exactly as it was.
+Adopting it would clear the curated list, write `{"scan": ...}` on the next save, and delete
+the only copy of that list from disk.
 
 **`/root/`** is a reserved theme name for loose files sitting directly at the scan root. A
 path component can never contain a slash, so it cannot collide with a real directory's
@@ -526,7 +552,7 @@ here with the ImGui editor (which lives inside trance.exe).
 
 `last_root_directory`, `last_export_settings`, and `last_session_map` are unread by the
 2017 player but are the ImGui editor's file-dialog memory, export-dialog defaults, and
-per-session variable memory (replacing `creator/launch.cpp` behavior). They stay in
+per-session variable memory (a behaviour inherited from the deleted wx creator). They stay in
 system.json — do not invent a second state file for them.
 
 ## 7. Converter

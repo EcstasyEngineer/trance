@@ -35,11 +35,15 @@ class Renderer
 {
 public:
   // TODO: could factor out actual rendering to intermediate texture(s) and add multisampling?
+  // NONE is the flat single-pass case; VR_LEFT/VR_RIGHT are the two passes of a stereo
+  // frame. Both VR backends emit the pair -- OpenVR into its two eye framebuffers,
+  // OpenXR into its two per-eye swapchains -- so there is no mono VR pass. (There was a
+  // VR_MONO state for the OpenXR path's original single-quad implementation; b86c476
+  // gave it per-eye quads and nothing has emitted VR_MONO since.)
   enum class State {
     NONE = 0,
     VR_LEFT = 1,
     VR_RIGHT = 2,
-    VR_MONO = 3,  // single head-locked pass (OpenXR quad layer); no eye offset.
   };
 
   virtual ~Renderer() = default;
@@ -56,23 +60,40 @@ public:
   virtual bool update() = 0;
   virtual void render(const std::function<void(State)>& render_fn) = 0;
 
-  // Frame-loop keep-alive for paused/hidden states where the main loop has nothing
-  // to draw. Returns true if the renderer performed its own frame pacing (so the
-  // caller must not add its own anti-spin sleep); the default no-op returns false.
-  // Only OpenXrRenderer overrides it: a running OpenXR session REQUIRES continuous
-  // xrWaitFrame/xrBeginFrame/xrEndFrame -- stalling the loop mid-session makes the
-  // runtime (Quest Link/SteamVR) flag the app unresponsive, and the compositor keeps
-  // showing the last submitted frame, so `hide` would never actually vanish in the
-  // headset. Submitting layerCount=0 frames keeps the handshake alive AND blanks
-  // the quad.
-  virtual bool render_idle() { return false; }
+  // Frame-loop keep-alive for any iteration where the main loop drew nothing -- paused,
+  // hidden, or simply between visual frames. Returns true if the renderer performed its
+  // own frame pacing (so the caller must not add an anti-spin sleep); the default no-op
+  // returns false. Only the VR backends override it.
+  //
+  // WHY it must run even when not paused: a VR frame loop is a handshake with the
+  // runtime, not a consequence of having something new to draw. A running OpenXR session
+  // REQUIRES continuous xrWaitFrame/xrBeginFrame/xrEndFrame (the spec asks applications
+  // to keep the loop running "to maintain synchronisation", calling xrEndFrame with no
+  // layers if need be), and OpenVR's WaitGetPoses is both the compositor's pacing point
+  // and its liveness signal. Stalling either -- which is what happens if this is gated on
+  // a visual frame being due at global_fps -- makes the runtime flag the app unresponsive
+  // and drops the headset to the grey void.
+  //
+  // `blank` distinguishes the two reasons for having nothing to draw, and the distinction
+  // is load-bearing:
+  //   true  (paused/hidden) -- the content should stop being visible. OpenXR submits
+  //         layerCount=0, which both keeps the handshake alive AND removes the quad, so
+  //         `hide` genuinely vanishes in the headset instead of freezing there.
+  //   false (merely between visual frames) -- the content must stay exactly as it is.
+  //         Submitting layerless frames here would blank the view on every gap between
+  //         visual frames, strobing the headset at (runtime rate - global_fps).
+  virtual bool render_idle(bool blank)
+  {
+    (void) blank;
+    return false;
+  }
 
   // Pre-display UI hook: runs after the scene is drawn but BEFORE the buffer swap, so a
   // 2D UI (the F2 ImGui panels) composites onto the same frame it belongs to. Calling
   // display() again outside render() instead double-swaps: the UI lands on the previous
   // frame's back buffer, strobing the UI at half rate and ping-ponging the scene one
-  // frame back every other swap. Only ScreenRenderer honours it (VR renders per-eye and
-  // video export has no interactive window).
+  // frame back every other swap. Only ScreenRenderer honours it (VR renders per-eye,
+  // with no single flat pass to composite onto).
   void set_ui_hook(std::function<void()> hook) { _ui_hook = std::move(hook); }
 
 protected:

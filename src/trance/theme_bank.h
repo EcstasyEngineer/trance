@@ -163,6 +163,22 @@ private:
     // tier's own failed members (which sit at 0 after their base priority is stripped)
     // and let another tier's image be drawn from it.
     std::vector<std::unordered_set<std::size_t>> tier_members;
+    // Parallel to tier_shufflers: the same split applied to the LOAD side.
+    //
+    // Residency has to be built with the distribution selection SAMPLES with. Loading flat
+    // over the merged pool makes the resident set proportional to tier SIZE while
+    // selection is proportional to tier WEIGHT, so the tier the weights favour is usually
+    // not in RAM when it is picked. Measured on 10 images inheriting 280 at 4:1 with a
+    // 21-image cache: 0.9 of the 10 resident, 75% of picks finding nothing resident, and
+    // the own tier taking 4% of frames instead of the intended 80%.
+    std::vector<Shuffler> tier_load_shufflers;
+    // Parallel to tier_shufflers: how many of the tier's members are currently resident,
+    // so a fully-resident tier can be held out of the weighted load pick instead of
+    // spending cache slots re-loading what it already has.
+    std::vector<std::size_t> tier_loaded_count;
+    // Whether the theme has anything at all to put on screen (images, animations or text).
+    // Assigned right after the aggregate construction, like `name`.
+    bool drawable = false;
   };
 
   // Data for each possible image.

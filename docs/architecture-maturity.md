@@ -12,10 +12,10 @@ use a five-step scale: **Production / Solid / Functional / Prototype / Legacy**.
 | Visual pipeline (grammar v3 → cyclers → render eval) | **Solid** | Recently rewritten, real behavioral tests; expr-eval crash hole and untested effect runtime keep it from Production. |
 | App shell & control surfaces (main loop, #21 channel, F2 UI) | **Solid** | Disciplined threading + single reconcile seam; `play_session` is an untestable 380-line lambda-web. |
 | ThemeBank + media loading | **Functional** | Architecture sound and recently hardened, but carries verified cross-thread data races and zero tests. |
-| Renderer layer (screen/overlay, VR, export) | **Functional** | Clean strategy split and careful X11 overlay; crashing export bug, stale VR path, unvalidated Win32 branch. |
+| Renderer layer (screen/overlay, VR) | **Functional** | Clean strategy split and careful X11 overlay; stale VR path, unvalidated Win32 branch. (The crashing export bug went away with the export path itself.) |
 | Data model (proto+JSON, sidecar, convert) | **Solid** | Spec-driven strict loader with real tests; exception-type gap and non-atomic saves. |
 | Build system (CMake presets + vcpkg manifest) | **Solid** (near Production) | Hygienic, documented workarounds, warnings-as-errors on MSVC. |
-| Creator (wxWidgets editor) | **Legacy** | Cannot open the files its own dialogs list; superseded by the F2 UI; still builds by default on Windows. |
+| Creator (wxWidgets editor) | **Deleted** | Could not open the files its own dialogs listed; superseded by the F2 UI. Removed — three feature gaps tracked below. |
 | Docs | **Functional** | Normative specs current and rigorous; a stale layer actively misleads and the written cleanup plan was never executed. |
 
 ## Verified findings ledger
@@ -30,9 +30,9 @@ the items worth burning-down first; file:line references are as of commit `ef02f
 | 2 | Data race: `_animation_theme_changed`/`_alt_animation_theme_changed` plain bools written on render thread (theme_bank.cpp:455), cleared on async thread (:584), read on render thread (:233). | REAL |
 | 3 | Use-after-free window: `get_image` check-then-copy of `_all_images[index].image` (theme_bank.cpp:247-252) races `do_unload`'s `reset()` — which happens **outside** the unloading theme's mutex scope (:550-557), gated only by `use_count==0`. | REAL-BUT (worse than claimed: reset isn't under the mutex at all) |
 | 4 | Runtime terminate from a pattern typo: a lone `.` in a raw `[expr]` passes the parser (pattern_parser_v3.cpp:399), reaches `std::stod` (render_eval.h:214), and nothing in the per-frame path catches. | REAL |
-| 5 | Stateful render ops double-advance per eye: spiral phase + `_warp_time` mutate inside the per-eye render callback (render_eval.cpp:78, director.cpp:263) — affects **both** OpenVR (openvr.cpp:161) and 3D video export (video_export.cpp:107). `_warp_time += 1/60` also hard-codes 60fps. | REAL-BUT (3D export affected too) |
+| 5 | Stateful render ops double-advance per eye: spiral phase + `_warp_time` mutate inside the per-eye render callback (render_eval.cpp:78, director.cpp:263) — affected **both** OpenVR (openvr.cpp:161) and 3D video export. `_warp_time += 1/60` also hard-codes 60fps. | REAL-BUT (the 3D-export half is moot — export deleted; the OpenVR half stands) |
 | 6 | Loader terminate on malformed JSON: colour fields and theme/variable arrays use bare `get<std::string>()` (session_json.cpp:463, :520, :553); `nlohmann::json::type_error` escapes main.cpp:1037's `catch (std::runtime_error&)`. Subroutine entries ARE type-checked; the gap is colours + those arrays. | REAL-BUT |
-| 7 | Export null-deref: unknown `--export_path` extension resets `_exporter` with only a stderr line (video_export.cpp:39), then `render()` dereferences it (:132, :146); main.cpp:358 never checks. | REAL |
+| 7 | Export null-deref: unknown `--export_path` extension resets `_exporter` with only a stderr line (video_export.cpp:39), then `render()` dereferences it (:132, :146); main.cpp:358 never checks. | REAL — **resolved by deleting the export path** (no fix was written; the code is gone) |
 | 8 | `CommandChannel::reply()` does one unchecked blocking `send()` on the render thread (command_channel.cpp:165); partial writes dropped, full client buffer stalls a frame. | REAL |
 | 9 | Playlist spin: a weighted cycle of zero-`play_time` standard items never breaks the `while(true)` switch loop (main.cpp:636-677), firing audio events every pass; only subroutine depth is capped. | REAL |
 | 10 | `AsyncStreamer::async_update` 1ms sleep-polls until the render thread advances `_index` (async_streamer.cpp:137-139); pause/stop catching the streamer in that window leaves it polling indefinitely. | REAL-BUT (1ms sleep-poll, not a hot spin) |
@@ -133,9 +133,10 @@ list below.
 
 ### 4. Renderer layer — **Functional**
 
-~1,200 LOC, three-implementation strategy: `ScreenRenderer`
-(windowed/fullscreen/overlay), `OpenVrRenderer`, `VideoExportRenderer`. SFML creates
-contexts; drawing is raw GL 2.1-era GLSL. Overlay click-through is free-function
+Three-implementation strategy: `ScreenRenderer` (windowed/fullscreen/overlay),
+`OpenVrRenderer`, `OpenXrRenderer`. (A fourth, `VideoExportRenderer`, has since been
+deleted along with the rest of the offline-encode path.) SFML creates contexts;
+drawing is raw GL 2.1-era GLSL. Overlay click-through is free-function
 X11/Win32 hint code reconciled once per frame from the apply seam.
 
 Strengths: clean 8-method virtual interface with sensible fallback selection; the X11
@@ -148,41 +149,55 @@ in-source (no Windows box in the dev environment — the intermittent opaque-ove
 bug's leading hypothesis, DWM fullscreen-optimization promotion of an exactly-
 fullscreen borderless topmost GL window out of the composited path, ships with a blind
 mitigation and needs hands-on confirmation); `compile()` never detaches/deletes
-shaders and returns programs even on link failure; `VideoExportRenderer` leaks both
-FBOs/textures and its YUV program; VR `update()` drains and ignores every VREvent
-(SteamVR quit can never propagate); `init_glew()` warns but never fails; render.h's
+shaders and returns programs even on link failure; ~~VR `update()` drains and ignores every
+VREvent (SteamVR quit can never propagate)~~ — fixed: `OpenVrRenderer::update()` now handles
+`VREvent_Quit` (with `AcknowledgeQuit_Exiting`) and an own-pid `VREvent_ProcessQuit`, shutting
+the API down and exiting through the normal teardown path; `init_glew()` warns but never fails; render.h's
 "SFML 2.6 cannot create an ARGB visual" comment predates the shipped SFML 3 migration
 — the uniform-opacity design may rest on an obsolete constraint (per-pixel alpha may
 now be achievable).
 
-Coverage reality: zero, and mostly honestly untestable headless. Realistic: extract
-exporter selection (would have caught the null-deref); GLSL lint as a build step.
+Coverage reality: zero, and mostly honestly untestable headless. Realistic: GLSL lint
+as a build step.
 
-Actions: (1) fix the export null-deref + make GL init failures fatal in export mode
-(small, mechanical); (2) Windows hands-on validation of overlay+tray+opacity and the
-ARGB re-examination (medium, needs owner/hardware); (3) VR fix-or-fence — decision
-list below.
+Actions: (1) ~~fix the export null-deref~~ — moot, the export path is deleted;
+(2) Windows hands-on validation of overlay+tray+opacity and the ARGB re-examination
+(medium, needs owner/hardware); (3) VR fix-or-fence — decision list below.
 
-### 5. Data model, build, creator, docs
+### 5. Data model, build, editor, docs
 
 **Data model — Solid.** JSON on disk, frozen proto in memory, strict hand-written
 mapper (+ sidecar for pattern files / scan dirs). Spec discipline is real: unknown-key
 errors with JSON paths, path-contract enforcement, version wrapper. The legacy
 converter is careful (backslash-vs-octal state machine, MessageDifferencer round-trip
-check). Debt: ledger items 6 and 11; sidecar-less convenience save overloads silently
-freeze scan-dirs and re-slug pattern files (the creator uses exactly those overloads);
-serialization writes pattern files as a side effect; deprecated proto fields and a
-dead `SessionArchive` message await the named trance_pb-retirement wave.
+check). Debt: ledger items 6 and 11; serialization writes pattern files as a side
+effect; deprecated proto fields and a dead `SessionArchive` message await the named
+trance_pb-retirement wave. (The sidecar-less `save_session` / two-arg
+`search_resources` overloads that silently froze scan-dirs and re-slugged pattern
+files went out with the creator — it was their only caller, so they are deleted and
+the footgun is gone rather than merely unused.)
 
 **Build — Solid, near Production.** Presets + vcpkg manifest + pinned baseline,
 per-target options, `/W3 /WX`, every workaround commented with its failure mode.
 Tests default OFF with no CI, so regressions surface only when someone runs ctest.
 
-**Creator — Legacy.** File dialogs filter `*.session` while the loader fatally rejects
-non-JSON paths — it cannot open what it offers. No support for custom patterns or
-entrainment. Its save path would structurally mangle a modern session (sidecar-less
-overloads). Still builds by default on Windows, paying the wxWidgets port cost for a
-dead binary.
+**Creator — Deleted.** File dialogs filtered `*.session` while the loader fatally
+rejects non-JSON paths — it could not open what it offered. No support for custom
+patterns or entrainment. Its save path would structurally mangle a modern session
+(sidecar-less overloads). `src/creator/` and the wxWidgets dependency are now gone.
+
+#### Tracked gaps from the creator deletion
+
+Three things the creator did have no F2 equivalent. They are gaps, not regressions to
+be papered over — recorded here so they are not rediscovered as surprises. The
+workaround in every case is the CLI / hand-edited JSON path, which is fully capable
+because the session format is plain JSON with a normative spec.
+
+| Gap | Was | Workaround today |
+|---|---|---|
+| Playlist GUI editing | `src/creator/playlist.cpp` — graph editor for playlist items, next-item weights, transitions | Hand-edit the `playlist` object in the `.session.json` ([session-json-format.md](session-json-format.md)) |
+| Session-variable GUI editing | `src/creator/variables.cpp` — add/rename variables and their allowed values | Hand-edit `variable_map` in the JSON; set values at launch with `--variables` |
+| Session-duration estimate | `src/creator/launch.cpp` — walked the play graph to estimate total runtime before launching | None. The number was advisory only; no runtime behaviour depended on it. |
 
 **Docs — Functional.** The normative core (`session-json-format.md`,
 `spec-grammar-v3.md`, `engine-today.md`) is current and rigorous. But
@@ -191,8 +206,8 @@ protobuf" (false since the JSON cut), spec §9 labels shipped waves "future", an
 `archive/docs-cleanup-plan.md` prescribes an archive structure that was never executed
 (since done — the plan itself now lives in `docs/archive/`).
 
-Actions: (1) close the loader exception gap (small, mechanical); (2) creator
-retirement — decision list below; (3) execute the docs cleanup plan (medium, mostly
+Actions: (1) close the loader exception gap (small, mechanical); (2) ~~creator
+retirement~~ — done, see above; (3) execute the docs cleanup plan (medium, mostly
 mechanical).
 
 ## Decisions needing the owner
@@ -207,9 +222,9 @@ they are product calls, not engineering calls:
 2. **VR path: fix or fence** — if OpenVR is alive, per-eye double-advance (ledger #5)
    and ignored VREvents need fixing; if dead, delete the path and make OpenVR an
    optional dependency instead of `REQUIRED`.
-3. **Creator: retire or keep** — F2 parity v0 has landed and the creator can't open
-   modern sessions. Flip `TRANCE_BUILD_CREATOR` default OFF, or delete `src/creator/`
-   outright.
+3. ~~**Creator: retire or keep**~~ — **decided: deleted.** `src/creator/`, the
+   `TRANCE_BUILD_CREATOR` option and the wxWidgets dependency are gone; the three
+   features with no F2 equivalent are tracked in §5 above.
 4. **jpgd exit strategy** — sync the vendored 2011 decoder against maintained
    upstream, or test whether SFML 3's stb_image handles the progressive JPEGs that
    motivated vendoring and delete 3.2k LOC.

@@ -7,37 +7,28 @@ subsystem. For the feature list and build instructions, see the
 
 ## Two executables, one session model
 
-`trance` ships as two separate binaries that share the in-memory session model
-(the `trance_pb::Session` protobuf, `src/common/trance.proto`) and the `common`
+`trance` ships as two binaries that share the in-memory session model (the
+`trance_pb::Session` protobuf, `src/common/trance.proto`) and the `common`
 support code, but otherwise have no runtime dependency on each other:
 
 - **`trance`** — the realtime player. Loads a session, runs the frame loop,
-  and renders to a window (or VR headset, or a video file). Entry point:
-  `src/trance/main.cpp`.
-- **`creator`** — a wxWidgets GUI session editor. **Deprecated** — the in-app F2
-  (ImGui) panel is the editor going forward. Separate executable, separate
-  `main`. Entry point: `src/creator/main.cpp`.
+  and renders to a window (or VR headset). Entry point: `src/trance/main.cpp`.
+- **`trance_convert`** — a one-shot legacy-proto → JSON converter.
 
 The **on-disk format is JSON**: `*.session.json`, spec in
 [session-json-format.md](session-json-format.md), loader
 `src/common/session_json.cpp`. The proto is the frozen *in-memory* model only —
 legacy protobuf `.session` files are no longer read directly and convert via
-`trance_convert`. (A third small binary, `trance_convert`, is that one-shot
-legacy-proto → JSON converter.)
+`trance_convert`.
 
-### The `creator` editor (deprecated)
+### The `creator` editor (deleted)
 
-`creator` is a wxWidgets desktop app (`src/creator/`, ~17 files). `CreatorFrame`
-(`src/creator/main.cpp`) hosts a `wxNotebook` with one page per part of the data
-model — themes (`theme.{h,cpp}`), programs (`program.{h,cpp}`), the playlist
-(`playlist.{h,cpp}`), and session variables (`variables.{h,cpp}`) — plus a system
-settings dialog (`settings.{h,cpp}`). It edits an in-memory `trance_pb::Session`
-and serialises it with `save_session` (`src/common/session.cpp`, which now writes
-JSON). It can also launch the player (`launch.{h,cpp}`) and drive a video export
-(`export.{h,cpp}`). The editor has no rendering or visual-engine code of its own.
-It predates the JSON cut and the v3 grammar (no custom-pattern or entrainment
-editing) and is deprecated pending F2-panel parity. (No deeper editor-internals
-doc exists; this paragraph is the whole map.)
+A wxWidgets desktop editor (`src/creator/`) used to ship as a third binary. It
+predated the JSON cut and the v3 grammar, could not open the very sessions its
+own file dialogs listed, and had no custom-pattern or entrainment editing — so it
+was deleted rather than carried. Editing now happens in the in-app F2 (ImGui)
+panel or directly in the JSON. The three things it did that F2 still does not are
+tracked in [architecture-maturity.md](architecture-maturity.md).
 
 ## Runtime data flow (the player)
 
@@ -55,17 +46,16 @@ The player's lifecycle lives in `play_session()` (`src/trance/main.cpp`):
    for the active program. It keeps two themes active in video memory and
    asynchronously loads a third on a background thread (`run_async_thread` in
    `main.cpp`) so themes can swap without a load stall.
-3. **Renderer.** One of four `Renderer` subclasses (`src/trance/render/`) is
-   chosen: `ScreenRenderer` (window), `OpenVrRenderer` (SteamVR),
-   `OpenXrRenderer` (OpenXR quad layer), or `VideoExportRenderer` (offline
-   encode). See the renderer section below.
+3. **Renderer.** One of three `Renderer` subclasses (`src/trance/render/`) is
+   chosen: `ScreenRenderer` (window), `OpenVrRenderer` (SteamVR), or
+   `OpenXrRenderer` (OpenXR quad layer). See the renderer section below.
 4. **Director.** The `Director` (`src/trance/director.{h,cpp}`) owns the visual
    engine and the GL programs. It holds a `Visual` (the current pattern), the
    `VisualApiImpl` bridge to the theme bank and renderer, and the compiled
    built-in / custom pattern tables.
-5. **Audio.** In realtime mode an `Audio` object (`src/trance/media/audio.{h,cpp}`)
-   plays per-channel music and synthesises the entrainment bed. Not created for
-   video export.
+5. **Audio.** An `Audio` object (`src/trance/media/audio.{h,cpp}`) plays per-channel
+   music and synthesises the entrainment bed. Always constructed — `Director` holds
+   it by reference, so there is no audio-less configuration.
 6. **Frame loop.** `play_session()` converts wall-clock time into frame ticks at
    the program's `global_fps`, advances the playlist state machine, then per
    frame calls `director.update()` (advance the visual's cycler tree, pull
@@ -96,13 +86,12 @@ play_session frame loop ──► Director ──► Visual (cycler tree + effec
 | `src/common/` | Shared, executable-agnostic code: the `trance.proto` in-memory schema, the JSON loader/saver (`session_json.{h,cpp}`), session load/save/validate (`session.{h,cpp}`), the legacy-proto reader for `trance_convert` (`session_legacy.{h,cpp}`), small utilities (`util.h`, `common.h`). |
 | `src/common/media/` | Decoders shared by both binaries: `Image`, the `Streamer` animation interface (`streamer.{h,cpp}`). |
 | `src/trance/` | The realtime player: `main.cpp`, `director.{h,cpp}`, `theme_bank.{h,cpp}`, GLSL `shaders.h`. |
-| `src/trance/media/` | Player-side media: `audio.{h,cpp}`, `entrainment.{h,cpp}` (the synthesised bed), `font.{h,cpp}`, `async_streamer.{h,cpp}`, video `export.{h,cpp}`. |
-| `src/trance/render/` | The `Renderer` interface and its subclasses: `render.{h,cpp}` (screen — also home of the click-through overlay window hints, `apply_overlay_hints` / `clear_overlay_hints`), `openvr.{h,cpp}` (SteamVR), `openxr.{h,cpp}` (OpenXR head-locked quad-layer backend — Quest Link, any conformant runtime), `video_export.{h,cpp}` (offline encode). |
+| `src/trance/media/` | Player-side media: `audio.{h,cpp}`, `entrainment.{h,cpp}` (the synthesised bed), `font.{h,cpp}`, `async_streamer.{h,cpp}`. |
+| `src/trance/render/` | The `Renderer` interface and its subclasses: `render.{h,cpp}` (screen — also home of the click-through overlay window hints, `apply_overlay_hints` / `clear_overlay_hints`), `openvr.{h,cpp}` (SteamVR), `openxr.{h,cpp}` (OpenXR head-locked quad-layer backend — Quest Link, any conformant runtime). |
 | `src/trance/visual/` | The visual engine: the cycler/pattern system (~23 files). The pattern DSL parser/compiler, the `Cycler` tree, compiled visuals, the data-driven render blocks (`render_eval`), and the headless tests. |
 | `src/trance/ui/` | The ImGui in-app control panel (`app_ui.{h,cpp}`), toggled with F2. |
 | `src/trance/net/` | The `--command_port` control channel: line→verb protocol (`command_protocol.{h,cpp}`) and the socket/mailbox (`command_channel.{h,cpp}`). |
 | `src/trance/platform/` | Out-of-window controls (`system_control.{h,cpp}`): the system tray icon (Windows) and the global Shift+F11 hide-everything hotkey (Win32/X11) — the control surface that keeps working while the overlay is click-through. |
-| `src/creator/` | The deprecated wxWidgets session editor (separate executable). |
 | `src/jpgd/` | Vendored JPEG decoder (third-party). |
 
 ## Where to start reading, per subsystem
@@ -130,7 +119,7 @@ play_session frame loop ──► Director ──► Visual (cycler tree + effec
   hide-everything hotkey that control it.
 - **Command channel** → `src/trance/net/command_protocol.h`; verb reference in
   [spec-mcp-ambient-daemon.md](spec-mcp-ambient-daemon.md).
-- **Editor (deprecated)** → `src/creator/main.cpp`.
+- **Editor** → `src/trance/ui/app_ui.h` (F2 panel; the old `creator` is gone).
 
 ## Controls (realtime)
 
