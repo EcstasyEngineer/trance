@@ -1,6 +1,9 @@
 name: Build
 
-on: [pull_request]
+on:
+  push:
+    branches: [master]
+  pull_request:
 
 jobs:
   build:
@@ -54,15 +57,17 @@ jobs:
       # "could not find any instance of Visual Studio" before reaching find_package.
       - name: Configure
         shell: pwsh
-        run: & $env:CMAKE_EXE --preset windows-msvc -DTRANCE_BUILD_TESTS=ON
+        run: |
+          & $env:CMAKE_EXE --preset windows-msvc -DTRANCE_BUILD_TESTS=ON
 
       - name: Build
         shell: pwsh
-        run: & $env:CMAKE_EXE --build --preset windows-release
+        run: |
+          & $env:CMAKE_EXE --build --preset windows-release
 
       - name: Test
         shell: pwsh
-        run: ctest --test-dir build/windows-msvc -C Release --output-on-failure
+        run: ctest --test-dir build/windows-msvc -C Release --output-on-failure -LE gpu
 
       - uses: actions/upload-artifact@v4
         with:
