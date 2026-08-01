@@ -509,6 +509,12 @@ namespace
     }
   }
 
+  // Defined below load_theme (it is the larger routine); declared here because load_theme
+  // is its first caller.
+  void expand_scan_theme(trance_pb::Theme& theme, const std::string& theme_name,
+                          const std::string& dir, bool recursive, const std::string& root,
+                          SessionJsonSidecar& sidecar);
+
   void load_theme(const json& obj, trance_pb::Theme& theme, const std::string& theme_name,
                    const std::string& json_path, const std::string& root,
                    SessionJsonSidecar& sidecar)
@@ -573,41 +579,347 @@ namespace
 
     if (const json* scan = find(obj, "scan")) {
       auto sp = json_path + "/scan";
-      if (!scan->is_string()) {
-        throw std::runtime_error(sp + ": expected a string");
+      // Two forms. A STRING is the legacy one: a whole-subtree walk, no exclusions, no
+      // inheritance -- kept working verbatim so existing sessions load unchanged. An
+      // OBJECT is the hierarchy form, where one directory is one theme: it walks only
+      // that directory's own files unless `recursive` says otherwise, and carries the
+      // per-theme `inherit` flag and `exclude` list.
+      std::string dir;
+      bool recursive = true;
+      if (scan->is_string()) {
+        dir = scan->get<std::string>();
+      } else if (scan->is_object()) {
+        check_unknown_keys(*scan, {"dir", "recursive", "inherit", "exclude"}, sp);
+        const json* dir_value = find(*scan, "dir");
+        if (!dir_value || !dir_value->is_string()) {
+          throw std::runtime_error(sp + "/dir: expected a string");
+        }
+        dir = dir_value->get<std::string>();
+        recursive = false;
+        if (const json* r = find(*scan, "recursive")) {
+          if (!r->is_boolean()) {
+            throw std::runtime_error(sp + "/recursive: expected a boolean");
+          }
+          recursive = r->get<bool>();
+        }
+        if (const json* inherit = find(*scan, "inherit")) {
+          if (!inherit->is_boolean()) {
+            throw std::runtime_error(sp + "/inherit: expected a boolean");
+          }
+          if (inherit->get<bool>()) {
+            sidecar.theme_inherit.insert(theme_name);
+          }
+        }
+        if (const json* exclude = find(*scan, "exclude")) {
+          auto ep = sp + "/exclude";
+          if (!exclude->is_array()) {
+            throw std::runtime_error(ep + ": expected an array");
+          }
+          auto& list = sidecar.theme_exclude[theme_name];
+          for (const auto& entry : *exclude) {
+            if (!entry.is_string()) {
+              throw std::runtime_error(ep + ": expected an array of strings");
+            }
+            auto p = entry.get<std::string>();
+            check_relative_path(p, ep);
+            // Normalized to the SAME form the rebased scan results take, because the
+            // match is an exact string compare -- a hand-written backslash path would
+            // otherwise parse fine, match nothing, and silently fail to exclude.
+            list.push_back(normalize_path_for_save(p));
+          }
+        }
+      } else {
+        throw std::runtime_error(sp + ": expected a string or an object");
       }
-      auto dir = scan->get<std::string>();
       check_relative_path(dir, sp);
-      sidecar.theme_scan[theme_name] = dir;
-      auto full_dir = (std::filesystem::path(root) / dir).string();
-      if (std::filesystem::exists(full_dir)) {
+      expand_scan_theme(theme, theme_name, dir, recursive, root, sidecar);
+    }
+  }
+
+  // Expands one scan theme in place: records the scan in the sidecar, walks the directory,
+  // rebases results onto the session root, drops the theme's exclusions, and prunes
+  // exclusions that no longer name anything. Factored out of load_theme so the auto-rescan
+  // pass (discover_new_themes) can materialize a newly-appeared folder exactly the way a
+  // hand-written `scan` entry would be loaded -- one expansion rule, not two.
+  void expand_scan_theme(trance_pb::Theme& theme, const std::string& theme_name,
+                          const std::string& dir, bool recursive, const std::string& root,
+                          SessionJsonSidecar& sidecar)
+  {
+    sidecar.theme_scan[theme_name] = dir;
+    if (recursive) {
+      sidecar.theme_scan_recursive.insert(theme_name);
+    }
+    auto full_dir = (std::filesystem::path(root) / dir).string();
+    if (std::filesystem::exists(full_dir)) {
+      {
         // search_resources() yields paths relative to the directory it walked, but every
         // consumer of theme.image_path() (ThemeBank's loader, the archive's file walk)
         // resolves against the SESSION ROOT per the sec 1 path contract. Scan into a
         // scratch theme and rebase each result onto `dir` rather than letting scan-dir-
         // relative paths reach trance_pb, where they'd resolve to nothing.
         trance_pb::Theme scanned;
-        search_resources(scanned, full_dir);
+        search_resources(scanned, full_dir, recursive);
         auto rebase = [&dir](const std::string& p) {
+          // A scan of the session root itself -- `"dir": "."`, which is what the /root/
+          // theme uses -- must NOT prefix "./" onto every result. The path contract (§1)
+          // wants plain root-relative paths, every other theme produces them, and a
+          // "./x.jpg" would silently fail to match an exclusion written as "x.jpg".
+          if (dir.empty() || dir == ".") {
+            return normalize_path_for_save(p);
+          }
           return normalize_path_for_save((std::filesystem::path(dir) / p).string());
         };
+        // Inverted persistence: the theme keeps everything the scan found EXCEPT the
+        // recorded exclusions, so a file added to the folder later needs no edit to be
+        // picked up. Compared against the rebased (session-root-relative) path, which is
+        // the form the exclusion list is written in.
+        const auto exclude_it = sidecar.theme_exclude.find(theme_name);
+        const std::vector<std::string> empty_excludes;
+        const auto& excludes =
+            exclude_it != sidecar.theme_exclude.end() ? exclude_it->second : empty_excludes;
+        auto excluded = [&excludes](const std::string& p) {
+          return std::find(excludes.begin(), excludes.end(), p) != excludes.end();
+        };
+        // Every path this scan produced, so exclusions that no longer name anything can
+        // be pruned below instead of accumulating forever across renames and deletions.
+        std::vector<std::string> produced;
+        auto add_unless_excluded = [&](const std::string& p, void (trance_pb::Theme::*add)(
+                                                                 const std::string&)) {
+          auto rebased = rebase(p);
+          produced.push_back(rebased);
+          if (!excluded(rebased)) {
+            (theme.*add)(rebased);
+          }
+        };
         for (const auto& p : scanned.image_path()) {
-          theme.add_image_path(rebase(p));
+          add_unless_excluded(p, &trance_pb::Theme::add_image_path);
         }
         for (const auto& p : scanned.animation_path()) {
-          theme.add_animation_path(rebase(p));
+          add_unless_excluded(p, &trance_pb::Theme::add_animation_path);
         }
         for (const auto& p : scanned.font_path()) {
-          theme.add_font_path(rebase(p));
+          add_unless_excluded(p, &trance_pb::Theme::add_font_path);
         }
         for (const auto& p : scanned.audio_path()) {
-          theme.add_audio_path(rebase(p));
+          add_unless_excluded(p, &trance_pb::Theme::add_audio_path);
         }
-        // Text lines are content, not paths -- nothing to rebase.
+        // Text lines are content, not paths -- nothing to rebase or exclude.
         for (const auto& t : scanned.text_line()) {
           theme.add_text_line(t);
         }
+
+        // Garbage-collect exclusions that no longer match anything the scan produces:
+        // a file that was renamed, moved or deleted leaves an entry that can never fire
+        // again, and without this they pile up forever in the session file.
+        //
+        // Guarded on `produced` being non-empty: an empty scan means the directory is
+        // present but unreadable/emptied (a detached drive, a half-synced folder), and
+        // pruning against nothing would silently discard EVERY exclusion the user set --
+        // so an unexpectedly-empty folder is treated as "no information" rather than as
+        // "nothing is excluded any more".
+        if (exclude_it != sidecar.theme_exclude.end() && !produced.empty()) {
+          auto& list = exclude_it->second;
+          list.erase(std::remove_if(list.begin(), list.end(),
+                                    [&produced](const std::string& p) {
+                                      return std::find(produced.begin(), produced.end(), p) ==
+                                          produced.end();
+                                    }),
+                     list.end());
+        }
       }
+    }
+  }
+
+  // Re-derives the theme SET from the media tree at load, adding any directory that has
+  // appeared since the session was written and dropping scan themes whose directory is
+  // gone. This is the theme-level half of the inverted-persistence rule: the session
+  // records what to leave OUT, so content that shows up on disk is IN by default. Without
+  // it, `scan` keeps existing themes fresh but a brand-new folder stays invisible until
+  // someone regenerates the session by hand -- which is the behaviour this whole change
+  // set exists to kill.
+  //
+  // Only ever ADDS themes and removes provably-dead ones. A theme the user wrote by hand
+  // (explicit media lists, no scan entry) is never touched, and an existing scan theme
+  // keeps whatever weight/pin/inherit/exclude settings it already had, because all of
+  // those are keyed by theme NAME and survive the rescan.
+  void discover_new_themes(trance_pb::Session& session, const std::string& root,
+                            SessionJsonSidecar& sidecar)
+  {
+    const auto scan_root = (std::filesystem::path(root) / sidecar.theme_scan_root).string();
+    if (!std::filesystem::exists(scan_root)) {
+      return;
+    }
+    // Reuse the cold-start scrape verbatim so discovery and bootstrap can never disagree
+    // about which directories are themes. The scratch session is thrown away; only the
+    // theme NAMES and their directories are wanted.
+    trance_pb::Session scratch;
+    std::map<std::string, std::string> discovered;
+    search_resources(scratch, scan_root, discovered);
+
+    auto& themes = *session.mutable_theme_map();
+    for (const auto& pair : discovered) {
+      if (themes.count(pair.first)) {
+        continue;  // already known -- its own scan entry keeps it current
+      }
+      // A directory that appeared since the last save. Materialize it the same way a
+      // hand-written scan theme loads, and enable it at the default weight in every
+      // program: a folder the user has is content the user wants until they say
+      // otherwise.
+      auto rebased_dir = sidecar.theme_scan_root == "." || sidecar.theme_scan_root.empty()
+          ? pair.second
+          : normalize_path_for_save(
+                (std::filesystem::path(sidecar.theme_scan_root) / pair.second).string());
+      expand_scan_theme(themes[pair.first], pair.first, rebased_dir, false, root, sidecar);
+      for (auto& program : *session.mutable_program_map()) {
+        // Only if the program has no row for this name already. A theme_map entry can be
+        // absent while an enabled_theme row survives -- a hand-edited file, or a folder
+        // that went missing and came back -- and blindly appending would leave two rows
+        // for one theme whose weights SUM, silently doubling its share of the lottery.
+        bool listed = false;
+        for (const auto& existing : program.second.enabled_theme()) {
+          if (existing.theme_name() == pair.first) {
+            listed = true;
+            break;
+          }
+        }
+        if (listed) {
+          continue;
+        }
+        auto* enabled = program.second.add_enabled_theme();
+        enabled->set_theme_name(pair.first);
+        enabled->set_random_weight(1);
+      }
+    }
+
+    // DELIBERATELY no removal pass for themes whose directory has gone missing.
+    //
+    // "The folder was deleted" and "the folder is not mounted right now" are the same
+    // observation from here -- a failed exists() -- and the two want opposite handling. A
+    // removable or network drive that is merely absent, plus one save while it is absent,
+    // would erase that theme along with the weight, pin, inherit flag and exclusion list
+    // the user built up; when the drive came back it would reappear as a brand-new theme
+    // at weight 1 with all of that silently gone. Unrecoverable, and triggered by nothing
+    // more deliberate than launching the app on a laptop.
+    //
+    // The cost of the other choice is merely untidy: a genuinely deleted folder leaves an
+    // empty theme behind (it expands to nothing, so it draws nothing) until the user
+    // removes it from the F2 Themes section. Untidy beats unrecoverable.
+  }
+
+  // Folds each inheriting theme's PARENT pool into it, after every theme has loaded.
+  //
+  // The rule composes transitively through the chain of flags, which is the whole point:
+  // `hypno/spam` inherits `hypno`'s ALREADY-RESOLVED pool, so it reaches the root's loose
+  // files only if `hypno` is inheriting too. Turning every flag on is the old
+  // merge-everything-into-everything behaviour; turning them all off makes each theme
+  // exactly its own directory; every mixture in between is reachable one checkbox at a
+  // time. Crucially the SET of themes never changes -- only pool composition -- so
+  // toggling can't strand a saved per-theme weight.
+  //
+  // A theme's parent is the theme named by its parent directory (kRootThemeName once the
+  // path runs out). Missing parents are simply skipped: a pure container directory has no
+  // theme of its own, and inheritance walks past it to whatever the chain resolves to.
+  // Termination is guaranteed because each step strictly shortens the path, so no
+  // cycle-guard is needed; `resolved` exists only to keep it linear rather than
+  // exponential on deep trees.
+  void resolve_theme_inheritance(trance_pb::Session& session, SessionJsonSidecar& sidecar)
+  {
+    auto& themes = *session.mutable_theme_map();
+    // Record every theme's own size first: the UI reports "own -> effective" and the
+    // union below destroys the evidence.
+    for (const auto& pair : themes) {
+      // The pool the rotation actually draws visuals from: images + animations. Fonts
+      // and text lines are not pool size in any sense the user is weighing.
+      sidecar.theme_own_count[pair.first] =
+          static_cast<uint32_t>(pair.second.image_path_size() + pair.second.animation_path_size());
+      // Tier 0: the theme's own images, before anything is folded in. Every theme gets
+      // one even with inheritance off, so the runtime has a uniform description of every
+      // pool rather than two shapes to branch on.
+      sidecar.theme_tiers[pair.first] = {
+          {pair.first, static_cast<uint32_t>(pair.second.image_path_size())}};
+    }
+    if (sidecar.theme_inherit.empty()) {
+      return;
+    }
+
+    auto parent_of = [](const std::string& name) -> std::string {
+      if (name == kRootThemeName) {
+        return {};
+      }
+      auto slash = name.find_last_of('/');
+      // A top-level theme's parent is the scan root's own loose-file theme.
+      return slash == std::string::npos ? std::string{kRootThemeName} : name.substr(0, slash);
+    };
+
+    std::set<std::string> resolved;
+    // Recursive lambda via explicit self-parameter (no std::function allocation).
+    auto resolve = [&](const std::string& name, auto&& self) -> void {
+      if (resolved.count(name)) {
+        return;
+      }
+      resolved.insert(name);
+      if (!sidecar.theme_inherit.count(name)) {
+        return;
+      }
+      auto parent = parent_of(name);
+      if (parent.empty()) {
+        return;
+      }
+      auto parent_it = themes.find(parent);
+      if (parent_it == themes.end()) {
+        // No theme for that directory (a pure container). Keep walking up so an
+        // intermediate container doesn't silently break the chain.
+        auto grandparent = parent;
+        while (!grandparent.empty() && themes.find(grandparent) == themes.end()) {
+          grandparent = parent_of(grandparent);
+        }
+        if (grandparent.empty()) {
+          return;
+        }
+        parent_it = themes.find(grandparent);
+        if (parent_it == themes.end()) {
+          return;
+        }
+      }
+      // Resolve the parent FIRST so what we fold in is its effective pool, not just its
+      // own files -- this is what makes the chain transitive.
+      self(parent_it->first, self);
+      auto& self_theme = themes[name];
+      const auto& from = parent_it->second;
+      // Inherit the parent's TIER LAYOUT along with its images. The parent's pool is
+      // already split into (source, count) spans, and appending it wholesale appends
+      // those spans in the same order -- so the child's layout is its own tier followed
+      // by the parent's, which is exactly the ancestor chain. Recorded before the copy so
+      // the counts describe the spans being appended, not the merged result.
+      auto& self_tiers = sidecar.theme_tiers[name];
+      const auto parent_tiers = sidecar.theme_tiers[parent_it->first];
+      for (const auto& tier : parent_tiers) {
+        self_tiers.push_back(tier);
+      }
+      for (const auto& p : from.image_path()) {
+        self_theme.add_image_path(p);
+      }
+      for (const auto& p : from.animation_path()) {
+        self_theme.add_animation_path(p);
+      }
+      for (const auto& p : from.font_path()) {
+        self_theme.add_font_path(p);
+      }
+      for (const auto& p : from.audio_path()) {
+        self_theme.add_audio_path(p);
+      }
+      for (const auto& t : from.text_line()) {
+        self_theme.add_text_line(t);
+      }
+    };
+
+    std::vector<std::string> names;
+    names.reserve(themes.size());
+    for (const auto& pair : themes) {
+      names.push_back(pair.first);
+    }
+    for (const auto& name : names) {
+      resolve(name, resolve);
     }
   }
 
@@ -796,7 +1108,33 @@ namespace
     auto scan_it = sidecar.theme_scan.find(theme_name);
     const bool scanned = scan_it != sidecar.theme_scan.end();
     if (scanned) {
-      obj["scan"] = normalize_path_for_save(scan_it->second);
+      const bool recursive = sidecar.theme_scan_recursive.count(theme_name) != 0;
+      const bool inherits = sidecar.theme_inherit.count(theme_name) != 0;
+      auto exclude_it = sidecar.theme_exclude.find(theme_name);
+      const bool has_excludes =
+          exclude_it != sidecar.theme_exclude.end() && !exclude_it->second.empty();
+      // Stay in the legacy string form when nothing needs the object -- a recursive
+      // scan with no inheritance and no exclusions is exactly what `"scan": "dir"`
+      // meant, and rewriting every such theme into an object would churn files that
+      // did not change.
+      if (recursive && !inherits && !has_excludes) {
+        obj["scan"] = normalize_path_for_save(scan_it->second);
+      } else {
+        json s = json::object();
+        s["dir"] = normalize_path_for_save(scan_it->second);
+        // Object form defaults to non-recursive (one directory, one theme), so only
+        // the exception is written.
+        if (recursive) s["recursive"] = true;
+        if (inherits) s["inherit"] = true;
+        if (has_excludes) {
+          json arr = json::array();
+          for (const auto& p : exclude_it->second) {
+            arr.push_back(normalize_path_for_save(p));
+          }
+          s["exclude"] = std::move(arr);
+        }
+        obj["scan"] = std::move(s);
+      }
     }
     // A scanned theme's media is ENTIRELY scan-derived now (#36: the theme-level
     // search_resources fills text_line and audio_path too), so a pure scan theme
@@ -901,11 +1239,36 @@ trance_pb::Session load_session_json(const std::string& path, const std::string&
   require_format(root_json, "trance-session");
   check_unknown_keys(root_json,
                       {"format", "format_version", "first_playlist_item", "playlist",
-                       "program_map", "theme_map", "variable_map"},
+                       "program_map", "theme_map", "theme_scan_root", "variable_map"},
                       "");
 
   trance_pb::Session session;
   session.set_first_playlist_item(get_string(root_json, "first_playlist_item", ""));
+
+  // Session-level scan root: the theme SET is derived from this directory tree, not just
+  // each theme's own content. Parsed before theme_map so discovery can run right after it.
+  if (const json* scan_root = find(root_json, "theme_scan_root")) {
+    const std::string sp = "/theme_scan_root";
+    if (scan_root->is_string()) {
+      sidecar.theme_scan_root = scan_root->get<std::string>();
+    } else if (scan_root->is_object()) {
+      check_unknown_keys(*scan_root, {"dir", "auto_rescan"}, sp);
+      const json* dir_value = find(*scan_root, "dir");
+      if (!dir_value || !dir_value->is_string()) {
+        throw std::runtime_error(sp + "/dir: expected a string");
+      }
+      sidecar.theme_scan_root = dir_value->get<std::string>();
+      if (const json* a = find(*scan_root, "auto_rescan")) {
+        if (!a->is_boolean()) {
+          throw std::runtime_error(sp + "/auto_rescan: expected a boolean");
+        }
+        sidecar.theme_scan_root_auto = a->get<bool>();
+      }
+    } else {
+      throw std::runtime_error(sp + ": expected a string or an object");
+    }
+    check_relative_path(sidecar.theme_scan_root, sp);
+  }
 
   if (const json* playlist = find(root_json, "playlist")) {
     if (!playlist->is_object()) {
@@ -938,6 +1301,17 @@ trance_pb::Session load_session_json(const std::string& path, const std::string&
       load_theme(it.value(), (*session.mutable_theme_map())[it.key()], it.key(),
                  "/theme_map/" + it.key(), root, sidecar);
     }
+  }
+  // Discovery BEFORE inheritance: a folder that just appeared is a theme like any other
+  // and must be able to inherit (and to be inherited from) on the very first load that
+  // sees it. Runs even with no theme_map key at all, so a session can be nothing but a
+  // scan root.
+  if (!sidecar.theme_scan_root.empty() && sidecar.theme_scan_root_auto) {
+    discover_new_themes(session, root, sidecar);
+  }
+  {
+    // After every theme exists: a theme can only inherit a pool that has been loaded.
+    resolve_theme_inheritance(session, sidecar);
   }
 
   if (const json* variables = find(root_json, "variable_map")) {
@@ -987,6 +1361,19 @@ void save_session_json(const trance_pb::Session& session, const std::string& pat
       themes[pair.first] = save_theme(pair.second, pair.first, sidecar);
     }
     root_json["theme_map"] = std::move(themes);
+  }
+
+  if (!sidecar.theme_scan_root.empty()) {
+    // Plain string when auto-rescan is on (the default and the whole point); the object
+    // form only appears once the user has deliberately frozen the theme set.
+    if (sidecar.theme_scan_root_auto) {
+      root_json["theme_scan_root"] = normalize_path_for_save(sidecar.theme_scan_root);
+    } else {
+      json s = json::object();
+      s["dir"] = normalize_path_for_save(sidecar.theme_scan_root);
+      s["auto_rescan"] = false;
+      root_json["theme_scan_root"] = std::move(s);
+    }
   }
 
   if (session.variable_map_size()) {

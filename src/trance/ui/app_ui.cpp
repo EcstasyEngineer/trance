@@ -440,41 +440,47 @@ AppUi::WeightRowResult AppUi::draw_weight_row(const char* label, const std::stri
   return result;
 }
 
+void AppUi::draw_builtin_body(Director& director, uint32_t type, const char* blurb)
+{
+  if (ImGui::Button("Force now")) {
+    director.force_builtin_visual(type);
+  }
+  ImGui::SameLine();
+  // Built-in sources are compile-time constants (builtin_patterns_v3.cpp) -- shown
+  // read-only, as the modding-language reference for writing a custom pattern. Copy
+  // is the intended path to editing one: paste into a new custom pattern below.
+  // Returned by value; ReadOnly means InputTextMultiline never writes through the
+  // pointer, so handing it this frame-local buffer is safe.
+  std::string source = builtin::pattern_source_v3(type);
+  if (ImGui::Button("Copy")) {
+    ImGui::SetClipboardText(source.c_str());
+  }
+  ImGui::SameLine();
+  ImGui::TextDisabled("%s", blurb);
+  // WordWrap (imgui 1.92, multiline-only): pattern sources have lines far wider than
+  // this panel, and horizontal scrolling to read one is miserable.
+  ImGui::InputTextMultiline("##builtin_source", &source, ImVec2(-FLT_MIN, 180.f),
+                            ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_WordWrap);
+}
+
 void AppUi::draw_visuals_section(Director& director)
 {
-  ImGui::TextUnformatted("Built-ins (click to force now):");
-  for (const auto& visual : builtin_visuals()) {
-    ImGui::PushID(static_cast<int>(visual.type));
-    if (ImGui::Button(visual.name)) {
-      director.force_builtin_visual(visual.type);
-    }
-    ImGui::SameLine();
-    // Built-in sources are compile-time constants (builtin_patterns_v3.cpp) -- shown
-    // read-only, as the modding-language reference for writing a custom pattern. Copy
-    // is the intended path to editing one: paste into a new custom pattern below.
-    if (ImGui::TreeNode("source")) {
-      // Returned by value; ReadOnly means InputTextMultiline never writes through the
-      // pointer, so handing it this frame-local buffer is safe.
-      std::string source = builtin::pattern_source_v3(visual.type);
-      if (ImGui::Button("Copy")) {
-        ImGui::SetClipboardText(source.c_str());
-      }
-      ImGui::SameLine();
-      ImGui::TextDisabled("%s", visual.blurb);
-      ImGui::InputTextMultiline("##builtin_source", &source, ImVec2(-FLT_MIN, 180.f),
-                                ImGuiInputTextFlags_ReadOnly);
-      ImGui::TreePop();
-    }
-    ImGui::PopID();
-  }
-
-  ImGui::Separator();
-  ImGui::TextUnformatted("Custom patterns (this program):");
   // Editing needs the MUTABLE active program. When the playlist resolves to the
   // built-in default (no program_map entry) there is nothing in the session to edit,
   // so fall back to the read-only force-now list off Director's const view.
   trance_pb::Program* program = _active_program ? _active_program() : nullptr;
   if (!program) {
+    ImGui::TextUnformatted("Built-ins (click to force now):");
+    for (const auto& visual : builtin_visuals()) {
+      ImGui::PushID(static_cast<int>(visual.type));
+      if (ImGui::TreeNode(visual.name)) {
+        draw_builtin_body(director, visual.type, visual.blurb);
+        ImGui::TreePop();
+      }
+      ImGui::PopID();
+    }
+    ImGui::Separator();
+    ImGui::TextUnformatted("Custom patterns (this program):");
     ImGui::TextDisabled("(active program is the built-in default -- not editable)");
     for (const auto& pattern : director.program().custom_visual_pattern()) {
       if (!pattern.enabled()) {
@@ -506,6 +512,141 @@ void AppUi::draw_visuals_section(Director& director)
     _pattern_lint.clear();
   }
 
+  // Built-ins and custom patterns share ONE lottery (director.cpp's change_visual), so
+  // they now share one section and one denominator -- the built-in weight rows used to
+  // live over in the Program section, which meant the same pool was split across two
+  // menus with the source viewer in one and the weights in the other. Sampled once for
+  // the frame so every row's percent is against the same total even mid-drag.
+  const uint64_t pool_total = visual_pool_total(*program);
+  // A pinned visual owns the pool: change_visual returns it every time and never runs
+  // the lottery, so the rows show 100%/0% rather than a share of a draw that no
+  // longer happens. Sampled with pool_total, for the same stability reason.
+  const bool pool_pinned = any_visual_pinned(*program);
+  bool pool_changed = false;
+  const char* kVisualSliderTooltip =
+      "Selection weight, shared across ALL visuals -- built-ins and this\n"
+      "program's custom patterns run one combined lottery. 0 = never picked.\n"
+      "A PINNED visual is forced: the lottery is skipped entirely.";
+
+  ImGui::TextUnformatted("Built-ins:");
+  // Two passes over two different lists, so they get two explicitly NAMED ID scopes
+  // rather than sharing the outer one and relying on their index spaces not to overlap.
+  ImGui::PushID("configured-builtins");
+  // Pass 1: the program's visual_type ROWS, by index. Nothing forbids two entries of
+  // the same type, and the row key/ImGui ID are index-derived (see visual_row_key) so
+  // duplicates stay distinct rather than one row swallowing the other's clicks.
+  for (int i = 0; i < program->visual_type_size(); ++i) {
+    auto* config = program->mutable_visual_type(i);
+    const uint32_t type = static_cast<uint32_t>(config->type());
+    const char* label = nullptr;
+    const char* blurb = "";
+    for (const auto& visual : builtin_visuals()) {
+      if (visual.type == type) {
+        label = visual.name;
+        blurb = visual.blurb;
+        break;
+      }
+    }
+    char fallback[32];
+    if (!label) {
+      std::snprintf(fallback, sizeof(fallback), "type %u", type);
+      label = fallback;
+    }
+    ImGui::PushID(i);
+    // Written through live so the slider tracks the drag and the percent label stays
+    // truthful; pool_changed (the on_program_change trigger) only fires on release.
+    uint32_t weight = config->random_weight();
+    bool pinned = config->pinned();
+    // Empty label: the TreeNode below names the row, matching the Themes section's
+    // layout (weight row, then the name as an expander holding the row's content).
+    auto row = draw_weight_row("", visual_row_key(false, i, {}), &weight, &pinned, pool_total,
+                               _visual_last_weight, kVisualSliderTooltip, pool_pinned);
+    config->set_random_weight(weight);
+    if (row.weight_changed) {
+      pool_changed = true;
+    }
+    if (row.pin_changed) {
+      // Set before the sweep so the sweep can leave this one alone; clearing is
+      // unconditional the other way (unpinning just leaves the pool unpinned).
+      config->set_pinned(pinned);
+      if (pinned) {
+        clear_other_visual_pins(*program, false, i, {});
+      }
+      pool_changed = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::TreeNode(label)) {
+      draw_builtin_body(director, type, blurb);
+      ImGui::TreePop();
+    }
+    ImGui::PopID();
+  }
+  ImGui::PopID();
+
+  ImGui::PushID("missing-builtins");
+  // Pass 2: built-ins with NO visual_type row at all. validate_program only rebuilds
+  // the default set when the whole pool is weightless (session.cpp), so a session can
+  // legitimately omit a type -- and before the sections merged, such a type was still
+  // forceable from here. Draw it at weight 0 and materialize the entry on first touch
+  // (the ensure_entry idiom the Themes section uses), so it stays both forceable and
+  // re-addable to the lottery.
+  for (const auto& visual : builtin_visuals()) {
+    bool present = false;
+    for (const auto& type : program->visual_type()) {
+      if (static_cast<uint32_t>(type.type()) == visual.type) {
+        present = true;
+        break;
+      }
+    }
+    if (present) {
+      continue;
+    }
+    ImGui::PushID(static_cast<int>(visual.type));
+    uint32_t weight = 0;
+    bool pinned = false;
+    // Type-derived key, not index-derived: there is no row index yet. Once the entry
+    // materializes the row moves to its "b<index>" key next frame -- the orphaned
+    // stash entry is cosmetic (the row is at 0 with nothing worth restoring).
+    auto row = draw_weight_row("", "bt" + std::to_string(visual.type), &weight, &pinned,
+                               pool_total, _visual_last_weight, kVisualSliderTooltip,
+                               pool_pinned);
+    if (row.weight_changed || row.pin_changed) {
+      auto* added = program->add_visual_type();
+      added->set_type(static_cast<trance_pb::Program::VisualType>(visual.type));
+      added->set_random_weight(weight);
+      if (row.pin_changed && pinned) {
+        added->set_pinned(true);
+        clear_other_visual_pins(*program, false, program->visual_type_size() - 1, {});
+      }
+      pool_changed = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::TreeNode(visual.name)) {
+      ImGui::TextDisabled("(not in this program's pool -- switch the row on to add it)");
+      draw_builtin_body(director, visual.type, visual.blurb);
+      ImGui::TreePop();
+    }
+    ImGui::PopID();
+  }
+  ImGui::PopID();
+
+  // The rescue validate_program does on reload is BUILT-IN weights only, and a pinned
+  // built-in suppresses it -- so warn on exactly that condition, not on the combined
+  // pool_total the percentages use.
+  {
+    uint64_t builtin_total = 0;
+    bool builtin_pinned = false;
+    for (const auto& type : program->visual_type()) {
+      builtin_total += type.random_weight();
+      builtin_pinned = builtin_pinned || type.pinned();
+    }
+    if (!builtin_total && !builtin_pinned) {
+      ImGui::TextColored(kWarnAmber, "all built-in weights 0 -- resets to defaults on reload");
+    }
+  }
+
+  ImGui::Separator();
+  ImGui::TextUnformatted("Custom patterns (this program):");
   if (ImGui::Button("+ New pattern")) {
     auto* added = program->add_custom_visual_pattern();
     added->set_name(unique_pattern_name(*program));
@@ -528,16 +669,6 @@ void AppUi::draw_visuals_section(Director& director)
     ImGui::TextDisabled("(none in this program)");
   }
 
-  // Shared with the Program section's built-in rows: one denominator for the whole
-  // visual pool. Sampled once for the frame so every row's percent is against the
-  // same total even while one of them is being dragged.
-  const uint64_t pool_total = visual_pool_total(*program);
-  // A pinned visual owns the pool: change_visual returns it every time and never runs
-  // the lottery, so the rows show 100%/0% rather than a share of a draw that no
-  // longer happens. Sampled with pool_total, for the same stability reason.
-  const bool pool_pinned = any_visual_pinned(*program);
-  bool pool_changed = false;
-
   // Index of a row the user asked to remove, applied after the loop: erasing from the
   // repeated field mid-iteration would invalidate the row we are still drawing.
   int remove_index = -1;
@@ -546,44 +677,11 @@ void AppUi::draw_visuals_section(Director& director)
     // By index, not by name: the name is editable, and an ID that changes mid-edit
     // would tear down the InputText that is being typed into.
     ImGui::PushID(i);
-    ImGui::SetNextItemWidth(200.f);
-    if (ImGui::InputText("##name", pattern->mutable_name())) {
-      // Duplicate names are a load-time error (session_json.cpp), so the lint has to
-      // catch them here rather than at Save. The WHOLE cache goes, not just this row:
-      // duplicate-ness is a property of the entire list, so renaming a to b must also
-      // re-lint the row already called b (and renaming away from a collision must
-      // clear the other row's error).
-      _pattern_lint.clear();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Apply")) {
-      // Re-parse through Director (rebuild_custom_patterns) so the edit reaches the
-      // live shuffle. Lint below already told the user whether this will take.
-      if (_on_program_change) {
-        _on_program_change();
-      }
-    }
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!pattern->enabled());
-    if (ImGui::Button("Force now")) {
-      // Same path force_pattern_from_source always uses (director.cpp): on a parse
-      // failure it returns the parser diagnostic and leaves the current visual
-      // untouched. Surfaced inline rather than only to stderr since this is an
-      // interactive action.
-      _last_pattern_error =
-          director.force_pattern_from_source(pattern->source_text(), pattern->name());
-    }
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    if (ImGui::Button("Remove")) {
-      remove_index = i;
-    }
-
-    // Weight/pin row, same widget and the same pool denominator the built-ins use in
-    // the Program section -- change_visual runs one lottery over both (director.cpp).
-    // `enabled` (the proto's own off switch, previously not editable here) is kept in
-    // step with the weight: rebuild_custom_patterns skips a disabled pattern outright,
-    // which is the truest "off", and a 0-weight row would never be picked anyway.
+    // Weight/pin row, same widget and the same pool denominator the built-ins above
+    // use -- change_visual runs one lottery over both (director.cpp).
+    // `enabled` (the proto's own off switch) is kept in step with the weight:
+    // rebuild_custom_patterns skips a disabled pattern outright, which is the truest
+    // "off", and a 0-weight row would never be picked anyway.
     {
       // A pattern saved as enabled:false is off no matter what weight it carries
       // (rebuild_custom_patterns skips it), so the row must READ as off too -- show it
@@ -595,12 +693,9 @@ void AppUi::draw_visuals_section(Director& director)
         _visual_last_weight.emplace(key, pattern->random_weight());
       }
       bool pinned = pattern->pinned();
-      // Empty label: the editable name InputText a line above already names the row.
+      // Empty label: the TreeNode below names the row (the Themes section's layout).
       auto row = draw_weight_row("", visual_row_key(true, 0, pattern->name()), &weight, &pinned,
-                                 pool_total, _visual_last_weight,
-                                 "Selection weight, shared with the built-in visuals in the\n"
-                                 "Program section (one combined lottery). 0 = never picked.\n"
-                                 "A PINNED visual is forced: the lottery is skipped entirely.",
+                                 pool_total, _visual_last_weight, kVisualSliderTooltip,
                                  pool_pinned);
       // Only ever written on a real user edit. The pass-through case (drawing a
       // disabled pattern, which the row shows at 0) must not clobber the weight the
@@ -628,16 +723,12 @@ void AppUi::draw_visuals_section(Director& director)
       }
     }
 
-    if (ImGui::InputTextMultiline("##source", pattern->mutable_source_text(),
-                                  ImVec2(-FLT_MIN, 160.f))) {
-      _pattern_lint.erase(i);
-    }
-
     // Live lint: patternv3::parse is pure and cheap enough to run on edit, but not
     // per frame for every row -- cache the diagnostic and only re-parse when the row
     // changed (or was never linted). Parsed with locked_period_frames 0: the beat
     // period is Director's to supply, and a `locked` length would report a spurious
     // error here, so treat that as the one case the real compile decides.
+    // Computed BEFORE the row is drawn so a collapsed row can still show its verdict.
     auto lint = _pattern_lint.find(i);
     if (lint == _pattern_lint.end()) {
       std::string message;
@@ -658,27 +749,75 @@ void AppUi::draw_visuals_section(Director& director)
       }
       lint = _pattern_lint.emplace(i, std::move(message)).first;
     }
-    if (lint->second.empty()) {
+    // COPY, not the iterator: the widgets below invalidate it mid-frame -- a name edit
+    // clears the whole cache and a source edit erases this row's entry -- and reading
+    // through the dead iterator afterwards is undefined behaviour on every keystroke.
+    // The copy also keeps the row's verdict self-consistent for the rest of the frame;
+    // the re-parse it triggered lands on the next one.
+    const std::string lint_message = lint->second;
+
+    ImGui::SameLine();
+    // "###row": the visible label is the EDITABLE name, so hashing the whole label
+    // would hand the node a new identity on every keystroke and collapse it mid-edit.
+    // ### takes the ID from the suffix alone, which keeps it stable.
+    const std::string node_label =
+        (pattern->name().empty() ? std::string("(unnamed)") : pattern->name()) + "###row";
+    const bool open = ImGui::TreeNode(node_label.c_str());
+    // Verdict on the header line too, so a broken pattern is visible while collapsed.
+    ImGui::SameLine();
+    if (lint_message.empty()) {
       ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "OK");
     } else {
-      ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", lint->second.c_str());
+      ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "!");
+    }
+    if (open) {
+      ImGui::SetNextItemWidth(200.f);
+      if (ImGui::InputText("##name", pattern->mutable_name())) {
+        // Duplicate names are a load-time error (session_json.cpp), so the lint has to
+        // catch them here rather than at Save. The WHOLE cache goes, not just this row:
+        // duplicate-ness is a property of the entire list, so renaming a to b must also
+        // re-lint the row already called b (and renaming away from a collision must
+        // clear the other row's error).
+        _pattern_lint.clear();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Apply")) {
+        // Re-parse through Director (rebuild_custom_patterns) so the edit reaches the
+        // live shuffle. Lint below already told the user whether this will take.
+        if (_on_program_change) {
+          _on_program_change();
+        }
+      }
+      ImGui::SameLine();
+      ImGui::BeginDisabled(!pattern->enabled());
+      if (ImGui::Button("Force now")) {
+        // Same path force_pattern_from_source always uses (director.cpp): on a parse
+        // failure it returns the parser diagnostic and leaves the current visual
+        // untouched. Surfaced inline rather than only to stderr since this is an
+        // interactive action.
+        _last_pattern_error =
+            director.force_pattern_from_source(pattern->source_text(), pattern->name());
+      }
+      ImGui::EndDisabled();
+      ImGui::SameLine();
+      if (ImGui::Button("Remove")) {
+        remove_index = i;
+      }
+
+      // WordWrap: pattern lines routinely run wider than the panel, and editing one by
+      // horizontal-scrolling is miserable. Multiline-only flag (imgui 1.92).
+      if (ImGui::InputTextMultiline("##source", pattern->mutable_source_text(),
+                                    ImVec2(-FLT_MIN, 160.f),
+                                    ImGuiInputTextFlags_WordWrap)) {
+        _pattern_lint.erase(i);
+      }
+      if (!lint_message.empty()) {
+        ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", lint_message.c_str());
+      }
+      ImGui::TreePop();
     }
     ImGui::Separator();
     ImGui::PopID();
-  }
-
-  // Mirrors draw_program_section's warning: the reload rescue keys off the BUILT-IN
-  // weights (a custom can fail to parse and vanish from the lottery, so it is not
-  // evidence of a playable pool -- see validate_program), not off pool_total.
-  uint64_t builtin_total = 0;
-  bool builtin_pinned = false;
-  for (const auto& type : program->visual_type()) {
-    builtin_total += type.random_weight();
-    builtin_pinned = builtin_pinned || type.pinned();
-  }
-  if (!builtin_total && !builtin_pinned) {
-    ImGui::TextColored(kWarnAmber,
-                       "all built-in visual weights 0 -- resets to defaults on reload");
   }
 
   if (remove_index >= 0) {
@@ -740,72 +879,11 @@ void AppUi::draw_program_section()
     changed = true;
   }
 
-  ImGui::Separator();
-  ImGui::TextUnformatted("Built-in visual weights:");
-  ImGui::TextDisabled("(share is against ALL visuals -- custom patterns included)");
-  // One denominator for built-ins and customs alike: change_visual runs a single
-  // lottery over both (director.cpp), so a built-in's share depends on the custom
-  // patterns edited over in the Visuals section too. A pin overrides the lottery
-  // outright, so the rows show 100%/0% instead (see draw_weight_row).
-  const uint64_t pool_total = visual_pool_total(*program);
-  const bool pool_pinned = any_visual_pinned(*program);
-  for (int i = 0; i < program->visual_type_size(); ++i) {
-    auto* config = program->mutable_visual_type(i);
-    const int type = static_cast<int>(config->type());
-    const char* label = nullptr;
-    for (const auto& visual : builtin_visuals()) {
-      if (visual.type == static_cast<uint32_t>(type)) {
-        label = visual.name;
-        break;
-      }
-    }
-    char fallback[32];
-    if (!label) {
-      std::snprintf(fallback, sizeof(fallback), "type %d", type);
-      label = fallback;
-    }
-    // Nothing forbids two visual_type entries with the SAME type, and their labels are
-    // identical -- scope by row index so duplicates get distinct ImGui IDs instead of
-    // one row swallowing the other's clicks. (The row KEY is index-derived too, for
-    // the same reason; see visual_row_key.)
-    ImGui::PushID(i);
-    // Written through live so the slider tracks the drag and the percent label stays
-    // truthful; `changed` (the on_program_change trigger) only fires on release.
-    uint32_t weight = config->random_weight();
-    bool pinned = config->pinned();
-    auto row = draw_weight_row(label, visual_row_key(false, i, {}), &weight, &pinned, pool_total,
-                               _visual_last_weight,
-                               "Selection weight, shared with this program's custom patterns\n"
-                               "(one combined lottery). 0 = never picked.\n"
-                               "A PINNED visual is forced: the lottery is skipped entirely.",
-                               pool_pinned);
-    config->set_random_weight(weight);
-    if (row.weight_changed) {
-      changed = true;
-    }
-    if (row.pin_changed) {
-      // Set before the sweep so the sweep can leave this one alone; clearing is
-      // unconditional the other way (unpinning just leaves the pool unpinned).
-      config->set_pinned(pinned);
-      if (pinned) {
-        clear_other_visual_pins(*program, false, i, {});
-      }
-      changed = true;
-    }
-    ImGui::PopID();
-  }
-  // The rescue validate_program does on reload is BUILT-IN weights only, and a pinned
-  // built-in suppresses it -- so warn on exactly that condition, not on the combined
-  // pool_total the percentages use.
-  uint64_t builtin_total = 0;
-  bool builtin_pinned = false;
-  for (const auto& type : program->visual_type()) {
-    builtin_total += type.random_weight();
-    builtin_pinned = builtin_pinned || type.pinned();
-  }
-  if (!builtin_total && !builtin_pinned) {
-    ImGui::TextColored(kWarnAmber, "all built-in weights 0 -- resets to defaults on reload");
-  }
+  // Built-in visual weights used to live here, duplicating the Visuals section's list
+  // of the same built-ins: one menu had the weights, the other had the source viewer,
+  // for one shared lottery. They are now one row apiece in Visuals, next to the custom
+  // patterns they actually compete with. This section keeps what is genuinely
+  // program-wide and has no per-visual row: fps and colours.
 
   ImGui::Separator();
   ImGui::TextUnformatted("Colours:");
@@ -830,6 +908,52 @@ void AppUi::draw_program_section()
   if (changed && _on_program_change) {
     _on_program_change();
   }
+}
+
+std::string AppUi::theme_parent(const std::string& name) const
+{
+  // Mirrors resolve_theme_inheritance (session_json.cpp): a theme's parent is the theme
+  // named by its parent DIRECTORY, and a top-level theme's parent is the scan root's own
+  // loose-file theme. Skips directories that have no theme of their own (pure containers)
+  // so an intermediate container doesn't silently break the chain. Returns "" when
+  // nothing above it exists -- which is always the case for kRootThemeName itself.
+  if (name == kRootThemeName) {
+    return {};
+  }
+  auto candidate = name;
+  while (true) {
+    auto slash = candidate.find_last_of('/');
+    candidate = slash == std::string::npos ? std::string{kRootThemeName} : candidate.substr(0, slash);
+    if (_session.theme_map().count(candidate)) {
+      return candidate;
+    }
+    if (candidate == kRootThemeName) {
+      return {};
+    }
+  }
+}
+
+uint32_t AppUi::predicted_pool_size(const std::string& name) const
+{
+  // What this theme's pool WOULD be on the next load, given the inherit flags as they
+  // stand right now. Inheritance is resolved at load time (ThemeBank has no live rebuild
+  // path), so the live theme_map already has the last load's unions folded in and can't
+  // be measured directly -- this recomputes from the per-theme OWN counts the loader
+  // recorded before unioning. Same transitive walk the loader does, so the number the
+  // button shows is the number the next restart produces.
+  uint32_t total = 0;
+  auto current = name;
+  while (!current.empty()) {
+    auto own = _sidecar.theme_own_count.find(current);
+    if (own != _sidecar.theme_own_count.end()) {
+      total += own->second;
+    }
+    if (!_sidecar.theme_inherit.count(current)) {
+      break;
+    }
+    current = theme_parent(current);
+  }
+  return total;
 }
 
 void AppUi::draw_themes_section()
@@ -862,6 +986,110 @@ void AppUi::draw_themes_section()
     names.push_back(pair.first);
   }
   std::sort(names.begin(), names.end());
+
+  // Folder-liveness, above everything else in this section because it decides whether the
+  // rest of it is describing a live folder or a frozen snapshot.
+  if (_sidecar.theme_scan_root.empty()) {
+    // A session whose themes are a fixed manifest -- either hand-written, or generated
+    // before folder-liveness existed. This is the state that produces the complaint this
+    // whole feature answers: media dropped into the folder never shows up.
+    ImGui::TextColored(kWarnAmber, "theme list is FROZEN -- new folders will never appear");
+    if (ImGui::Button("adopt live folder")) {
+      // Re-derive everything from disk. The existing theme_map is dropped rather than
+      // merged: its entries are frozen expansions under the OLD flat naming (one theme
+      // per top-level directory), so keeping them would shadow the per-directory themes
+      // discovery wants to create and leave the session half-migrated.
+      //
+      // Weights survive only where the NAME still matches. Old sessions name one theme
+      // per top-level directory ("hypno"), and that name still exists afterwards, so its
+      // weight carries; but the newly-addressable nested themes ("hypno/spam") never
+      // existed before and start at the default weight 1. Do not describe this as
+      // "weights are kept" -- it is "weights are kept where the name survives".
+      _session.mutable_theme_map()->clear();
+      _sidecar.theme_scan.clear();
+      _sidecar.theme_scan_recursive.clear();
+      _sidecar.theme_inherit.clear();
+      _sidecar.theme_exclude.clear();
+      _sidecar.theme_own_count.clear();
+      _sidecar.theme_scan_root = ".";
+      _sidecar.theme_scan_root_auto = true;
+      _theme_seen_images.clear();
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Replace the frozen theme list with a live scan of this session's\n"
+                        "media folder: one theme per directory, re-derived every load, so\n"
+                        "files and folders added later show up on their own.\n"
+                        "Weights are kept for themes whose NAME survives -- nested folders\n"
+                        "become new themes ('hypno/spam') and start at weight 1.\n"
+                        "Save, then restart, for it to take effect.");
+    }
+    ImGui::Separator();
+  } else {
+    bool auto_rescan = _sidecar.theme_scan_root_auto;
+    if (ImGui::Checkbox("auto re-scan folder for new content", &auto_rescan)) {
+      _sidecar.theme_scan_root_auto = auto_rescan;
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("ON: directories that appear become themes and directories that\n"
+                        "vanish stop being themes, re-derived on every load.\n"
+                        "OFF: the theme LIST is frozen as it is now -- but each existing\n"
+                        "theme still follows its own folder, so new FILES still appear.");
+    }
+    if (!auto_rescan) {
+      ImGui::TextColored(kWarnAmber, "new folders will not become themes while this is off");
+    }
+    ImGui::Separator();
+  }
+
+  // Inherit-all / inherit-none. Per-theme inheritance composes transitively (a theme
+  // reaches its grandparent only if its parent inherits too), so these two buttons are
+  // the ends of the range: ALL is "every theme folds in everything above it", NONE is
+  // "every theme is exactly its own folder". Everything between is one checkbox at a
+  // time. Only themes that HAVE a parent are touched -- the root theme can't inherit.
+  {
+    // Scan themes ONLY, matching the per-row button: `inherit` is a key inside the scan
+    // object, so an explicit image-list theme has nowhere to persist it. Counting those
+    // here would let "all" set a flag that save drops on the floor, and the predicted
+    // pool sizes would promise inheritance the next load can't perform.
+    auto inheritable_theme = [this](const std::string& name) {
+      return _sidecar.theme_scan.count(name) != 0 && !theme_parent(name).empty();
+    };
+    size_t inheritable = 0;
+    size_t inheriting = 0;
+    for (const auto& name : names) {
+      if (inheritable_theme(name)) {
+        ++inheritable;
+        if (_sidecar.theme_inherit.count(name)) {
+          ++inheriting;
+        }
+      }
+    }
+    ImGui::TextUnformatted("Inherit parent folder:");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!inheritable || inheriting == inheritable);
+    if (ImGui::Button("all")) {
+      for (const auto& name : names) {
+        if (inheritable_theme(name)) {
+          _sidecar.theme_inherit.insert(name);
+        }
+      }
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!inheriting);
+    if (ImGui::Button("none")) {
+      _sidecar.theme_inherit.clear();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%zu/%zu)", inheriting, inheritable);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("How many themes with a parent folder are inheriting it.\n"
+                        "Inheritance chains: a theme reaches its grandparent only if\n"
+                        "its parent inherits too.");
+    }
+  }
+  ImGui::Separator();
 
   for (const auto& name : names) {
     ImGui::PushID(name.c_str());
@@ -922,7 +1150,55 @@ void AppUi::draw_themes_section()
     }
 
     auto theme_it = _session.mutable_theme_map()->find(name);
-    if (ImGui::TreeNode(name.c_str())) {
+    const bool node_open = ImGui::TreeNode(name.c_str());
+
+    // Inherit-parent toggle, with the pool-size consequence spelled out rather than
+    // left to be discovered. Only offered for a scan theme with a parent: an explicit
+    // image-list theme has no folder to inherit from, and the root theme has nothing
+    // above it. Sized live from the OWN counts the loader recorded, so the arrow shows
+    // what the next restart will actually produce.
+    const std::string parent = theme_parent(name);
+    if (!parent.empty() && _sidecar.theme_scan.count(name)) {
+      ImGui::SameLine();
+      const bool inherits = _sidecar.theme_inherit.count(name) != 0;
+      if (inherits) {
+        ImGui::PushStyleColor(ImGuiCol_Button, kPinGold);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.f, 0.f, 0.f, 1.f));
+      }
+      if (ImGui::Button("inherit")) {
+        if (inherits) {
+          _sidecar.theme_inherit.erase(name);
+        } else {
+          _sidecar.theme_inherit.insert(name);
+        }
+      }
+      if (inherits) {
+        ImGui::PopStyleColor(2);
+      }
+      if (ImGui::IsItemHovered()) {
+        // The chain is the non-obvious part: this button only reaches the grandparent
+        // when the parent's own button is on too.
+        const bool parent_inherits = _sidecar.theme_inherit.count(parent) != 0;
+        ImGui::SetTooltip("Fold '%s' into this theme's pool.\n"
+                          "Chains: this reaches what '%s' itself inherits, and '%s' is\n"
+                          "currently %s.\n"
+                          "Takes effect on the next load (themes are built at startup).",
+                          parent.c_str(), parent.c_str(), parent.c_str(),
+                          parent_inherits ? "inheriting" : "NOT inheriting");
+      }
+      // own -> effective, so the cost of the toggle is visible before clicking it.
+      auto own_it = _sidecar.theme_own_count.find(name);
+      const uint32_t own = own_it != _sidecar.theme_own_count.end() ? own_it->second : 0;
+      const uint32_t effective = predicted_pool_size(name);
+      ImGui::SameLine();
+      if (effective > own) {
+        ImGui::TextColored(kPinGold, "%u -> %u (+%u)", own, effective, effective - own);
+      } else {
+        ImGui::TextDisabled("%u", own);
+      }
+    }
+
+    if (node_open) {
       // Scan themes: save_theme (session_json.cpp) deliberately omits their media
       // lists -- the scan directory is re-expanded on every load -- so image edits
       // here would silently vanish on Save/restart. Offer the
@@ -930,8 +1206,29 @@ void AppUi::draw_themes_section()
       // the current expansion an explicit (editable, persisted) image list.
       if (_sidecar.theme_scan.count(name)) {
         ImGui::TextDisabled("(scan theme -- images follow the scanned directory)");
+        if (_sidecar.theme_inherit.count(name)) {
+          // Freezing an INHERITING theme captures the parent's content too, because the
+          // pool being frozen is the post-inheritance one. Say so before the click, not
+          // after: the result is a theme that keeps its ancestors' images forever even
+          // if the parent folder changes.
+          ImGui::TextColored(kWarnAmber,
+                             "inherits '%s' -- converting freezes the INHERITED images too",
+                             parent.c_str());
+        }
         if (ImGui::Button("convert to explicit image list")) {
+          // Drop EVERY scan-side record, not just the directory: a leftover inherit flag
+          // or exclusion list would be written back out for a theme that no longer has a
+          // scan to apply them to, and the UI would keep predicting inheritance that the
+          // next load cannot perform.
           _sidecar.theme_scan.erase(name);
+          _sidecar.theme_scan_recursive.erase(name);
+          _sidecar.theme_inherit.erase(name);
+          _sidecar.theme_exclude.erase(name);
+          // The frozen list IS this theme's own content now (inherited entries included),
+          // so its own-count is the whole current pool -- otherwise every descendant's
+          // predicted size would keep quoting the pre-conversion number.
+          _sidecar.theme_own_count[name] = static_cast<uint32_t>(
+              theme_it->second.image_path_size() + theme_it->second.animation_path_size());
         }
         ImGui::TreePop();
         ImGui::PopID();

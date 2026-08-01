@@ -385,7 +385,11 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
     return it->second;
   };
 
-  auto theme_bank = std::make_unique<ThemeBank>(root_path, session, system, program());
+  // theme_tiers: how each pool splits into own-vs-inherited content, so selection can
+  // honour the rotation weights inside an inherited pool instead of sampling by raw file
+  // count. Empty for a session with no inheritance, which is the flat behaviour.
+  auto theme_bank =
+      std::make_unique<ThemeBank>(root_path, session, system, program(), sidecar.theme_tiers);
 
   std::unique_ptr<Renderer> renderer;
   bool realtime = settings.path.empty();
@@ -1294,6 +1298,11 @@ int main(int argc, char** argv)
       // {"scan": <subdir>} per theme instead of freezing a media list that goes stale
       // the moment the user drops another image in.
       search_resources(session, ".", sidecar.theme_scan);
+      // Record the tree the themes came FROM, not just each theme's own folder, so a
+      // directory added later becomes a theme on the next load instead of staying
+      // invisible until someone regenerates this file by hand.
+      sidecar.theme_scan_root = ".";
+      sidecar.theme_scan_root_auto = true;
     }
     try {
       save_session(session, "./" + DEFAULT_SESSION_PATH, sidecar);

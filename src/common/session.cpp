@@ -405,7 +405,14 @@ namespace
       c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
     }
     // OS/shell droppings, by exact (case-insensitive) name.
-    if (lower == "thumbs.db" || lower == "desktop.ini") {
+    if (lower == "thumbs.db") {
+      return true;
+    }
+    // Config and log files. `.ini` generalizes the old exact-match on desktop.ini, and
+    // it matters for one case in particular: imgui.ini is written by TRANCE ITSELF (the
+    // F2 panel's window state) into the working directory, so a folder the user has ever
+    // played lands a phantom in its own scan. `.log` is never content either.
+    if (ext_is(lower, "ini") || ext_is(lower, "log")) {
       return true;
     }
     // Editor backups and partial downloads. These usually SHADOW a real media file
@@ -471,7 +478,22 @@ namespace
     return !theme.image_path_size() && !theme.animation_path_size() && !theme.font_path_size() &&
         !theme.text_line_size() && !theme.audio_path_size();
   }
+
+  // The theme a scanned file belongs to: its IMMEDIATE parent directory, root-relative.
+  // See the contract on search_resources (session.h) for why this is the rule.
+  // generic_string(), not string(): theme names are keys in the session JSON and must
+  // not change shape with the host's path separator.
+  std::string theme_name_for(const std::filesystem::path& relative_path)
+  {
+    auto parent = relative_path.parent_path();
+    if (parent.empty()) {
+      return kRootThemeName;
+    }
+    return parent.generic_string();
+  }
 } // anonymous namespace
+
+const char* const kRootThemeName = "/root/";
 
 bool is_enabled(const trance_pb::PlaylistItem_NextItem& next,
                 const std::map<std::string, std::string>& variables)
@@ -496,7 +518,6 @@ void search_resources(trance_pb::Session& session, const std::string& root)
 void search_resources(trance_pb::Session& session, const std::string& root,
                       std::map<std::string, std::string>& theme_scan)
 {
-  static const std::string wildcards = "/wildcards/";
   auto& themes = *session.mutable_theme_map();
 
   std::filesystem::path root_path(root);
@@ -504,14 +525,13 @@ void search_resources(trance_pb::Session& session, const std::string& root,
        it != std::filesystem::recursive_directory_iterator(); ++it) {
     if (std::filesystem::is_regular_file(it->status())) {
       auto relative_path = std::filesystem::relative(it->path(), root_path);
-      auto jt = relative_path.begin();
-      if (jt == relative_path.end()) {
+      if (relative_path.begin() == relative_path.end()) {
         continue;
       }
       if (is_scan_ignored(relative_path)) {
         continue;
       }
-      auto theme_name = jt == --relative_path.end() ? wildcards : jt->string();
+      auto theme_name = theme_name_for(relative_path);
 
       auto rel_str = relative_path.string();
       auto& theme = themes[theme_name];
@@ -535,87 +555,87 @@ void search_resources(trance_pb::Session& session, const std::string& root,
     }
   }
 
-  // #36: report which themes are pure folder references, so a caller writing this session
-  // out (the cold-start bootstrap) can emit {"scan": <subdir>} instead of freezing the
-  // expansion into explicit lists. Only valid while nothing has been merged in from
-  // /wildcards/ -- once loose root files land in every theme, no single directory
-  // reproduces a theme's content and the explicit lists are the only faithful record.
-  const bool wildcards_empty = !themes.count(wildcards) || is_theme_empty(themes[wildcards]);
-
-  // Merge wildcards theme into all others.
-  for (auto& pair : themes) {
-    if (pair.first == wildcards) {
-      continue;
-    }
-    for (const auto& s : themes[wildcards].image_path()) {
-      pair.second.add_image_path(s);
-    }
-    for (const auto& s : themes[wildcards].animation_path()) {
-      pair.second.add_animation_path(s);
-    }
-    for (const auto& s : themes[wildcards].font_path()) {
-      pair.second.add_font_path(s);
-    }
-    for (const auto& s : themes[wildcards].text_line()) {
-      pair.second.add_text_line(s);
-    }
-    for (const auto& s : themes[wildcards].audio_path()) {
-      pair.second.add_audio_path(s);
-    }
-  }
-
-  // Leave wildcards theme if there are no others.
+  // NO cross-theme merge. The retired /wildcards/ pseudo-theme used to fold every loose
+  // root file into every other theme, which had two bad consequences: a folder with junk
+  // (or, as in any real media library, a few hundred unsorted files) at its root diluted
+  // every theme with the same content, and -- because no single directory then reproduced
+  // a theme -- it DISABLED `scan` persistence for the whole folder, freezing every theme
+  // as an explicit list that goes stale the moment a file is added. Loose root files are
+  // now simply kRootThemeName, a first-class theme with its own rotation weight.
+  //
+  // Consequence worth stating: every theme here is exactly one directory's own files, so
+  // every one of them is faithfully reproducible from its folder and gets a scan entry
+  // unconditionally -- no wildcards_empty gate.
   themes.erase("default");
-  if (themes.size() == 1) {
-    themes["default"] = themes[wildcards];
-  }
-  themes.erase(wildcards);
   set_default_playlist(session, "default");
   auto& program = (*session.mutable_program_map())["default"];
+  // Write REAL enabled_theme entries rather than the deprecated enabled_theme_name list.
+  // The saver only serializes enabled_theme, so seeding the old field left the written
+  // file claiming a single theme called "default" -- one that no longer exists -- and
+  // relying on validate_program's all-zero rescue to silently re-enable everything at
+  // the next load. That happened to work, but the file on disk did not describe the
+  // session it produced. Both are cleared first: get_default_session()'s placeholder
+  // "default" entry would otherwise survive as a dangling name.
+  program.clear_enabled_theme_name();
+  program.clear_enabled_theme();
   for (auto& pair : themes) {
-    program.add_enabled_theme_name(pair.first);
-    // The synthesized "default" theme is the wildcards content (loose root files), whose
-    // scan directory would be the session root itself -- not a folder theme.
-    if (wildcards_empty && pair.first != "default" &&
-        std::filesystem::is_directory(root_path / pair.first)) {
-      theme_scan[pair.first] = pair.first;
-    }
+    // Every discovered theme starts enabled at weight 1 -- a folder that exists is
+    // content the user has, so it is in until they say otherwise.
+    auto* enabled = program.add_enabled_theme();
+    enabled->set_theme_name(pair.first);
+    enabled->set_random_weight(1);
+    // kRootThemeName's directory is the scan root itself; every other theme's name IS
+    // its root-relative directory path.
+    theme_scan[pair.first] = pair.first == kRootThemeName ? "." : pair.first;
   }
   session.set_first_playlist_item("default");
 }
 
-void search_resources(trance_pb::Theme& theme, const std::string& root)
+void search_resources(trance_pb::Theme& theme, const std::string& root, bool recursive)
 {
   std::filesystem::path root_path(root);
-  for (auto it = std::filesystem::recursive_directory_iterator(root_path);
-       it != std::filesystem::recursive_directory_iterator(); ++it) {
-    if (std::filesystem::is_regular_file(it->status())) {
-      auto relative_path = std::filesystem::relative(it->path(), root_path);
-      auto jt = relative_path.begin();
-      if (jt == relative_path.end()) {
-        continue;
-      }
-      if (is_scan_ignored(relative_path)) {
-        continue;
-      }
-      auto rel_str = relative_path.string();
-      switch (classify_scanned_file(rel_str)) {
-      case ScanKind::animation:
-        theme.add_animation_path(rel_str);
-        break;
-      case ScanKind::font:
-        theme.add_font_path(rel_str);
-        break;
-      case ScanKind::text:
-        add_text_lines_from_file(theme, it->path());
-        break;
-      case ScanKind::audio:
-        theme.add_audio_path(rel_str);
-        break;
-      case ScanKind::image:
-        theme.add_image_path(rel_str);
-        break;
-      }
+  // A hierarchy theme is one directory's OWN files (recursive=false); the legacy
+  // string-form `scan` and the creator's folder refresh walk the whole subtree.
+  std::vector<std::filesystem::path> files;
+  if (recursive) {
+    for (auto it = std::filesystem::recursive_directory_iterator(root_path);
+         it != std::filesystem::recursive_directory_iterator(); ++it) {
+      files.push_back(it->path());
+    }
+  } else {
+    for (auto it = std::filesystem::directory_iterator(root_path);
+         it != std::filesystem::directory_iterator(); ++it) {
+      files.push_back(it->path());
+    }
+  }
+  for (const auto& entry : files) {
+    if (!std::filesystem::is_regular_file(entry)) {
+      continue;
+    }
+    auto relative_path = std::filesystem::relative(entry, root_path);
+    if (relative_path.begin() == relative_path.end()) {
+      continue;
+    }
+    if (is_scan_ignored(relative_path)) {
+      continue;
+    }
+    auto rel_str = relative_path.string();
+    switch (classify_scanned_file(rel_str)) {
+    case ScanKind::animation:
+      theme.add_animation_path(rel_str);
+      break;
+    case ScanKind::font:
+      theme.add_font_path(rel_str);
+      break;
+    case ScanKind::text:
+      add_text_lines_from_file(theme, entry);
+      break;
+    case ScanKind::audio:
+      theme.add_audio_path(rel_str);
+      break;
+    case ScanKind::image:
+      theme.add_image_path(rel_str);
+      break;
     }
   }
 }

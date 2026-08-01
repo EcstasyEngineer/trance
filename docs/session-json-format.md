@@ -95,7 +95,43 @@ Top level (`trance_pb::Session`, trance.proto:275):
 | `playlist` | object: name → playlist item | `Session.playlist` (map) |
 | `program_map` | object: name → program | `Session.program_map` |
 | `theme_map` | object: name → theme | `Session.theme_map` |
+| `theme_scan_root` | string **or** object, optional | no proto field — loader expansion, see below |
 | `variable_map` | object: name → variable | `Session.variable_map` |
+
+**`theme_scan_root`** makes the theme SET itself derived from a directory tree, rather
+than a fixed manifest. Two forms:
+
+```json
+"theme_scan_root": "."                              // auto-rescan ON (the default)
+"theme_scan_root": { "dir": ".", "auto_rescan": false }
+```
+
+With it set and `auto_rescan` on, every load re-derives which directories are themes: a
+folder added since the last save **becomes a theme**, enabled at weight 1 in every program
+(and only if that program has no row for the name already — a duplicate row would make the
+theme's effective weight order-dependent). This is the theme-level half of the
+inverted-persistence rule that `scan.exclude` (§3.3) provides at the file level — the
+session records what to leave OUT, so content that appears on disk is IN by default.
+
+Discovery **only ever adds**. A scan theme whose directory has gone missing is deliberately
+left alone rather than removed: "the folder was deleted" and "the folder is not mounted
+right now" are indistinguishable from here, and removing it would discard that theme's
+weight, pin, `inherit` flag and exclusion list on the next save — unrecoverably, and
+triggered by nothing more deliberate than launching on a laptop with a drive unplugged. The
+cost is only untidiness: a genuinely deleted folder leaves a theme that expands to nothing
+(so draws nothing) until it is removed in the F2 Themes section.
+
+Without it, `scan` keeps each *existing* theme's contents current but a brand-new folder
+stays invisible until someone regenerates the session by hand. That asymmetry is the bug
+this key exists to remove: the cold-start scrape writes `"theme_scan_root": "."` so a
+generated session is live from creation.
+
+`auto_rescan: false` freezes the theme LIST while leaving each theme's own `scan` live —
+new *files* still appear, new *folders* do not.
+
+Only ADDs and provably-dead removals happen. Themes with explicit media lists and no
+`scan` entry are never touched, and an existing theme keeps its weight, pin, `inherit` and
+`exclude` settings across a rescan because all of those are keyed by theme name.
 
 ### 3.1 Playlist item (`trance_pb::PlaylistItem`)
 
@@ -170,6 +206,38 @@ A pool that sums to **0** is the magic empty state: `validate_program` rewrites 
 all-zero theme pool to every theme at weight 1, and an all-zero *unpinned* visual pool
 to the default visual types.
 
+**A theme's `random_weight` does two jobs.** Besides its share of the theme-rotation
+lottery, it is also that theme's **tier weight** when its content is inherited by a
+descendant (`scan.inherit`, §3.3). Both answer the same question — how much do I want to
+see this — so they are deliberately one number rather than two.
+
+Inside an inheriting theme, selection picks the **source tier first, by weight**, then an
+image within that tier. It is *not* a flat draw over the merged pool. This is what makes
+the weights mean what they appear to mean: a flat union samples by raw file count, so with
+5 images in `a/b` (weight 4) and 5 in `a` (weight 1) a flat draw gives 50/50 and the
+weights are discarded entirely — and a 10-image folder inheriting a 280-image parent shows
+the parent ~97% of the time no matter how it is weighted. Directory size would silently
+override intent. With tiered selection the same 4:1 gives ~80/20 (measured 81.4/18.6 over
+2046 picks), independent of how many files each folder happens to hold.
+
+Tiers come from the inheritance chain in pool order — tier 0 is the theme's own content,
+then each ancestor — and weights are normalized over whichever tiers the chain actually
+reaches. If `spam` (20) inherits `hypno` (4) but `hypno` does not inherit the root, `spam`
+draws 83%/17% from the two tiers present, not 80/16/4.
+
+Two behaviours worth stating because they are not derivable from the above:
+
+- An ancestor whose theme carries **no rotation weight, or is switched off entirely, still
+  contributes its tier at weight 1** rather than 0. Inheriting a folder is a separate,
+  explicit choice from wanting that folder in rotation, so disabling it as a live theme
+  must not silently empty it out of its descendants' pools.
+- Tier weighting governs the mix **within one theme's pool**, not what is on screen. The
+  engine keeps two themes live and a pinned theme holds only one of the two slots, so the
+  visible mix is the tier distribution composed with the ordinary theme rotation.
+
+Only `image_path` is tier-weighted. Animations, text and audio still draw flat from the
+merged pool.
+
 **`pinned` means different things per pool.** A pinned *theme* is always one of the two
 live themes — presence, not rotation share — so it stays resident even at weight 0 and
 the weights only choose the other slot. A pinned *visual* is force-this-one: selection
@@ -181,15 +249,71 @@ falls through to the normal lottery rather than freezing).
 
 | Key | Type | Proto mapping |
 |---|---|---|
-| `scan` | string, root-relative directory, optional | no proto field — loader expansion, see below |
+| `scan` | string **or** object, optional | no proto field — loader expansion, see below |
 | `image_path` | array of root-relative paths | `Theme.image_path` |
 | `animation_path` | array | `Theme.animation_path` |
 | `font_path` | array | `Theme.font_path` |
 | `text_line` | array of strings; embedded `\n` = pre-split lines, as today | `Theme.text_line` |
 | `audio_path` | array of root-relative paths; precanned audio (mantras/cues) this theme owns — the grammar decides when/volume (issue #23) | `Theme.audio_path` |
 
-**`scan` semantics:** at load, the loader walks the directory with
-`search_resources(trance_pb::Theme&, root)` (`session.cpp`) and **appends** what it finds
+**`scan` has two forms.** A **string** is the legacy form and is unchanged: `"scan": "dir"`
+walks the whole subtree under `dir`, with no exclusions and no inheritance. An **object**
+is the hierarchy form:
+
+```json
+"scan": {
+  "dir": "hypno/spam",              // required, root-relative directory
+  "recursive": false,               // optional, DEFAULT false -- own files only
+  "inherit": false,                 // optional, DEFAULT false -- see below
+  "exclude": ["hypno/spam/x.jpg"]   // optional, root-relative paths held out
+}
+```
+
+The object form defaults to **non-recursive** because its premise is *one directory is one
+theme*: the cold-start scrape (§ below) emits one theme per directory that directly holds
+at least one file, so a recursive walk would make a parent theme swallow its children's
+content. Set `"recursive": true` for the legacy whole-subtree behaviour.
+
+**`inherit`** folds the theme named by this theme's parent DIRECTORY into its pool, and it
+**composes transitively**: `hypno/spam` reaches the root's loose files only if `hypno`
+inherits too. Turning it off everywhere makes each theme exactly its own folder; turning it
+on everywhere makes each theme its own folder plus its whole ANCESTOR chain; anything
+between is reachable one flag at a time.
+
+Note this is *not* the same as the pre-hierarchy behaviour, and cannot be: the old scrape
+gave `hypno` its entire SUBTREE (everything under `hypno/**`) plus the root's loose files,
+whereas inheritance only ever flows DOWNWARD from ancestors. A theme never picks up its
+descendants or its siblings. To get the old whole-subtree pool for one theme, use
+`"recursive": true` on that theme instead.
+
+Directories with no theme of their own (pure containers) are
+skipped, so an intermediate container never breaks a chain. The set of themes is identical
+either way — only pool composition changes — so toggling `inherit` can never strand a
+saved per-theme weight. Resolution happens at load, after every theme exists, so the
+runtime never sees the distinction.
+
+**`exclude`** inverts persistence: a scan theme records what to leave OUT, so a file added
+to the folder later is picked up with no edit. This is the point of the object form — a
+frozen `image_path` list silently ignores everything added after it was written. Paths are
+compared post-rebase (root-relative, the same form every other reference uses). Exclusions
+naming paths the scan no longer produces are dropped on save rather than accumulating. A
+theme that is mostly-excluded is the wrong shape for this: convert it to an explicit
+`image_path` list instead (the F2 Themes section offers exactly that).
+
+Inherited content is **tier-weighted, not merged flat**: selection picks the source theme
+by its `random_weight` first and an image within it second, so a small folder inheriting a
+large one is not swamped by raw file count. See "Weights are raw and unnormalized" in §3.2
+for the full rule, including what happens when an ancestor is switched off.
+
+**`/root/`** is a reserved theme name for loose files sitting directly at the scan root. A
+path component can never contain a slash, so it cannot collide with a real directory's
+theme name. It is a first-class theme with its own rotation weight — it replaces the
+retired `/wildcards/` pseudo-theme, which was merged into every other theme and then
+erased, diluting every theme with the same content and (because no single directory then
+reproduced a theme) disabling `scan` persistence for the whole folder.
+
+At load, the loader walks the directory with
+`search_resources(trance_pb::Theme&, root, recursive)` (`session.cpp`) and **appends** what it finds
 to the explicit lists above (explicit entries first, scan results after, scan order =
 directory-walk order). Path results are rebased onto the scan directory before they land
 in trance_pb, so they are root-relative like every other reference (§1) — a `scan` of
@@ -204,7 +328,7 @@ themes are resolved per load — the manifest does not pin the media list; insid
 just the path ones: `.txt` files become `text_line` entries (one per non-blank line,
 uppercased and split at the space nearest the middle — the same treatment the cold-start
 directory scan has always applied), and audio files become `audio_path`. A theme whose
-content is entirely scan-derived therefore round-trips as just `{"scan": "<dir>"}` — the
+content is entirely scan-derived therefore round-trips as just its `scan` entry — the
 saver writes no `image_path`/`animation_path`/`font_path`/`text_line`/`audio_path` for it,
 because reloading re-derives all five and writing them would double every entry.
 
@@ -226,12 +350,22 @@ media. The only files a scan skips are session machinery (`.json`, `.session`, `
 `.cfg`, `.trance`) and dotfiles / anything under a dotted directory (`.git`, `.DS_Store`),
 so a session file living next to its media never becomes a phantom image.
 
-**Cold start.** The no-arg bootstrap (no `./default.json`, no `./default.session`) scans
-the working directory, builds one theme per immediate subdirectory, and writes each as a
-`scan` theme — so `default.json` stays a folder reference and picks up media added later.
-Loose files at the root are the `/wildcards/` pseudo-theme and merge into every theme; when
-that happens no single directory reproduces a theme's content, so the bootstrap falls back
-to writing explicit lists.
+**Cold start.** The no-arg bootstrap (no `./default.json`, no `./default.session`) scans the
+working directory and builds **one theme per directory that directly contains at least one
+file**, at any depth, named by its root-relative path (`hypno`, `hypno/spam`). A directory
+holding only other directories is a pure container and produces no theme. Loose files at the
+root become the reserved `/root/` theme.
+
+Every theme is written as a `scan` theme, and the session also gets
+`"theme_scan_root": "."` (§3) — so `default.json` stays a folder reference in both senses:
+each theme tracks its own directory's files, and the theme SET itself is re-derived on every
+load, so a directory added later becomes a theme without touching the file.
+
+There is no fallback to explicit lists. The retired `/wildcards/` pseudo-theme used to merge
+loose root files into every theme, which meant no single directory reproduced a theme's
+content and the bootstrap had to freeze explicit lists — the exact behaviour that made media
+added later invisible. With no cross-theme merge, every theme is exactly one directory's own
+files and is always reproducible from it.
 
 ### 3.4 Variable (`trance_pb::Variable`)
 

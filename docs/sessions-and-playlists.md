@@ -67,9 +67,12 @@ shipping a self-contained bundle. (Archive export is currently a stub —
    item. A program with no usable themes or no visual weights is given defaults
    (`validate_program`, `:108`).
 3. On a load failure, `main()` falls back to `get_default_session()` plus
-   `search_resources()`, which walks the directory next to the binary and builds a
-   theme per subfolder (a `wildcards/` folder is merged into all themes). That is
-   how `trance.exe` runs against a bare folder of images with no session file.
+   `search_resources()`, which walks the directory next to the binary and builds one
+   theme per directory that DIRECTLY contains at least one file, at any depth, named by
+   its root-relative path (`hypno`, `hypno/spam`). Loose files at the root become the
+   reserved `/root/` theme. Nothing is merged across themes — the old `/wildcards/`
+   merge is retired. That is how `trance.exe` runs against a bare folder of images with
+   no session file.
 
 The session's root directory is the parent of the session path; all media paths
 resolve against it.

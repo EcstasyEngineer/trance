@@ -66,7 +66,9 @@ namespace
 }
 
 ThemeBank::ThemeBank(const std::string& root_path, const trance_pb::Session& session,
-                     const trance_pb::System& system, const trance_pb::Program& program)
+                     const trance_pb::System& system, const trance_pb::Program& program,
+                     const std::map<std::string, std::vector<std::pair<std::string, uint32_t>>>&
+                         theme_tiers)
 : _root_path{root_path}
 , _image_cache_size{system.image_cache_size()}
 , _swaps_to_match_theme{0}
@@ -83,6 +85,15 @@ ThemeBank::ThemeBank(const std::string& root_path, const trance_pb::Session& ses
   }
   for (const auto& path : all_image_paths) {
     _all_images.push_back({path, 0, {}});
+  }
+  // path -> index, built once. The tier construction below needs this lookup per image
+  // OCCURRENCE across every theme's resolved pool; doing it by linear scan of _all_images
+  // is quadratic and lands in the hundreds of millions of string compares on a real
+  // corpus (18k images, themes whose pools repeat their ancestors' paths).
+  std::unordered_map<std::string, std::size_t> image_index;
+  image_index.reserve(_all_images.size());
+  for (std::size_t i = 0; i < _all_images.size(); ++i) {
+    image_index[_all_images[i].path] = i;
   }
   _all_animations.insert(_all_animations.begin(), all_animation_paths.begin(),
                          all_animation_paths.end());
@@ -118,6 +129,50 @@ ThemeBank::ThemeBank(const std::string& root_path, const trance_pb::Session& ses
       if (images.count(_all_images[i].path)) {
         _themes.back()->load_shuffler.modify(i, last_image_count);
         _themes.back()->image_shuffler.modify(i, last_image_count);
+      }
+    }
+
+    // Split the pool into tier shufflers. The tier spans describe image_path POSITIONS,
+    // which is why this walks the repeated field rather than the deduped `images` set --
+    // the set has neither order nor multiplicity. Only built when a theme actually has
+    // more than one tier; a single-tier theme is exactly image_shuffler and gets nothing.
+    auto tiers_it = theme_tiers.find(pair.first);
+    if (tiers_it != theme_tiers.end() && tiers_it->second.size() > 1) {
+      // Path -> index in _all_images, so each tier's members can be enabled by index.
+      std::size_t offset = 0;
+      for (const auto& tier : tiers_it->second) {
+        Shuffler tier_shuffler{_all_images.size()};
+        std::unordered_set<std::size_t> members;
+        for (uint32_t n = 0; n < tier.second && offset < static_cast<std::size_t>(
+                                                     theme.image_path_size());
+             ++n, ++offset) {
+          auto index_it = image_index.find(theme.image_path(static_cast<int>(offset)));
+          if (index_it == image_index.end()) {
+            continue;
+          }
+          // insert(), not unconditional modify(): the same path listed twice inside one
+          // tier would otherwise be bumped to a higher priority than its peers and, since
+          // next() draws from the top level only, monopolize that tier until recency
+          // pulled it back down.
+          if (members.insert(index_it->second).second) {
+            tier_shuffler.modify(index_it->second, last_image_count);
+          }
+        }
+        // An empty tier (a parent folder with no images of its own) would otherwise be
+        // selectable and hand back nothing.
+        if (!members.empty()) {
+          theme_info.tier_shufflers.push_back(std::move(tier_shuffler));
+          theme_info.tier_sources.push_back(tier.first);
+          theme_info.tier_weights.push_back(1);
+          theme_info.tier_members.push_back(std::move(members));
+        }
+      }
+      // One surviving tier is not a hierarchy -- drop back to the flat shuffle.
+      if (theme_info.tier_shufflers.size() < 2) {
+        theme_info.tier_shufflers.clear();
+        theme_info.tier_sources.clear();
+        theme_info.tier_weights.clear();
+        theme_info.tier_members.clear();
       }
     }
     for (std::size_t i = 0; i < _all_animations.size(); ++i) {
@@ -208,6 +263,22 @@ void ThemeBank::set_program(const trance_pb::Program& program)
       _themes[index]->enabled = true;
     }
   }
+  // Refresh every tier's weight from the program's rotation weights. Deliberately the
+  // SAME number the theme-rotation lottery uses: "how much do I want to see this" is one
+  // idea, and a second per-theme knob would be one more slider on an already-crowded row
+  // for a distinction nobody has needed yet. A tier whose source theme carries no weight
+  // here (or is not enabled at all) falls back to 1 rather than 0 -- an inherited tier
+  // going silent just because the parent is switched OFF as a live theme would be a
+  // surprise, since inheriting it is a separate, explicit choice.
+  for (auto& theme : _themes) {
+    std::lock_guard<std::mutex> lock{theme->load_mutex};
+    for (std::size_t i = 0; i < theme->tier_sources.size(); ++i) {
+      auto weight_it = _enabled_theme_weights.find(theme->tier_sources[i]);
+      theme->tier_weights[i] = weight_it != _enabled_theme_weights.end() && weight_it->second
+          ? weight_it->second
+          : 1;
+    }
+  }
   for (uint32_t i = 1; i < _active_themes.size(); ++i) {
     auto theme = _active_themes[i].load();
     if (theme && !theme->enabled) {
@@ -245,7 +316,35 @@ Image ThemeBank::get_image(bool alternate)
   Image image;
   {
     std::lock_guard<std::mutex> lock{theme.load_mutex};
-    index = theme.image_shuffler.next();
+    // Tiered pool: pick the SOURCE by rotation weight first, then an image within it.
+    // Without this the union is sampled by raw file count, so the mix is decided by how
+    // many files each folder happens to hold instead of by the weights -- with two
+    // equal-sized folders weighted 4:1 you get 50/50, and a small folder inheriting a
+    // large one is drowned entirely.
+    //
+    // Falls through to the flat shuffle when the theme has no tiers, and when every tier
+    // weight is zero (rather than returning nothing at all).
+    index = static_cast<std::size_t>(-1);
+    if (!theme.tier_shufflers.empty()) {
+      uint64_t total = 0;
+      for (auto weight : theme.tier_weights) {
+        total += weight;
+      }
+      if (total) {
+        auto r = random(static_cast<std::size_t>(total));
+        uint64_t running = 0;
+        for (std::size_t i = 0; i < theme.tier_shufflers.size(); ++i) {
+          running += theme.tier_weights[i];
+          if (static_cast<uint64_t>(r) < running) {
+            index = theme.tier_shufflers[i].next();
+            break;
+          }
+        }
+      }
+    }
+    if (index == static_cast<std::size_t>(-1)) {
+      index = theme.image_shuffler.next();
+    }
     if (index < _all_images.size() && _all_images[index].image) {
       do_video_upload(*_all_images[index].image);
       image = *_all_images[index].image;
@@ -265,6 +364,15 @@ Image ThemeBank::get_image(bool alternate)
     other_theme->image_shuffler.decrease(_last_images.back());
     if (_last_images.size() > last_image_count) {
       other_theme->image_shuffler.increase(_last_images.front());
+    }
+    // Tier shufflers need the identical treatment: they are the structures actually being
+    // drawn from now, so leaving them out would drop the anti-repeat entirely for every
+    // inheriting theme and let it show the same image back to back.
+    for (auto& tier : other_theme->tier_shufflers) {
+      tier.decrease(_last_images.back());
+      if (_last_images.size() > last_image_count) {
+        tier.increase(_last_images.front());
+      }
     }
   }
   if (_last_images.size() > last_image_count) {
@@ -523,12 +631,30 @@ void ThemeBank::do_load(ThemeInfo& theme)
         other_theme->load_shuffler.modify(index, -static_cast<int32_t>(last_image_count));
         std::lock_guard<std::mutex> lock{other_theme->load_mutex};
         other_theme->image_shuffler.modify(index, -static_cast<int32_t>(last_image_count));
+        // Strip it from the tier shufflers too, and ONLY from the tiers that own it --
+        // a tier left holding a dead index keeps offering an image that can never draw.
+        for (std::size_t t = 0; t < other_theme->tier_shufflers.size(); ++t) {
+          if (other_theme->tier_members[t].count(index)) {
+            other_theme->tier_shufflers[t].modify(index, -static_cast<int32_t>(last_image_count));
+          }
+        }
       }
     }
   }
   if (!image.failed) {
     std::lock_guard<std::mutex> lock{theme.load_mutex};
     theme.image_shuffler.increase(index);
+    // Tier shufflers must track residency exactly as the flat one does. The whole scheme
+    // rests on a LOADED image sitting one priority level above an unloaded one, so that
+    // next() -- which draws from the top level only -- returns something that is actually
+    // in RAM. Without this a tier offers its entire membership regardless of the cache,
+    // and on any theme larger than the cache most picks land on an unloaded index and
+    // get_image falls back to repeating the previous frame.
+    for (std::size_t t = 0; t < theme.tier_shufflers.size(); ++t) {
+      if (theme.tier_members[t].count(index)) {
+        theme.tier_shufflers[t].increase(index);
+      }
+    }
   }
   // Failed loads still count towards loaded_size/loaded_index so the theme-swap
   // bookkeeping (all_loaded / do_unload) stays symmetric; they just never
@@ -549,6 +675,13 @@ void ThemeBank::do_unload(ThemeInfo& theme)
   if (!image.failed) {
     std::lock_guard<std::mutex> lock{theme.load_mutex};
     theme.image_shuffler.decrease(index);
+    // Mirror of the increase in do_load -- an unloaded image drops back below the loaded
+    // ones so the tier stops offering it.
+    for (std::size_t t = 0; t < theme.tier_shufflers.size(); ++t) {
+      if (theme.tier_members[t].count(index)) {
+        theme.tier_shufflers[t].decrease(index);
+      }
+    }
   }
   if (!--image.use_count && image.image) {
     _purge_mutex.lock();

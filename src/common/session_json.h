@@ -1,8 +1,11 @@
 #ifndef TRANCE_SRC_COMMON_SESSION_JSON_H
 #define TRANCE_SRC_COMMON_SESSION_JSON_H
+#include <cstdint>
 #include <map>
+#include <set>
 #include <string>
 #include <utility>
+#include <vector>
 
 // JSON <-> trance_pb mapping for session.json / system.json, per the normative spec
 // docs/session-json-format.md. The in-memory model stays trance_pb::Session /
@@ -27,6 +30,47 @@ struct SessionJsonSidecar
   std::map<std::pair<std::string, std::string>, std::string> pattern_file;
   // theme name -> scan directory (root-relative), when the theme used `scan`.
   std::map<std::string, std::string> theme_scan;
+  // Scan themes that walk the whole SUBTREE rather than just the directory's own files.
+  // True for the legacy string form (`"scan": "dir"`), false by default for the object
+  // form, whose whole point is that one directory is one theme.
+  std::set<std::string> theme_scan_recursive;
+  // Scan themes that fold their PARENT directory's theme pool into their own. Composes
+  // transitively through the chain: hypno/spam reaches the root's loose files only if
+  // hypno inherits too. Resolved at load (resolve_theme_inheritance) by unioning the
+  // parent's already-resolved pool, so the runtime never sees the distinction.
+  std::set<std::string> theme_inherit;
+  // theme name -> media paths (root-relative) held OUT of its scan expansion. Inverted
+  // persistence: a scan theme stores what to leave out, so a file dropped into the
+  // folder later is included automatically instead of being invisible until someone
+  // re-freezes the list. Paths that no longer exist in the expansion are dropped on
+  // save rather than accumulating forever.
+  std::map<std::string, std::vector<std::string>> theme_exclude;
+  // Media directory the theme SET itself is derived from (root-relative; "." is the
+  // session root). Empty means the session's themes are a fixed manifest -- the
+  // pre-hierarchy behaviour, and what a hand-written session gets unless it opts in.
+  std::string theme_scan_root;
+  // With a scan root set, re-derive the theme set on every load: directories that have
+  // appeared become themes, directories that are gone stop being themes. ON by default
+  // for any session that has a scan root, because the entire point is that content added
+  // on disk shows up without editing the session. Turning it off freezes the theme set
+  // while leaving each existing theme's own `scan` live.
+  bool theme_scan_root_auto = true;
+  // theme name -> the tier layout of its resolved image pool, in pool order:
+  // {source theme name, how many images that source contributed}. Tier 0 is always the
+  // theme's own content; the rest are its ancestor chain, in the order inheritance folded
+  // them in. Because the union APPENDS each ancestor's already-resolved pool, these spans
+  // are contiguous, so the runtime can split image_path back into tiers by offset without
+  // storing per-image tags.
+  //
+  // This is what lets selection honour the rotation weights INSIDE an inherited pool: a
+  // flat union samples by raw file count, so a small folder inheriting a big one is
+  // swamped regardless of how the weights are set. Not persisted -- it is re-derived on
+  // every load, like the union itself.
+  std::map<std::string, std::vector<std::pair<std::string, uint32_t>>> theme_tiers;
+  // theme name -> how much media the theme had BEFORE inheritance was folded in. Not
+  // persisted; recorded during load purely so the UI can show "304 -> 484 (+180)"
+  // against a pool that has already been unioned.
+  std::map<std::string, uint32_t> theme_own_count;
 };
 
 // Loads a session.json at `path`. `root` is the session's media root (the parent

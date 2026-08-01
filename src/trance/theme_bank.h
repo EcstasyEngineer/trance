@@ -5,10 +5,13 @@
 #include <trance/media/async_streamer.h>
 #include <array>
 #include <atomic>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #pragma warning(push, 0)
@@ -30,8 +33,14 @@ namespace trance_pb
 class ThemeBank
 {
 public:
+  // `theme_tiers` (from SessionJsonSidecar) describes how each theme's image pool splits
+  // into its own content plus inherited ancestor content, as contiguous {source, count}
+  // spans in pool order. Pass an empty map for the flat behaviour: every pool is then one
+  // tier and selection is a plain shuffle over the union.
   ThemeBank(const std::string& root_path, const trance_pb::Session& session,
-            const trance_pb::System& system, const trance_pb::Program& program);
+            const trance_pb::System& system, const trance_pb::Program& program,
+            const std::map<std::string, std::vector<std::pair<std::string, uint32_t>>>&
+                theme_tiers = {});
 
   const std::string& get_root_path() const;
   void set_program(const trance_pb::Program& program);
@@ -106,7 +115,8 @@ private:
     std::vector<std::size_t> loaded_index;
     // Shuffler for loading images; maps onto all_images.
     Shuffler load_shuffler;
-    // Shuffler for picking loaded images; also maps onto all_images.
+    // Shuffler for picking loaded images; also maps onto all_images. Stays the union of
+    // every tier, so loading, recency bookkeeping and the no-tiers case all use it.
     Shuffler image_shuffler;
     // Shuffler for choosing animations. Maps on to all_animations.
     Shuffler animation_shuffler;
@@ -123,6 +133,36 @@ private:
     // Theme name (for the debug overlay). Value-initialized by the aggregate
     // construction in the constructor and assigned immediately afterwards.
     std::string name;
+
+    // --- Tiered selection. Declared LAST on purpose: ThemeInfo is aggregate-initialized
+    // positionally in the constructor, so a field inserted higher up silently shifts
+    // every initializer after it. Trailing members are value-initialized, which is
+    // exactly right here (empty = "this theme has no tiers").
+    //
+    // One shuffler per TIER of the pool (tier 0 = the theme's own images, the rest its
+    // ancestor chain), each covering only that tier's indices. Empty when the theme
+    // inherits nothing, in which case image_shuffler is used directly.
+    //
+    // Why tiers exist: a plain union samples by raw file count, so a 10-image folder
+    // inheriting a 280-image parent shows the parent ~97% of the time no matter what the
+    // rotation weights say -- directory size silently overrides intent. Picking a tier by
+    // weight FIRST and an image within it second makes the weights mean what they look
+    // like they mean.
+    std::vector<Shuffler> tier_shufflers;
+    // Parallel to tier_shufflers: the source theme each tier came from, so set_program
+    // can re-read its rotation weight without rebuilding anything.
+    std::vector<std::string> tier_sources;
+    // Parallel to tier_shufflers: each tier's current weight, refreshed by set_program.
+    std::vector<uint32_t> tier_weights;
+    // Parallel to tier_shufflers: which _all_images indices each tier owns.
+    //
+    // Load/unload/failure bookkeeping MUST be applied only to the tiers that actually
+    // contain the index. The flat image_shuffler keeps loaded images exactly one priority
+    // level above unloaded ones, and Shuffler::next() returns a member of the HIGHEST
+    // level -- so a stray +1 on an index a tier does not own would leave it above that
+    // tier's own failed members (which sit at 0 after their base priority is stripped)
+    // and let another tier's image be drawn from it.
+    std::vector<std::unordered_set<std::size_t>> tier_members;
   };
 
   // Data for each possible image.

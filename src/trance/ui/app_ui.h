@@ -13,17 +13,25 @@
 // One window ("trance", top-left) with collapsing sections:
 //   - Status: fps / themes / bed summary, reused from the same accessors
 //     draw_debug_overlay() uses (ThemeBank::debug_snapshot, Program::entrainment).
-//   - Visuals: the 8 built-ins (force-now button + a read-only expander showing the
-//     v3 grammar source, with Copy -- the modding-language reference) and the active
-//     program's custom patterns (editable name + source, live patternv3::parse lint,
-//     Apply/Force now/Remove, "+ New pattern"). Forcing goes through
+//   - Visuals: the WHOLE visual lottery in one list, built-ins and custom patterns
+//     alike, since Director::change_visual draws from both at once. Every row is the
+//     same shape as a Themes row: a weight row (on/off, pin, weight, effective share)
+//     followed by the name as an expander. A built-in's expander holds Force now, Copy
+//     and its read-only v3 grammar source (the modding-language reference); a custom
+//     pattern's holds its editable name + word-wrapped source, live patternv3::parse
+//     lint, Apply/Force now/Remove. A built-in with no visual_type row at all still
+//     draws (at weight 0) and materializes its entry on first touch, so a session that
+//     omits one can still force it and add it back. Forcing goes through
 //     Director::force_builtin_visual / force_pattern_from_source (the same plumbing
 //     --visual/--pattern use); Apply fires on_program_change so Director re-parses.
 //     Custom-pattern edits land in the proto's name/source_text, which Save writes out
 //     as patterns/<slug>.pattern sidecars -- no extra persistence plumbing.
-//   - Program: live edit of the ACTIVE program (global fps, per-visual-type weight
-//     rows, text/spiral colours). Mutates the in-memory session proto in place, then
-//     fires on_program_change so ThemeBank/Director pick it up.
+//   - Program: live edit of the ACTIVE program -- what is program-wide and has no
+//     per-visual row of its own: global fps and the text/spiral colours. (The
+//     per-visual-type weight rows used to be here too, duplicating the Visuals list of
+//     the same built-ins; they moved to Visuals, next to the customs they share a
+//     lottery with.) Mutates the in-memory session proto in place, then fires
+//     on_program_change so ThemeBank/Director pick it up.
 //   - Themes: per-theme weight rows (the program's enabled_theme entries; off = weight
 //     0, entries are kept -- matching ThemeBank::set_program's semantics) + per-theme
 //     image multiselect editing Theme::image_path. Content edits need a restart:
@@ -152,8 +160,20 @@ public:
 private:
   void draw_status_section(Director& director, Audio* audio, const ThemeBank& themes);
   void draw_visuals_section(Director& director);
+  // The body of one built-in's expander: Force now, Copy, and its read-only v3 source
+  // (word-wrapped). Shared by the editable path and the read-only one taken when the
+  // active program is the built-in default.
+  void draw_builtin_body(Director& director, uint32_t type, const char* blurb);
   void draw_program_section();
   void draw_themes_section();
+  // The theme named by `name`'s parent DIRECTORY, skipping directories that have no
+  // theme of their own; "" when nothing is above it. Mirrors the loader's rule
+  // (resolve_theme_inheritance, session_json.cpp) so the panel and the next load agree.
+  std::string theme_parent(const std::string& name) const;
+  // The pool size `name` WOULD have on the next load given the inherit flags as they
+  // stand. Recomputed from the sidecar's per-theme own counts rather than measured off
+  // theme_map, which already has the last load's unions folded into it.
+  uint32_t predicted_pool_size(const std::string& name) const;
   void draw_session_section();
   void draw_overlay_section();
   void draw_entrainment_section(Audio* audio);
@@ -253,10 +273,13 @@ private:
   // weight instead of resetting it to 1 (off keeps the enabled_theme entry at
   // weight 0, matching ThemeBank::set_program's semantics).
   std::map<std::string, uint32_t> _theme_last_weight;
-  // The same stash for visual rows, keyed by weight_row_key(): "b<type>" for a
-  // built-in visual_type entry, "c<name>" for a custom pattern. Names, not indices:
-  // a Remove shifts every row below it, and a stale index would restore the wrong
-  // row's weight.
+  // The same stash for visual rows, keyed by visual_row_key(): "b<row index>" for a
+  // built-in visual_type entry, "c<name>" for a custom pattern. Built-ins key on the
+  // ROW INDEX because duplicate entries of one type are legal and a type-derived key
+  // would make the pair share a stash slot; customs key on the NAME because a Remove
+  // shifts every row below it and a stale index would restore the wrong row's weight.
+  // (A built-in with no row yet is drawn under a transient "bt<type>" key until its
+  // entry materializes -- see the second pass in draw_visuals_section.)
   std::map<std::string, uint32_t> _visual_last_weight;
 
   // In-flight "animate the slider to 0" tweens from the off button, keyed the same
