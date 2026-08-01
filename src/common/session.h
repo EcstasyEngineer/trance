@@ -2,11 +2,8 @@
 #define TRANCE_SRC_COMMON_SESSION_H
 #include <map>
 #include <string>
-#include <vector>
 
 struct SessionJsonSidecar;
-
-std::string make_relative(const std::string& from, const std::string& to);
 
 namespace trance_pb
 {
@@ -16,12 +13,6 @@ namespace trance_pb
   class System;
   class Theme;
 }
-
-bool is_image(const std::string& path);
-bool is_animation(const std::string& path);
-bool is_font(const std::string& path);
-bool is_text_file(const std::string& path);
-bool is_audio_file(const std::string& path);
 
 bool is_enabled(const trance_pb::PlaylistItem_NextItem& next_item,
                 const std::map<std::string, std::string>& variables);
@@ -62,7 +53,6 @@ void search_resources(trance_pb::Session& session, const std::string& root,
 // Walks ONE directory's own files -- a theme is a directory, so there is nothing to
 // recurse into: a subdirectory is its own theme.
 void search_resources(trance_pb::Theme& theme, const std::string& root);
-void search_audio_files(std::vector<std::string>& files, const std::string& root);
 
 // Loads system.json (session_json.h). A legacy .cfg proto path is rejected with a
 // fatal error -- trance.exe no longer reads proto system configs.
@@ -80,9 +70,10 @@ void validate_system(trance_pb::System& session);
 // the same treatment. Overload with `sidecar` also
 // returns the pattern-file/scan-directory sidecar (session_json.h) needed to save the
 // session back without freezing patterns inline or scan expansions into explicit
-// lists; the sidecar-less overload is for read-only callers who never save (playback).
-// save_session has no sidecar-less form for that reason: a save without the sidecar
-// silently rewrites the session with its patterns and scans frozen flat.
+// lists; every caller in the program uses that form, and the sidecar-less overload
+// survives only as convenience for tests that assert on validation and never save.
+// save_session has no sidecar-less form: a save without the sidecar silently rewrites
+// the session with its patterns and scans frozen flat.
 trance_pb::Session load_session(const std::string& path);
 trance_pb::Session load_session(const std::string& path, SessionJsonSidecar& sidecar);
 void save_session(const trance_pb::Session& session, const std::string& path,

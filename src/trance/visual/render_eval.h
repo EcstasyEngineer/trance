@@ -264,6 +264,30 @@ namespace pattern
     return e.run() != 0.0;
   }
 
+  // Which animation stream a `... anim` draw pulls from this frame. Pure -- no
+  // VisualRender -- for the same reason the evaluator above is: it is the one decision the
+  // draw side makes about animations, and it has to be assertable headlessly. It got that
+  // way by being wrong: the draw used to consult a RenderStmt field the parser never
+  // filled, so it always pulled from the primary streamer no matter what the Anim effect
+  // had loaded, and every test that "covered" it was inspecting the lowered effect list
+  // instead of the draw. eval_render() maps the result onto VisualRender::Anim.
+  //
+  // `Still` is not "the other animation" -- it is the `anim if [gate]` case, where the
+  // draw falls back to the still image for this frame.
+  enum class AnimDraw { Still, Primary, Alternate };
+
+  inline AnimDraw anim_draw_for(const RenderStmt& st, const Registers& regs,
+                                const NodeMap& nodes, const Cycler* root)
+  {
+    if (!st.has_anim) return AnimDraw::Still;
+    if (!st.anim_gate.empty() && !eval_cond_expr(st.anim_gate, regs, nodes, root)) {
+      return AnimDraw::Still;
+    }
+    // Follow the LOAD, don't re-decide: the Anim effect already resolved concept vs reward
+    // (and rolled `runtime`) at fire time. See Registers::anim_slot.
+    return regs.anim_slot == Slot::Alternate ? AnimDraw::Alternate : AnimDraw::Primary;
+  }
+
   // Run a pattern's data-driven render block for one frame: evaluate each statement's
   // [expr] params against live cycler state (via the node-id map / root) and the
   // registers, and emit the matching VisualRender draw call. This is the generic

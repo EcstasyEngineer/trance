@@ -20,9 +20,6 @@ struct CommandRuntimeState {
   // apply seam hides/shows the window, stashes/restores mute, and on show resumes
   // audio iff `paused` says play.
   bool hidden = false;
-  // Protocol-complete stub: the spec scopes actual intensity wiring as TBD, so the
-  // verb just stores the value here for a future consumer.
-  float intensity = 1.f;
   // Live overlay intent; the apply seam diffs these against what the window currently
   // has and pushes changes via apply_overlay_hints/clear_overlay_hints.
   bool overlay_on = false;

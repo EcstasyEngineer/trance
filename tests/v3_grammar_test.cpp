@@ -136,10 +136,9 @@ namespace
     num(st.shadow_zoom, 0.0, "shadow_zoom");
     num(st.speed, 0.0, "speed");
     // Boolean guards: just confirm they evaluate without any assumption on the result --
-    // `when`/anim_gate/anim_alt are conditions, not bounded numerics.
+    // `when`/anim_gate are conditions, not bounded numerics.
     (void)pattern::eval_cond_expr(st.when, regs, nodes, root);
     (void)pattern::eval_cond_expr(st.anim_gate, regs, nodes, root);
-    (void)pattern::eval_cond_expr(st.anim_alt, regs, nodes, root);
   }
 
   // Compile `root`, drive its cycler tree exactly like Director::update() does (one advance()
@@ -980,6 +979,48 @@ pattern beat_locked for beats 8 {
       auto anims = find_effects(ch.root, pattern::Effect::Kind::Anim);
       check(anims.size() == 1 && imgs.size() == 1 && anims[0]->slot_reg == imgs[0]->slot_reg,
             "alternate chance: a trailing `anim` load rides the same toggle as the pull");
+      // ...and the DRAW must follow that load. Asserting the load alone is what let the
+      // render side ignore it for as long as it did: the effect list said "alternate", the
+      // screen said "primary", and this test passed anyway because it never looked at the
+      // draw. anim_draw_for is the whole of that decision (render_eval.h).
+      auto stmts = images(ch);
+      check(stmts.size() == 1 && stmts[0]->has_anim,
+            "alternate chance: the trailing `anim` marks the draw as animated");
+      if (stmts.size() == 1) {
+        pattern::Registers regs;
+        pattern::NodeMap nodes;
+        regs.anim_slot = pattern::Slot::Alternate;
+        check(pattern::anim_draw_for(*stmts[0], regs, nodes, nullptr) ==
+                  pattern::AnimDraw::Alternate,
+              "alternate chance: an alternate-loaded animation is DRAWN from the alternate "
+              "theme");
+        regs.anim_slot = pattern::Slot::Primary;
+        check(pattern::anim_draw_for(*stmts[0], regs, nodes, nullptr) ==
+                  pattern::AnimDraw::Primary,
+              "alternate chance: a primary-loaded animation is DRAWN from the primary theme");
+      }
+    }
+
+    // `anim every Nth` gates on the still, and that gate outranks the slot: a gated-off
+    // frame draws the IMAGE, not the other theme's animation.
+    auto gated = parse("pattern p for 128f { every 64f { image concept anim every 2nd } }");
+    check(gated.ok, std::string("anim gate: parses") + (gated.ok ? "" : (" -- " + gated.error)));
+    if (gated.ok) {
+      auto stmts = images(gated);
+      check(stmts.size() == 1 && !stmts[0]->anim_gate.empty(),
+            "anim gate: `anim every 2nd` lowers to a gate expr on the draw");
+      if (stmts.size() == 1) {
+        pattern::Registers regs;
+        pattern::NodeMap nodes;
+        regs.anim_slot = pattern::Slot::Alternate;
+        regs.scalars[stmts[0]->anim_gate] = 0;
+        check(pattern::anim_draw_for(*stmts[0], regs, nodes, nullptr) == pattern::AnimDraw::Still,
+              "anim gate: a gated-off frame falls back to the still even with an alternate load");
+        regs.scalars[stmts[0]->anim_gate] = 1;
+        check(pattern::anim_draw_for(*stmts[0], regs, nodes, nullptr) ==
+                  pattern::AnimDraw::Alternate,
+              "anim gate: a gated-on frame still follows the load's slot");
+      }
     }
 
     // The standalone `anim alternate` load (for a burst `enter { }` theme pivot).

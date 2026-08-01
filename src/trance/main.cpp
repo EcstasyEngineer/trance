@@ -214,12 +214,6 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
     return command_protocol::format_err(cmd.error);
   }
   switch (cmd.verb) {
-  case Verb::kStart:
-    set_paused(state, audio, false);
-    return command_protocol::format_ok();
-  case Verb::kStop:
-    set_paused(state, audio, true);
-    return command_protocol::format_ok();
   case Verb::kPause:
     set_paused(state, audio, true);
     return command_protocol::format_ok();
@@ -244,16 +238,6 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
     // and mutes without touching the headset's helper window).
     state.hidden = cmd.verb == Verb::kHide;
     return command_protocol::format_ok();
-  case Verb::kIntensity:
-    state.intensity = cmd.number;
-    return command_protocol::format_ok();
-  case Verb::kSet:
-    // Settings surface is mid-migration (protobuf Program -> JSON; spec sec 4/9): no
-    // key is wired yet, so every key is "unknown" until that migration lands and picks
-    // the key names. Never a crash, per spec sec 3.
-    return command_protocol::format_err("unknown key: " + cmd.key);
-  case Verb::kGet:
-    return command_protocol::format_err("unknown key: " + cmd.key);
   case Verb::kLoadPattern: {
     std::ifstream f{cmd.value};
     if (!f) {
@@ -266,12 +250,6 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
     }
     return command_protocol::format_ok();
   }
-  case Verb::kLoadSession:
-    // No live session-swap path exists yet (play_session() binds one Session at startup;
-    // the F2 UI mutates it in place but nothing can replace it wholesale) -- protocol-
-    // complete stub until such a path exists.
-    return command_protocol::format_err("load session: not yet supported (no live session "
-                                        "reload path)");
   case Verb::kStatus: {
     auto uptime = std::chrono::duration_cast<std::chrono::seconds>(
                       std::chrono::steady_clock::now() - start_time)
@@ -917,6 +895,11 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   // still true; flip it so the async ThemeBank thread (gated on `running`) terminates
   // and the join below cannot hang.
   running = false;
+  // `running` alone is not enough: async_update() can be parked waiting for the render
+  // thread to advance the animation index, and this loop stops advancing it whenever
+  // playback is paused or hidden -- so quitting from a paused/Shift+F11 state used to
+  // hang the join forever and leave a zombie process.
+  theme_bank->cancel_async();
   async_thread.join();
   // No explicit window().close() here: ~OpenXrRenderer must run while the hidden
   // window's GL context is still alive -- the runtime holds the hDC/hGLRC handed
@@ -1022,9 +1005,9 @@ DEFINE_string(renderer, "",
              "mode (which SteamVR then mirrors as a flat virtual desktop).");
 DEFINE_int32(command_port, 0,
             "command channel (docs/spec-mcp-ambient-daemon.md): TCP port to bind on "
-            "127.0.0.1 for the localhost line-protocol control socket (start/stop/pause/"
-            "resume, overlay on|off|opacity, intensity, hide/show, set/get, load "
-            "pattern|session, status). 0 (default) disables the channel entirely -- no "
+            "127.0.0.1 for the localhost line-protocol control socket (pause/resume, "
+            "overlay on|off|opacity, hide/show, load pattern, status, ui on|off, "
+            "screenshot). 0 (default) disables the channel entirely -- no "
             "socket is opened. "
             "Loopback-only, no auth: binding to 127.0.0.1 is the whole trust boundary "
             "(spec sec 2/9), so only enable this on a machine you trust everyone on.");

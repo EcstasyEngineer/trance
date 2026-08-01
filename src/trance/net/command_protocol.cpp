@@ -64,11 +64,7 @@ namespace command_protocol
 
     const std::string& verb = tokens[0];
 
-    if (verb == "start" && tokens.size() == 1) {
-      cmd.verb = Verb::kStart;
-    } else if (verb == "stop" && tokens.size() == 1) {
-      cmd.verb = Verb::kStop;
-    } else if (verb == "pause" && tokens.size() == 1) {
+    if (verb == "pause" && tokens.size() == 1) {
       cmd.verb = Verb::kPause;
     } else if (verb == "resume" && tokens.size() == 1) {
       cmd.verb = Verb::kResume;
@@ -94,30 +90,12 @@ namespace command_protocol
       cmd.ok = false;
       cmd.error = "usage: overlay on|off|opacity VALUE";
       return cmd;
-    } else if (verb == "intensity" && tokens.size() == 2) {
-      if (!parse_float(tokens[1], cmd.number)) {
-        cmd.ok = false;
-        cmd.error = "intensity: not a number: " + tokens[1];
-        return cmd;
-      }
-      cmd.number = clamp01(cmd.number);
-      cmd.verb = Verb::kIntensity;
-    } else if (verb == "set" && tokens.size() == 3) {
-      cmd.verb = Verb::kSet;
-      cmd.key = tokens[1];
-      cmd.value = tokens[2];
-    } else if (verb == "get" && tokens.size() == 2) {
-      cmd.verb = Verb::kGet;
-      cmd.key = tokens[1];
     } else if (verb == "load" && tokens.size() == 3 && tokens[1] == "pattern") {
       cmd.verb = Verb::kLoadPattern;
       cmd.value = tokens[2];
-    } else if (verb == "load" && tokens.size() == 3 && tokens[1] == "session") {
-      cmd.verb = Verb::kLoadSession;
-      cmd.value = tokens[2];
     } else if (verb == "load") {
       cmd.ok = false;
-      cmd.error = "usage: load pattern|session FILE";
+      cmd.error = "usage: load pattern FILE";
       return cmd;
     } else if (verb == "ui" && tokens.size() == 2 && tokens[1] == "on") {
       cmd.verb = Verb::kUiOn;

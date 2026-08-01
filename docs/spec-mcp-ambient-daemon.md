@@ -4,9 +4,9 @@
 > daemon around agent-driven "conditioning moments" — a `Moment` proto, a `trigger()`
 > primitive, choreographed timed sequences compiled to transient cycler trees. That framing
 > is off base for this spec's scope. **The daemon is a dumb settings-shaped effector**: a
-> small, fixed verb set that starts/stops/pauses playback, flips an overlay, nudges a global
-> intensity knob, and gets/sets settings. It does not choreograph anything, does not know
-> what a "moment" is, and does not read context. Composition and choreography — if anyone
+> small, fixed verb set that pauses/resumes playback, flips an overlay, hides everything and
+> loads a pattern. It does not choreograph anything, does not know what a "moment" is, and
+> does not read context. Composition and choreography — if anyone
 > wants that — lives entirely in whatever connects to the socket. The in-process command
 > channel decision (localhost TCP, C++ reader thread, no bridge, no auth beyond loopback
 > binding) stands unchanged from the prior rescope; only the verb surface and its framing
@@ -14,7 +14,7 @@
 
 Trance becomes a **dumb effector**: a run mode whose playback is driven on demand by an
 external controller over a **local socket**, using a **small, fixed verb set**. Trance senses
-nothing and choreographs nothing; it exposes "do X now" / "set KEY to VALUE" verbs. Any
+nothing and choreographs nothing; it exposes "do X now" verbs. Any
 decision-making — including any agent — lives in whatever connects.
 
 **Scope decisions (unchanged from the prior rescope):** the whole feature lives **in the C++
@@ -98,14 +98,8 @@ scriptable from the shell (`echo | nc`, no JSON library needed on the client end
 $ echo "status" | nc -q1 127.0.0.1 9191
 ok visual=spiral_bloom bed=on overlay=off hidden=off uptime=142 themes=nature|nature|space|words
 
-$ echo "intensity 0.6" | nc -q1 127.0.0.1 9191
+$ echo "overlay opacity 0.6" | nc -q1 127.0.0.1 9191
 ok
-
-$ echo "set fps 30" | nc -q1 127.0.0.1 9191
-ok
-
-$ echo "get fps" | nc -q1 127.0.0.1 9191
-ok fps=30
 
 $ echo "frobnicate" | nc -q1 127.0.0.1 9191
 err unknown verb: frobnicate
@@ -123,11 +117,15 @@ Parse + dispatch happens in the drain loop (`main.cpp`'s per-frame loop, right a
 ## 4. Verb set (v0 — this is the whole surface)
 
 Playback lifecycle:
-- **`start`** — begin/resume playback from a stopped state (loads nothing new; use with
-  `load session` first if starting cold).
-- **`stop`** — halt playback, return to idle.
 - **`pause`** — freeze the current frame; program state retained.
 - **`resume`** — un-freeze after `pause`.
+
+> **Retired 2026-08-01.** This section used to also list `start` ("begin/resume playback from
+> a stopped state") and `stop` ("halt playback, return to idle"). The distinction was never
+> real: there is no idle state to return to — trance binds one Session at startup and the
+> runtime only freezes and unfreezes — so `start`/`stop` dispatched to the exact same two
+> lines as `resume`/`pause`. Two names for one behaviour is a promise the engine can't keep,
+> so the aliases are gone; `start` and `stop` now answer `err unknown verb`.
 
 Overlay (live, drives issue #27's click-through overlay on the running window):
 - **`overlay on`** / **`overlay off`** — apply/clear the overlay hints at runtime: on makes
@@ -142,7 +140,7 @@ make trance vanish instantly without killing the process**):
   alive. Idempotent: `hide` while already hidden is an `ok` no-op.
 - **`show`** — restore: window visible again, and the pause/mute state that existed *before*
   hiding comes back (a session that was playing unmuted resumes playing unmuted; one that
-  was already paused stays paused). A `pause`/`resume`/`start`/`stop` (or tray Paused
+  was already paused stays paused). A `pause`/`resume` (or tray Paused
   toggle) issued *while* hidden updates that restored pause state instead of being
   discarded — playback stays idle for as long as the window is hidden, and on `show` the
   last explicitly commanded pause state wins. Idempotent like `hide`.
@@ -162,22 +160,23 @@ make trance vanish instantly without killing the process**):
   after a failed ImGui init — no tray, no panel), a press while already hidden quits
   instead of restoring, so an orderly exit always remains reachable.
 
-Intensity:
-- **`intensity VALUE`** — `VALUE` in `0..1`, clamped. A single global multiplier concept, not
-  a per-effect control. Semantics are defined loosely on purpose: think "master zoom / alpha /
-  spiral-speed scaling," turning the whole visual up or down as one knob. Exact wiring (which
-  render params it scales, whether it's linear or curved) is **TBD at implementation time** —
-  this spec fixes the verb and the `0..1` contract, not the internal formula.
-
-Settings (generic get/set — key names were deliberately left unenumerated here pending the
-`.session`-to-JSON migration, which has since shipped; the key vocabulary is now the JSON
-schema in `docs/session-json-format.md`):
-- **`set KEY VALUE`** — set a settings key to a value; `ok` or `err unknown key: KEY`.
-- **`get KEY`** — read a settings key back; `ok KEY=VALUE` or `err unknown key: KEY`.
-
 Loading:
 - **`load pattern FILE`** — load/compile a single v3 pattern file as the active visual.
-- **`load session FILE`** — load a `*.session.json` as the active program.
+
+> **Retired 2026-08-01: `intensity`, `set`, `get`, `load session`.** All four shipped as
+> protocol-complete stubs and none of them ever gained a consumer. `set`/`get` answered
+> `err unknown key` for every key, `load session` answered `err not yet supported`, and
+> `intensity VALUE` was the worst of the four: it replied `ok` and wrote a field nothing
+> read, so a controller was told its command took effect when nothing had changed. A verb
+> that cannot succeed is not "protocol-complete", it is a lie in the reply grammar — the
+> four are deleted rather than left standing, and now answer `err unknown verb`.
+>
+> If they come back they come back with a consumer. `intensity` was specified as a single
+> global `0..1` multiplier over the visual (master zoom / alpha / spiral-speed scaling) with
+> the exact wiring left TBD; the settings vocabulary `set`/`get` would speak is the JSON
+> schema in `docs/session-json-format.md`; `load session` needs a live session-swap path,
+> which does not exist (`play_session()` binds one Session at startup and the F2 UI only
+> mutates it in place).
 
 Status:
 - **`status`** — single-line, parseable reply: current visual name, entrainment-bed state,
@@ -197,7 +196,7 @@ Debug/validation (same line protocol, not part of the settings surface proper):
 
 That's the entire v0 verb set. No `trigger`, no `Moment`, no choreography primitive — an
 agent or script that wants a "flash three images then fade to spiral" sequence composes it
-client-side out of repeated `set`/`intensity`/`load pattern` calls timed by the client, the
+client-side out of repeated `load pattern`/`overlay`/`pause` calls timed by the client, the
 same way a human operator would type them one at a time. Trance does not know what a sequence
 of commands "means."
 
@@ -207,7 +206,7 @@ of commands "means."
 
 `status` returns the single-line reply defined in §4 — deliberately minimal so
 it's grep/parse-friendly from a shell script without a JSON library. If richer introspection
-is needed later, that's a `get` key or a new verb, not a change to `status`'s shape.
+is needed later, that's a new verb, not a change to `status`'s shape.
 
 ---
 
@@ -229,16 +228,12 @@ parser has its own ctest (`tests/command_protocol_test.cpp`).
 
 1. **`CommandChannel`** + a `--command_port <port>` launch flag. Test with `netcat`: pipe a
    `status` line, get an `ok ...` reply. (No effects yet.)
-2. **Drain + verb dispatch** in `main.cpp`'s loop; wire `start`/`stop`/`pause`/`resume`.
+2. **Drain + verb dispatch** in `main.cpp`'s loop; wire `pause`/`resume`.
    Test each over the socket.
 3. **`overlay on|off` / `overlay opacity`** — wire to the live overlay toggle (#27):
    apply/clear the click-through/translucency hints on the running window.
-4. **`intensity VALUE`** — wire to whatever global scaling hook exists at implementation
-   time (see §4 note on TBD wiring).
-5. **`set KEY VALUE` / `get KEY`** — wire to the settings surface, now the JSON schema in
-   `docs/session-json-format.md`.
-6. **`load pattern FILE` / `load session FILE`** — reuse the existing load paths.
-7. **`status`** — single-line reply per §4/§5. <- **the v0 done-line: a controller drives
+4. **`load pattern FILE`** — reuse the existing load path.
+5. **`status`** — single-line reply per §4/§5. <- **the v0 done-line: a controller drives
    playback and reads status end-to-end over the socket.**
 
 ---
@@ -247,8 +242,8 @@ parser has its own ctest (`tests/command_protocol_test.cpp`).
 
 If an MCP client (Claude Desktop, or any other MCP host) should be able to drive trance, that
 is a **separate, external, thin MCP server process** — not built in this repo, not built by
-this spec. It maps MCP tool calls 1:1 onto the verbs in §4 (`start` tool -> `start` command,
-`set_intensity(value)` tool -> `intensity VALUE` command, etc.) and speaks the line protocol
+this spec. It maps MCP tool calls 1:1 onto the verbs in §4 (`pause` tool -> `pause` command,
+`hide` tool -> `hide` command, etc.) and speaks the line protocol
 in §3 to trance over the loopback socket, exactly like the `netcat`/pytest test clients in
 §6. An MCP-driven agent is not a special case inside trance — it is just another client of
 these verbs, indistinguishable on the wire from a shell script.
@@ -267,15 +262,14 @@ these verbs, indistinguishable on the wire from a shell script.
   boundary; not a named pipe / stdio. (Unchanged from the prior rescope.)
 - Protocol: **line-oriented plain text**, one command per line, one reply line per command —
   not JSON. Trivially scriptable with `echo`/`nc`.
-- **Fixed v0 verb set** (§4): `start`/`stop`/`pause`/`resume`, `overlay on|off`/
-  `overlay opacity`, `hide`/`show`, `intensity`, `set`/`get`, `load pattern`/`load session`,
-  `status`. No verb is added speculatively.
+- **Fixed v0 verb set** (§4): `pause`/`resume`, `overlay on|off`/`overlay opacity`,
+  `hide`/`show`, `load pattern`, `status`, plus the `ui`/`screenshot` debug pair. No verb is
+  added speculatively, and a verb that turns out to have no consumer is deleted rather than
+  left replying to nobody (§4's two retirement notes).
 - **`hide`/`show` is the silent-running primitive for MCP agents** (§4): an external
   controller that needs trance gone *now* (screen share starting, someone walks in) sends
   `hide` — one round-trip, no process kill, instant restore later with `show`.
 - **Overlay verbs drive issue #27's click-through overlay live**: `overlay on|off` /
   `overlay opacity` apply/clear the hints on the running window at runtime (same seam the
   F2 UI's Overlay section uses).
-- **Settings keys are the JSON schema's**, not a parallel vocabulary; this spec fixes the
-  `set KEY VALUE` / `get KEY` verb shape, not the key names.
 - **MCP integration is an external, separate process**, out of this repo's scope (§8).

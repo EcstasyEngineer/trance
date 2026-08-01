@@ -597,12 +597,7 @@ namespace
       if (scan->is_string()) {
         dir = scan->get<std::string>();
       } else if (scan->is_object()) {
-        // "recursive" is accepted and ignored on purpose. The one-day build between the
-        // folder hierarchy landing and this model WROTE `"recursive": true`, and an
-        // unknown key is a FATAL load error -- rejecting it would mean those sessions no
-        // longer open at all. There is one walk now, so the value has nothing to select.
-        // Never written back, so the key disappears on the first save.
-        check_unknown_keys(*scan, {"dir", "recursive", "inherit", "exclude"}, sp);
+        check_unknown_keys(*scan, {"dir", "inherit", "exclude"}, sp);
         const json* dir_value = find(*scan, "dir");
         if (!dir_value || !dir_value->is_string()) {
           throw std::runtime_error(sp + "/dir: expected a string");

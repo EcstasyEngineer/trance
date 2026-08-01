@@ -340,39 +340,34 @@ namespace
 
 } // anonymous namespace
 
-std::string make_relative(const std::string& from, const std::string& to)
-{
-  return std::filesystem::relative(to, from).string();
-}
-
-bool is_image(const std::string& path)
-{
-  return ext_is(path, "png") || ext_is(path, "bmp") || ext_is(path, "jpg") || ext_is(path, "jpeg");
-}
-
-bool is_animation(const std::string& path)
-{
-  // Should really check is_gif_animated(), but it takes far too long.
-  return ext_is(path, "webm") || ext_is(path, "gif");
-}
-
-bool is_font(const std::string& path)
-{
-  return ext_is(path, "ttf");
-}
-
-bool is_text_file(const std::string& path)
-{
-  return ext_is(path, "txt");
-}
-
-bool is_audio_file(const std::string& path)
-{
-  return ext_is(path, "wav") || ext_is(path, "ogg") || ext_is(path, "flac") || ext_is(path, "aiff");
-}
-
 namespace
 {
+  // The extension predicates behind classify_scanned_file, which is their only caller.
+  // There is deliberately no is_image(): "image" is the classifier's FALLTHROUGH, not a
+  // predicate -- see classify_scanned_file for why the list below is a dispatch and not a
+  // media allowlist.
+  bool is_animation(const std::string& path)
+  {
+    // Should really check is_gif_animated(), but it takes far too long.
+    return ext_is(path, "webm") || ext_is(path, "gif");
+  }
+
+  bool is_font(const std::string& path)
+  {
+    return ext_is(path, "ttf");
+  }
+
+  bool is_text_file(const std::string& path)
+  {
+    return ext_is(path, "txt");
+  }
+
+  bool is_audio_file(const std::string& path)
+  {
+    return ext_is(path, "wav") || ext_is(path, "ogg") || ext_is(path, "flac") ||
+        ext_is(path, "aiff");
+  }
+
   bool is_scan_ignored(const std::filesystem::path& relative_path)
   {
     // "If it's in the folder, that's the content" (#36) -- classification below has no
@@ -471,12 +466,6 @@ namespace
       }
       theme.add_text_line(split_text_line(line));
     }
-  }
-
-  bool is_theme_empty(const trance_pb::Theme& theme)
-  {
-    return !theme.image_path_size() && !theme.animation_path_size() && !theme.font_path_size() &&
-        !theme.text_line_size() && !theme.audio_path_size();
   }
 
   // The theme a scanned file belongs to: its IMMEDIATE parent directory, root-relative.
@@ -623,25 +612,6 @@ void search_resources(trance_pb::Theme& theme, const std::string& root)
     case ScanKind::image:
       theme.add_image_path(rel_str);
       break;
-    }
-  }
-}
-
-void search_audio_files(std::vector<std::string>& files, const std::string& root)
-{
-  std::filesystem::path root_path(root);
-  for (auto it = std::filesystem::recursive_directory_iterator(root_path);
-       it != std::filesystem::recursive_directory_iterator(); ++it) {
-    if (std::filesystem::is_regular_file(it->status())) {
-      auto relative_path = std::filesystem::relative(it->path(), root_path);
-      auto jt = relative_path.begin();
-      if (jt == relative_path.end()) {
-        continue;
-      }
-      auto rel_str = relative_path.string();
-      if (is_audio_file(rel_str)) {
-        files.push_back(rel_str);
-      }
     }
   }
 }

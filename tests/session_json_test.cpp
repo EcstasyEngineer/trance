@@ -823,36 +823,6 @@ namespace
     check(images.count("media/a.png") == 1, "the real image is untouched by the denylist");
   }
 
-  // One short-lived build wrote `"recursive": true` into the scan object. An unknown key
-  // is a FATAL load error, so rejecting it would mean those sessions never open again --
-  // it is accepted, ignored (there is one walk now), and gone after the next save.
-  void test_legacy_recursive_key_still_loads()
-  {
-    auto root = scratch_root() / "legacy_recursive";
-    std::filesystem::remove_all(root);
-    write_file(root / "s.session.json", R"json({
-      "format": "trance-session", "format_version": 1,
-      "first_playlist_item": "main",
-      "playlist": { "main": { "standard": { "program": "p" } } },
-      "program_map": { "p": { "enabled_theme": [ { "theme_name": "all" } ] } },
-      "theme_map": { "all": { "scan": { "dir": "media", "recursive": true } } }
-    })json");
-    write_png(root / "media" / "a.png");
-
-    SessionJsonSidecar sidecar;
-    try {
-      auto session = load_session_json((root / "s.session.json").string(), root.string(), sidecar);
-      check(session.theme_map().at("all").image_path_size() == 1,
-            "a session carrying the retired 'recursive' key still loads");
-      save_session_json(session, (root / "out.session.json").string(), root.string(), sidecar);
-      check(read_file(root / "out.session.json").find("recursive") == std::string::npos,
-            "the retired 'recursive' key is not written back");
-    } catch (const std::exception& e) {
-      check(false, std::string{"a session carrying the retired 'recursive' key still loads: "} +
-                e.what());
-    }
-  }
-
   // Legacy migration adopts a folder WHOLESALE, discarding the frozen list -- so it must
   // only fire when the folder actually produces something. A pure container (equally: a
   // folder of nothing but denylisted junk, or a drive mounted but not yet synced) passes
@@ -1048,7 +1018,6 @@ int main()
   test_scan_theme_includes_text_and_audio();
   test_scan_does_not_filter_on_extension();
   test_scan_excludes_junk_files();
-  test_legacy_recursive_key_still_loads();
   test_migration_does_not_adopt_an_empty_folder();
   test_exclusions_survive_a_partial_folder();
   test_bootstrap_root_junk_preserves_scan_themes();

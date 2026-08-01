@@ -376,10 +376,15 @@ every 32f { caption runtime }
    `[expr]`: `alpha [max(0, 1 - abs(4 * this.progress - 1))]`.
 2. **Big-text half-cycle reveal lost** (again: no line split, no window). v3 keeps only the
    caption.
-3. **Anim alternation randomized**: original strictly alternates ANIM / ANIM_ALTERNATE per
-   64f (change/change_alt seq, orig:398-404); v3 `image runtime ... anim` re-rolls the
-   theme per pull. The runtime *render* supports deterministic alternation (`anim_alt`
-   expr, `pattern_ast.h:104`) — the v3 parser just has no syntax for it.
+3. ~~**Anim alternation randomized**~~ (closed): the original strictly alternates ANIM /
+   ANIM_ALTERNATE per 64f (change/change_alt seq, orig:398-404), and `image runtime ...
+   anim` only re-rolls the theme per pull. The deterministic form is `image alternate ...
+   anim` (E4): the synthesized toggle flips every firing, the image pull and the animation
+   load both read it, and the draw follows the load via `Registers::anim_slot`. (This entry
+   used to point at an `anim_alt` expr on the RenderStmt as the mechanism. That field was
+   declared but never parsed, and while it existed the draw ignored the load entirely --
+   every `anim` came off the primary streamer. It is gone; the slot the load resolved is
+   the single answer to "which animation is on screen".)
 4. Clean intro/outro (32f no-still bookends) lost. Minor.
 
 ## 8. SUPER_FAST

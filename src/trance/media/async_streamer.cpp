@@ -30,6 +30,11 @@ AsyncStreamer::AsyncStreamer(const std::function<std::unique_ptr<Streamer>()>& l
   }
 }
 
+void AsyncStreamer::cancel()
+{
+  _cancelled = true;
+}
+
 Image AsyncStreamer::get_frame(const std::function<void(const Image&)>& function) const
 {
   std::lock_guard<std::mutex> lock{_swap_mutex};
@@ -117,16 +122,33 @@ void AsyncStreamer::async_update(const std::function<void(const Image&)>& cleanu
     swap_lock.unlock();
     auto image = _current->streamer->next_frame();
     swap_lock.lock();
-    while (_index == _current->begin) {
-      swap_lock.unlock();
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-      swap_lock.lock();
-    }
     if (!image) {
       _current->end = true;
       break;
     }
     if (_current->size == _buffer_size) {
+      // Only the full-buffer branch can collide with the render thread: it recycles
+      // buffer[begin] into _old_buffer, and if _index has landed on begin while the
+      // decode above ran unlocked, that is the frame currently on screen -- the
+      // cleanup_function would purge an sf::Image still being drawn. The append branch
+      // below writes at begin+size, one past the displayed range, so it never needs to
+      // wait. (The loop-top guard checked this already, but next_frame() drops the lock
+      // for as long as a decode takes, so _index can advance onto begin meanwhile.)
+      //
+      // Waiting on the render thread is only safe because it is INTERRUPTIBLE: the main
+      // loop gates theme_bank->advance_frames() on !playback_paused, so while paused or
+      // Shift+F11-hidden _index never moves at all. An unconditional wait here therefore
+      // never returns, async_update() never returns, and async_thread.join() deadlocks on
+      // Quit -- a zombie process. cancel() is what breaks that; see main.cpp's teardown.
+      while (_index == _current->begin && !_cancelled) {
+        swap_lock.unlock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        swap_lock.lock();
+      }
+      if (_cancelled) {
+        // Shutting down: drop the decoded frame rather than recycle a displayed one.
+        break;
+      }
       {
         std::lock_guard<std::mutex> lock{_old_mutex};
         _old_buffer.emplace_back(std::move(_current->buffer[_current->begin]));

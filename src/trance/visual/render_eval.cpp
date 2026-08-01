@@ -114,12 +114,16 @@ namespace pattern
           break;
         }
         VisualRender::Anim type;
-        if (!st.anim_gate.empty() && !eval_cond(st.anim_gate, regs, nodes, root)) {
+        switch (anim_draw_for(st, regs, nodes, root)) {
+        case AnimDraw::Still:
           type = VisualRender::Anim::NONE;
-        } else if (!st.anim_alt.empty() && eval_cond(st.anim_alt, regs, nodes, root)) {
+          break;
+        case AnimDraw::Alternate:
           type = VisualRender::Anim::ANIM_ALTERNATE;
-        } else {
+          break;
+        default:
           type = VisualRender::Anim::ANIM;
+          break;
         }
         api.render_animation_or_image(type, image, alpha, origin, zoom, slot);
         break;

@@ -25,15 +25,9 @@ namespace
 
 int main()
 {
-  // Lifecycle verbs (spec sec 4): bare, no args.
-  {
-    auto c = parse_command("start");
-    check(c.ok && c.verb == Verb::kStart, "'start' parses");
-  }
-  {
-    auto c = parse_command("stop");
-    check(c.ok && c.verb == Verb::kStop, "'stop' parses");
-  }
+  // Lifecycle verbs (spec sec 4): bare, no args. `start`/`stop` were byte-identical
+  // aliases of these two and are gone; they must now read as unknown verbs, not as
+  // silently-accepted synonyms.
   {
     auto c = parse_command("pause");
     check(c.ok && c.verb == Verb::kPause, "'pause' parses");
@@ -43,8 +37,16 @@ int main()
     check(c.ok && c.verb == Verb::kResume, "'resume' parses");
   }
   {
-    auto c = parse_command("start extra");
-    check(!c.ok, "'start extra' rejects trailing args");
+    auto c = parse_command("pause extra");
+    check(!c.ok, "'pause extra' rejects trailing args");
+  }
+  {
+    auto c = parse_command("start");
+    check(!c.ok, "retired 'start' alias is an unknown verb");
+  }
+  {
+    auto c = parse_command("stop");
+    check(!c.ok, "retired 'stop' alias is an unknown verb");
   }
 
   // Overlay verbs.
@@ -81,34 +83,21 @@ int main()
     check(!c.ok, "'overlay sideways' errors (unknown overlay sub-verb)");
   }
 
-  // Intensity.
+  // Retired verbs. `intensity` acked ok and wrote a field nothing read; `set`/`get`
+  // answered "unknown key" for every key; `load session` answered "not yet supported".
+  // All four now fail at the parser, which is the honest reply -- an `ok` for a verb with
+  // no consumer is worse than an error.
   {
     auto c = parse_command("intensity 0.6");
-    check(c.ok && c.verb == Verb::kIntensity && std::abs(c.number - 0.6f) < 1e-4f,
-         "'intensity 0.6' parses value");
+    check(!c.ok, "retired 'intensity' is an unknown verb");
   }
-  {
-    auto c = parse_command("intensity 2");
-    check(c.ok && c.verb == Verb::kIntensity && c.number == 1.f, "'intensity 2' clamps to 1");
-  }
-  {
-    auto c = parse_command("intensity");
-    check(!c.ok, "'intensity' with no value errors");
-  }
-
-  // Settings get/set.
   {
     auto c = parse_command("set fps 30");
-    check(c.ok && c.verb == Verb::kSet && c.key == "fps" && c.value == "30",
-         "'set fps 30' parses key+value");
+    check(!c.ok, "retired 'set' is an unknown verb");
   }
   {
     auto c = parse_command("get fps");
-    check(c.ok && c.verb == Verb::kGet && c.key == "fps", "'get fps' parses key");
-  }
-  {
-    auto c = parse_command("set fps");
-    check(!c.ok, "'set fps' with no value errors");
+    check(!c.ok, "retired 'get' is an unknown verb");
   }
 
   // Loading.
@@ -119,8 +108,7 @@ int main()
   }
   {
     auto c = parse_command("load session foo.session");
-    check(c.ok && c.verb == Verb::kLoadSession && c.value == "foo.session",
-         "'load session foo.session' parses path");
+    check(!c.ok, "retired 'load session' errors (only 'load pattern' remains)");
   }
   {
     auto c = parse_command("load nonsense foo");
@@ -173,7 +161,7 @@ int main()
     check(!c.ok, "'screenshot' with extra args rejects");
   }
 
-  // clamp01 -- shared by intensity/overlay-opacity.
+  // clamp01 -- the overlay-opacity clamp.
   check(command_protocol::clamp01(-5.f) == 0.f, "clamp01(-5) == 0");
   check(command_protocol::clamp01(5.f) == 1.f, "clamp01(5) == 1");
   check(command_protocol::clamp01(0.4f) == 0.4f, "clamp01(0.4) == 0.4");

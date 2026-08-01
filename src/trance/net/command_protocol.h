@@ -12,18 +12,16 @@ namespace command_protocol
 {
   enum class Verb {
     kUnknown,
-    kStart,
-    kStop,
+    // Playback. `pause`/`resume`, not `start`/`stop`: the runtime only ever freezes and
+    // unfreezes (program state is retained, nothing is torn down or reloaded), so those
+    // are the names that describe what actually happens -- `start`'s "begin from a stopped
+    // state" and `stop`'s "return to idle" dispatched to the same two lines as these.
     kPause,
     kResume,
     kOverlayOn,
     kOverlayOff,
     kOverlayOpacity,
-    kIntensity,
-    kSet,
-    kGet,
     kLoadPattern,
-    kLoadSession,
     kStatus,
     // Hide-everything / silent running (spec sec 4): window invisible + playback paused +
     // audio muted, process alive. Idempotent -- `hide` while hidden and `show` while shown
@@ -41,9 +39,8 @@ namespace command_protocol
 
   struct ParsedCommand {
     Verb verb = Verb::kUnknown;
-    // Populated depending on verb: kOverlayOpacity/kIntensity -> value; kSet -> key+value;
-    // kGet -> key; kLoadPattern/kLoadSession -> value (the file path).
-    std::string key;
+    // Populated depending on verb: kOverlayOpacity -> number; kLoadPattern/kScreenshot ->
+    // value (the file path).
     std::string value;
     float number = 0.f;
     // Set when the line is malformed (wrong arg count, non-numeric where a number is
@@ -64,8 +61,7 @@ namespace command_protocol
   std::string format_err(const std::string& message);
   std::string format_ok(const std::string& body = {});
 
-  // Clamps to [0, 1] -- shared by `intensity VALUE` and `overlay opacity VALUE` (spec sec 4:
-  // both are "VALUE in 0..1, clamped").
+  // Clamps to [0, 1] for `overlay opacity VALUE` (spec sec 4: "VALUE in 0..1, clamped").
   float clamp01(float value);
 }
 

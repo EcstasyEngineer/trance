@@ -283,9 +283,7 @@ walk. Their nested content is not lost, it is **redistributed**: the scan root's
 pass turns each subdirectory into a theme of its own at weight 1, and `inherit` is how you
 fold it back together where the old shape was actually wanted. A directory that holds
 nothing but subdirectories consequently expands to an empty theme; the runtime keeps an
-empty theme out of the rotation rather than giving it frames it can only draw black. A
-`"recursive"` key inside the object form is accepted and ignored — one short-lived build
-wrote it, and rejecting an unknown key is fatal — and is dropped on the next save.
+empty theme out of the rotation rather than giving it frames it can only draw black.
 
 **`inherit`** folds the theme named by this theme's parent DIRECTORY into its pool, and it
 **composes transitively**: `hypno/spam` reaches the root's loose files only if `hypno`

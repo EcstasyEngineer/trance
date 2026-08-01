@@ -74,7 +74,12 @@ namespace
       api.change_text(static_cast<VisualControl::SplitType>(e.split), slot_bool(e, regs));
       break;
     case K::Anim:
-      api.change_animation(slot_bool(e, regs));
+      // Record the slot as well as loading it: the draw side reads regs.anim_slot to know
+      // which streamer to pull the frame from. Without that the load and the draw disagree
+      // and every `anim` renders the primary streamer -- `anim reward` and the `alternate`
+      // ping-pong were invisible on screen even though the load was correct.
+      regs.anim_slot = resolved_slot(e, regs);
+      api.change_animation(regs.anim_slot == pattern::Slot::Alternate);
       break;
     case K::Themes:
       // Fire-and-forget by design: patterns request a swap, they don't depend on it
