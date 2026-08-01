@@ -591,22 +591,15 @@ void search_resources(trance_pb::Session& session, const std::string& root,
   session.set_first_playlist_item("default");
 }
 
-void search_resources(trance_pb::Theme& theme, const std::string& root, bool recursive)
+void search_resources(trance_pb::Theme& theme, const std::string& root)
 {
   std::filesystem::path root_path(root);
-  // A hierarchy theme is one directory's OWN files (recursive=false); the legacy
-  // string-form `scan` and the creator's folder refresh walk the whole subtree.
+  // ONE directory's own files. Not recursive: a subdirectory is a theme in its own
+  // right, so recursing would make a parent silently swallow its children's content.
   std::vector<std::filesystem::path> files;
-  if (recursive) {
-    for (auto it = std::filesystem::recursive_directory_iterator(root_path);
-         it != std::filesystem::recursive_directory_iterator(); ++it) {
-      files.push_back(it->path());
-    }
-  } else {
-    for (auto it = std::filesystem::directory_iterator(root_path);
-         it != std::filesystem::directory_iterator(); ++it) {
-      files.push_back(it->path());
-    }
+  for (auto it = std::filesystem::directory_iterator(root_path);
+       it != std::filesystem::directory_iterator(); ++it) {
+    files.push_back(it->path());
   }
   for (const auto& entry : files) {
     if (!std::filesystem::is_regular_file(entry)) {

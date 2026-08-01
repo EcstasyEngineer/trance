@@ -987,51 +987,16 @@ void AppUi::draw_themes_section()
   }
   std::sort(names.begin(), names.end());
 
-  // Folder-liveness, above everything else in this section because it decides whether the
-  // rest of it is describing a live folder or a frozen snapshot.
-  if (_sidecar.theme_scan_root.empty()) {
-    // A session whose themes are a fixed manifest -- either hand-written, or generated
-    // before folder-liveness existed. This is the state that produces the complaint this
-    // whole feature answers: media dropped into the folder never shows up.
-    ImGui::TextColored(kWarnAmber, "theme list is FROZEN -- new folders will never appear");
-    if (ImGui::Button("adopt live folder")) {
-      // Re-derive everything from disk. The existing theme_map is dropped rather than
-      // merged: its entries are frozen expansions under the OLD flat naming (one theme
-      // per top-level directory), so keeping them would shadow the per-directory themes
-      // discovery wants to create and leave the session half-migrated.
-      //
-      // Weights survive only where the NAME still matches. Old sessions name one theme
-      // per top-level directory ("hypno"), and that name still exists afterwards, so its
-      // weight carries; but the newly-addressable nested themes ("hypno/spam") never
-      // existed before and start at the default weight 1. Do not describe this as
-      // "weights are kept" -- it is "weights are kept where the name survives".
-      _session.mutable_theme_map()->clear();
-      _sidecar.theme_scan.clear();
-      _sidecar.theme_scan_recursive.clear();
-      _sidecar.theme_inherit.clear();
-      _sidecar.theme_exclude.clear();
-      _sidecar.theme_own_count.clear();
-      _sidecar.theme_scan_root = ".";
-      _sidecar.theme_scan_root_auto = true;
-      _theme_seen_images.clear();
-    }
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("Replace the frozen theme list with a live scan of this session's\n"
-                        "media folder: one theme per directory, re-derived every load, so\n"
-                        "files and folders added later show up on their own.\n"
-                        "Weights are kept for themes whose NAME survives -- nested folders\n"
-                        "become new themes ('hypno/spam') and start at weight 1.\n"
-                        "Save, then restart, for it to take effect.");
-    }
-    ImGui::Separator();
-  } else {
+  // Folder-liveness. There is no "frozen session" branch here any more: the loader
+  // defaults every session to a live scan root and migrates legacy frozen themes on the
+  // way in, so the only question left is whether NEW folders join automatically.
+  {
     bool auto_rescan = _sidecar.theme_scan_root_auto;
     if (ImGui::Checkbox("auto re-scan folder for new content", &auto_rescan)) {
       _sidecar.theme_scan_root_auto = auto_rescan;
     }
     if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("ON: directories that appear become themes and directories that\n"
-                        "vanish stop being themes, re-derived on every load.\n"
+      ImGui::SetTooltip("ON: directories that appear become themes, re-derived every load.\n"
                         "OFF: the theme LIST is frozen as it is now -- but each existing\n"
                         "theme still follows its own folder, so new FILES still appear.");
     }
@@ -1199,68 +1164,46 @@ void AppUi::draw_themes_section()
     }
 
     if (node_open) {
-      // Scan themes: save_theme (session_json.cpp) deliberately omits their media
-      // lists -- the scan directory is re-expanded on every load -- so image edits
-      // here would silently vanish on Save/restart. Offer the
-      // honest path instead: converting drops the theme's scan sidecar entry, making
-      // the current expansion an explicit (editable, persisted) image list.
-      if (_sidecar.theme_scan.count(name)) {
-        ImGui::TextDisabled("(scan theme -- images follow the scanned directory)");
-        if (_sidecar.theme_inherit.count(name)) {
-          // Freezing an INHERITING theme captures the parent's content too, because the
-          // pool being frozen is the post-inheritance one. Say so before the click, not
-          // after: the result is a theme that keeps its ancestors' images forever even
-          // if the parent folder changes.
-          ImGui::TextColored(kWarnAmber,
-                             "inherits '%s' -- converting freezes the INHERITED images too",
-                             parent.c_str());
-        }
-        if (ImGui::Button("convert to explicit image list")) {
-          // Drop EVERY scan-side record, not just the directory: a leftover inherit flag
-          // or exclusion list would be written back out for a theme that no longer has a
-          // scan to apply them to, and the UI would keep predicting inheritance that the
-          // next load cannot perform.
-          _sidecar.theme_scan.erase(name);
-          _sidecar.theme_scan_recursive.erase(name);
-          _sidecar.theme_inherit.erase(name);
-          _sidecar.theme_exclude.erase(name);
-          // The frozen list IS this theme's own content now (inherited entries included),
-          // so its own-count is the whole current pool -- otherwise every descendant's
-          // predicted size would keep quoting the pre-conversion number.
-          _sidecar.theme_own_count[name] = static_cast<uint32_t>(
-              theme_it->second.image_path_size() + theme_it->second.animation_path_size());
-        }
+      // ONE theme model: a directory plus a blacklist. Unchecking an image writes an
+      // EXCLUSION rather than rewriting a stored list, which is what keeps "a file added
+      // to this folder shows up next launch" true. There is no convert-to-a-different-
+      // -mode button any more -- there is no other mode to convert to.
+      auto scan_it = _sidecar.theme_scan.find(name);
+      if (scan_it == _sidecar.theme_scan.end()) {
+        // No directory reproduces this theme (a hand-written list spanning unrelated
+        // folders). Left exactly as authored -- nothing here can safely edit it.
+        ImGui::TextDisabled("(hand-written list -- no folder backs this theme)");
         ImGui::TreePop();
         ImGui::PopID();
         continue;
       }
-      // Image multiselect: checked == present in the theme's image_path. Unchecked
-      // paths stay in the per-run ever-seen cache so they can be re-checked (a
-      // re-check appends, so on-disk ordering may change after a save -- harmless,
-      // selection is random anyway).
-      auto& seen = _theme_seen_images[name];
-      for (const auto& path : theme_it->second.image_path()) {
-        if (std::find(seen.begin(), seen.end(), path) == seen.end()) {
-          seen.push_back(path);
+      ImGui::TextDisabled("folder: %s", scan_it->second.c_str());
+      auto& excludes = _sidecar.theme_exclude[name];
+      // Present = not excluded. The listing is the theme's CURRENT pool plus whatever is
+      // currently excluded, so an unchecked image can be checked again in the same run.
+      std::vector<std::string> listing{theme_it->second.image_path().begin(),
+                                       theme_it->second.image_path().end()};
+      for (const auto& p : excludes) {
+        if (std::find(listing.begin(), listing.end(), p) == listing.end()) {
+          listing.push_back(p);
         }
       }
-      if (seen.empty()) {
+      std::sort(listing.begin(), listing.end());
+      if (listing.empty()) {
         ImGui::TextDisabled("(no images)");
       }
-      auto* image_paths = theme_it->second.mutable_image_path();
-      for (const auto& path : seen) {
-        bool present =
-            std::find(image_paths->begin(), image_paths->end(), path) != image_paths->end();
+      for (const auto& path : listing) {
+        bool present = std::find(excludes.begin(), excludes.end(), path) == excludes.end();
         if (ImGui::Checkbox(path.c_str(), &present)) {
           if (present) {
-            theme_it->second.add_image_path(path);
+            excludes.erase(std::remove(excludes.begin(), excludes.end(), path), excludes.end());
           } else {
-            auto it = std::find(image_paths->begin(), image_paths->end(), path);
-            if (it != image_paths->end()) {
-              image_paths->erase(it);
-            }
+            excludes.push_back(path);
           }
         }
+      }
+      if (!excludes.empty()) {
+        ImGui::TextDisabled("(%zu excluded -- takes effect on reload)", excludes.size());
       }
       ImGui::TreePop();
     }

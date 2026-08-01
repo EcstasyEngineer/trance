@@ -59,11 +59,9 @@ extern const char* const kRootThemeName;
 void search_resources(trance_pb::Session& session, const std::string& root);
 void search_resources(trance_pb::Session& session, const std::string& root,
                       std::map<std::string, std::string>& theme_scan);
-// `recursive` false walks only the directory's OWN files, which is what a hierarchy
-// theme means; true walks the whole subtree (the legacy string-form `scan`, and the
-// creator's folder refresh).
-void search_resources(trance_pb::Theme& theme, const std::string& root,
-                      bool recursive = true);
+// Walks ONE directory's own files -- a theme is a directory, so there is nothing to
+// recurse into: a subdirectory is its own theme.
+void search_resources(trance_pb::Theme& theme, const std::string& root);
 void search_audio_files(std::vector<std::string>& files, const std::string& root);
 
 // Loads system.json (session_json.h). A legacy .cfg proto path is rejected with a

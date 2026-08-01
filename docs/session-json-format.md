@@ -256,23 +256,24 @@ falls through to the normal lottery rather than freezing).
 | `text_line` | array of strings; embedded `\n` = pre-split lines, as today | `Theme.text_line` |
 | `audio_path` | array of root-relative paths; precanned audio (mantras/cues) this theme owns — the grammar decides when/volume (issue #23) | `Theme.audio_path` |
 
-**`scan` has two forms.** A **string** is the legacy form and is unchanged: `"scan": "dir"`
-walks the whole subtree under `dir`, with no exclusions and no inheritance. An **object**
-is the hierarchy form:
+**There is exactly ONE theme model: a directory plus a blacklist.** A theme is always the
+files directly inside one directory, minus whatever it excludes. There is no second mode, no
+frozen-list mode, and consequently no conversion between modes. A legacy session carrying
+explicit `image_path` lists is migrated to this model automatically at load (see below).
+
+`scan` has a shorthand and a long form. The **string** shorthand `"scan": "dir"` is just the
+directory. The **object** form adds the optional parts:
 
 ```json
 "scan": {
   "dir": "hypno/spam",              // required, root-relative directory
-  "recursive": false,               // optional, DEFAULT false -- own files only
   "inherit": false,                 // optional, DEFAULT false -- see below
   "exclude": ["hypno/spam/x.jpg"]   // optional, root-relative paths held out
 }
 ```
 
-The object form defaults to **non-recursive** because its premise is *one directory is one
-theme*: the cold-start scrape (§ below) emits one theme per directory that directly holds
-at least one file, so a recursive walk would make a parent theme swallow its children's
-content. Set `"recursive": true` for the legacy whole-subtree behaviour.
+A scan is never recursive: one directory is one theme, so recursing would make a parent
+swallow its children's content when those children are themes in their own right.
 
 **`inherit`** folds the theme named by this theme's parent DIRECTORY into its pool, and it
 **composes transitively**: `hypno/spam` reaches the root's loose files only if `hypno`
@@ -283,8 +284,7 @@ between is reachable one flag at a time.
 Note this is *not* the same as the pre-hierarchy behaviour, and cannot be: the old scrape
 gave `hypno` its entire SUBTREE (everything under `hypno/**`) plus the root's loose files,
 whereas inheritance only ever flows DOWNWARD from ancestors. A theme never picks up its
-descendants or its siblings. To get the old whole-subtree pool for one theme, use
-`"recursive": true` on that theme instead.
+descendants or its siblings — a descendant is its own theme with its own weight.
 
 Directories with no theme of their own (pure containers) are
 skipped, so an intermediate container never breaks a chain. The set of themes is identical
@@ -305,6 +305,16 @@ by its `random_weight` first and an image within it second, so a small folder in
 large one is not swamped by raw file count. See "Weights are raw and unnormalized" in §3.2
 for the full rule, including what happens when an ancestor is switched off.
 
+**Legacy migration.** A theme carrying explicit `image_path` lists and no `scan` is
+converted to a folder theme at load, whenever a directory of that theme's name exists. The
+frozen list is **discarded, not preserved as exclusions**: a file on disk that the list does
+not name is far more often one added since the session was written than one deliberately
+omitted, and turning it into a permanent exclusion would reproduce the exact bug this model
+exists to remove. Deliberate omission has a real representation now (`exclude`); a legacy
+frozen list has none, so there is nothing to carry across. A theme with no directory of its
+name is left alone — it is a hand-written list spanning unrelated folders, which no single
+directory can reproduce, and it is the one shape this model does not cover.
+
 **`/root/`** is a reserved theme name for loose files sitting directly at the scan root. A
 path component can never contain a slash, so it cannot collide with a real directory's
 theme name. It is a first-class theme with its own rotation weight — it replaces the
@@ -313,7 +323,7 @@ erased, diluting every theme with the same content and (because no single direct
 reproduced a theme) disabling `scan` persistence for the whole folder.
 
 At load, the loader walks the directory with
-`search_resources(trance_pb::Theme&, root, recursive)` (`session.cpp`) and **appends** what it finds
+`search_resources(trance_pb::Theme&, root)` (`session.cpp`) and **appends** what it finds
 to the explicit lists above (explicit entries first, scan results after, scan order =
 directory-walk order). Path results are rebased onto the scan directory before they land
 in trance_pb, so they are root-relative like every other reference (§1) — a `scan` of

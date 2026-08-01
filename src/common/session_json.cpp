@@ -512,7 +512,7 @@ namespace
   // Defined below load_theme (it is the larger routine); declared here because load_theme
   // is its first caller.
   void expand_scan_theme(trance_pb::Theme& theme, const std::string& theme_name,
-                          const std::string& dir, bool recursive, const std::string& root,
+                          const std::string& dir, const std::string& root,
                           SessionJsonSidecar& sidecar);
 
   void load_theme(const json& obj, trance_pb::Theme& theme, const std::string& theme_name,
@@ -585,23 +585,16 @@ namespace
       // that directory's own files unless `recursive` says otherwise, and carries the
       // per-theme `inherit` flag and `exclude` list.
       std::string dir;
-      bool recursive = true;
       if (scan->is_string()) {
+        // Legacy shorthand, still accepted so old sessions load: just the directory.
         dir = scan->get<std::string>();
       } else if (scan->is_object()) {
-        check_unknown_keys(*scan, {"dir", "recursive", "inherit", "exclude"}, sp);
+        check_unknown_keys(*scan, {"dir", "inherit", "exclude"}, sp);
         const json* dir_value = find(*scan, "dir");
         if (!dir_value || !dir_value->is_string()) {
           throw std::runtime_error(sp + "/dir: expected a string");
         }
         dir = dir_value->get<std::string>();
-        recursive = false;
-        if (const json* r = find(*scan, "recursive")) {
-          if (!r->is_boolean()) {
-            throw std::runtime_error(sp + "/recursive: expected a boolean");
-          }
-          recursive = r->get<bool>();
-        }
         if (const json* inherit = find(*scan, "inherit")) {
           if (!inherit->is_boolean()) {
             throw std::runtime_error(sp + "/inherit: expected a boolean");
@@ -632,7 +625,7 @@ namespace
         throw std::runtime_error(sp + ": expected a string or an object");
       }
       check_relative_path(dir, sp);
-      expand_scan_theme(theme, theme_name, dir, recursive, root, sidecar);
+      expand_scan_theme(theme, theme_name, dir, root, sidecar);
     }
   }
 
@@ -642,13 +635,10 @@ namespace
   // pass (discover_new_themes) can materialize a newly-appeared folder exactly the way a
   // hand-written `scan` entry would be loaded -- one expansion rule, not two.
   void expand_scan_theme(trance_pb::Theme& theme, const std::string& theme_name,
-                          const std::string& dir, bool recursive, const std::string& root,
+                          const std::string& dir, const std::string& root,
                           SessionJsonSidecar& sidecar)
   {
     sidecar.theme_scan[theme_name] = dir;
-    if (recursive) {
-      sidecar.theme_scan_recursive.insert(theme_name);
-    }
     auto full_dir = (std::filesystem::path(root) / dir).string();
     if (std::filesystem::exists(full_dir)) {
       {
@@ -658,7 +648,7 @@ namespace
         // scratch theme and rebase each result onto `dir` rather than letting scan-dir-
         // relative paths reach trance_pb, where they'd resolve to nothing.
         trance_pb::Theme scanned;
-        search_resources(scanned, full_dir, recursive);
+        search_resources(scanned, full_dir);
         auto rebase = [&dir](const std::string& p) {
           // A scan of the session root itself -- `"dir": "."`, which is what the /root/
           // theme uses -- must NOT prefix "./" onto every result. The path contract (§1)
@@ -730,6 +720,38 @@ namespace
     }
   }
 
+  // Turns a legacy frozen theme -- an explicit media list with no `scan` -- into a folder
+  // theme, in place, at load. There is exactly ONE theme model now (a directory plus a
+  // blacklist), so this is a migration, not a second mode: it is what makes "media added
+  // to a folder shows up next launch" true for sessions written before that was.
+  //
+  // Adopts the folder WHOLESALE -- the frozen list is discarded, not preserved as
+  // exclusions. Preserving it was the obvious-looking choice and it is wrong: a file
+  // sitting on disk but missing from the list is far more often one added since the
+  // session was written than one deliberately omitted, and turning it into a permanent
+  // exclusion reproduces the exact bug this whole change set exists to kill. Deliberate
+  // omission has a real representation now (`exclude`), and a legacy frozen list has
+  // none, so there is nothing to carry across.
+  //
+  // A theme with no directory of that name is left completely alone: it is a hand-written
+  // list spanning unrelated folders, which no directory can reproduce.
+  void migrate_frozen_themes(trance_pb::Session& session, const std::string& root,
+                              SessionJsonSidecar& sidecar)
+  {
+    auto& themes = *session.mutable_theme_map();
+    for (auto& pair : themes) {
+      if (sidecar.theme_scan.count(pair.first)) {
+        continue;  // already a folder theme
+      }
+      const auto dir = pair.first == kRootThemeName ? std::string{"."} : pair.first;
+      if (!std::filesystem::is_directory(std::filesystem::path(root) / dir)) {
+        continue;
+      }
+      pair.second.Clear();
+      expand_scan_theme(pair.second, pair.first, dir, root, sidecar);
+    }
+  }
+
   // Re-derives the theme SET from the media tree at load, adding any directory that has
   // appeared since the session was written and dropping scan themes whose directory is
   // gone. This is the theme-level half of the inverted-persistence rule: the session
@@ -769,7 +791,7 @@ namespace
           ? pair.second
           : normalize_path_for_save(
                 (std::filesystem::path(sidecar.theme_scan_root) / pair.second).string());
-      expand_scan_theme(themes[pair.first], pair.first, rebased_dir, false, root, sidecar);
+      expand_scan_theme(themes[pair.first], pair.first, rebased_dir, root, sidecar);
       for (auto& program : *session.mutable_program_map()) {
         // Only if the program has no row for this name already. A theme_map entry can be
         // absent while an enabled_theme row survives -- a hand-edited file, or a folder
@@ -1108,23 +1130,16 @@ namespace
     auto scan_it = sidecar.theme_scan.find(theme_name);
     const bool scanned = scan_it != sidecar.theme_scan.end();
     if (scanned) {
-      const bool recursive = sidecar.theme_scan_recursive.count(theme_name) != 0;
       const bool inherits = sidecar.theme_inherit.count(theme_name) != 0;
       auto exclude_it = sidecar.theme_exclude.find(theme_name);
       const bool has_excludes =
           exclude_it != sidecar.theme_exclude.end() && !exclude_it->second.empty();
-      // Stay in the legacy string form when nothing needs the object -- a recursive
-      // scan with no inheritance and no exclusions is exactly what `"scan": "dir"`
-      // meant, and rewriting every such theme into an object would churn files that
-      // did not change.
-      if (recursive && !inherits && !has_excludes) {
+      // Shorthand when the theme is nothing but its directory, which is the common case.
+      if (!inherits && !has_excludes) {
         obj["scan"] = normalize_path_for_save(scan_it->second);
       } else {
         json s = json::object();
         s["dir"] = normalize_path_for_save(scan_it->second);
-        // Object form defaults to non-recursive (one directory, one theme), so only
-        // the exception is written.
-        if (recursive) s["recursive"] = true;
         if (inherits) s["inherit"] = true;
         if (has_excludes) {
           json arr = json::array();
@@ -1302,11 +1317,19 @@ trance_pb::Session load_session_json(const std::string& path, const std::string&
                  "/theme_map/" + it.key(), root, sidecar);
     }
   }
+  // Every session is a live folder unless it says otherwise. There is one theme model --
+  // a directory plus a blacklist -- so defaulting the scan root here is what removes the
+  // whole "which kind of session is this" question, along with the migration button that
+  // used to exist to answer it.
+  if (sidecar.theme_scan_root.empty()) {
+    sidecar.theme_scan_root = ".";
+  }
+  migrate_frozen_themes(session, root, sidecar);
   // Discovery BEFORE inheritance: a folder that just appeared is a theme like any other
   // and must be able to inherit (and to be inherited from) on the very first load that
   // sees it. Runs even with no theme_map key at all, so a session can be nothing but a
   // scan root.
-  if (!sidecar.theme_scan_root.empty() && sidecar.theme_scan_root_auto) {
+  if (sidecar.theme_scan_root_auto) {
     discover_new_themes(session, root, sidecar);
   }
   {

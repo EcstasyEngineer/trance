@@ -265,10 +265,6 @@ private:
   // Compared only for identity -- never dereferenced.
   const trance_pb::Program* _pattern_lint_program = nullptr;
 
-  // Every image path ever seen per theme this run, in first-seen order, so an
-  // unchecked image (removed from Theme::image_path) can be re-checked within the
-  // session. Not persisted -- unchecked paths saved out are gone from the file.
-  std::map<std::string, std::vector<std::string>> _theme_seen_images;
   // Last nonzero weight per theme, so the on/off button round-trips a theme's
   // weight instead of resetting it to 1 (off keeps the enabled_theme entry at
   // weight 0, matching ThemeBank::set_program's semantics).

@@ -30,10 +30,6 @@ struct SessionJsonSidecar
   std::map<std::pair<std::string, std::string>, std::string> pattern_file;
   // theme name -> scan directory (root-relative), when the theme used `scan`.
   std::map<std::string, std::string> theme_scan;
-  // Scan themes that walk the whole SUBTREE rather than just the directory's own files.
-  // True for the legacy string form (`"scan": "dir"`), false by default for the object
-  // form, whose whole point is that one directory is one theme.
-  std::set<std::string> theme_scan_recursive;
   // Scan themes that fold their PARENT directory's theme pool into their own. Composes
   // transitively through the chain: hypno/spam reaches the root's loose files only if
   // hypno inherits too. Resolved at load (resolve_theme_inheritance) by unioning the
