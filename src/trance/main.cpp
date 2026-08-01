@@ -667,7 +667,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
           // VR: the renderer's sf::Window is a hidden GL-context helper, not the
           // visible surface -- don't touch it (a setVisible(true) on restore would
           // pop up a blank window that was never meant to be seen). Content leaves
-          // the headset via the layerless render_idle() frames below.
+          // the headset via the blank render_idle() frames below.
           if (!director.vr_enabled()) {
             renderer->window().setVisible(false);
           }

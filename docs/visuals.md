@@ -52,7 +52,7 @@ positions are exact integers; there is no stack at runtime.
 
 | Cycler | Role | Length |
 |---|---|---|
-| `ActionCycler` | Leaf. Fires its effect every N frames (or on frame K of every N, or every frame). | N |
+| `ActionCycler` | Leaf. Fires its effect on frame 0 of every N frames (N=1 = every frame). | N |
 | `OneShotCycler` | Children together, **once**. The longest child keeps it active. | max(children) |
 | `ParallelCycler` | Children together, **repeating**. | LCM(children) |
 | `SequenceCycler` | Children in order. | sum(children) |
@@ -86,7 +86,8 @@ as user-facing statements never shipped — spec §4.7).
 
 **Draw effects** (call `VisualControl` / write an image register):
 `Image`, `Text`, `Anim`, `Subtext`, `SmallSub`, `Themes`, `Font`, `SpiralNew`,
-`SpiralRot` (rotate), `SpiralSet` (deterministic spiral type + width).
+`SpiralSet` (deterministic spiral type + width). Spiral ROTATION is not an effect:
+it is a per-frame render param (`RenderStmt{Op::Spiral, speed=...}`).
 Image effects write a named image register; the render block reads it.
 
 **Theme audio** (issue #23): `Audio` starts a precanned track from the theme's
@@ -98,7 +99,6 @@ general variables; these exist to express stateful visuals (toggles, counters,
 captured randoms) as data:
 
 - `Set` — `scalars[NAME] = N`.
-- `Inc` — `scalars[NAME] += N`.
 - `Toggle` — `scalars[NAME] ^= 1`.
 - `Roll` — `scalars[NAME] = choices[random(n)]` (captured random; this is what
   the grammar's `chance` lowers to).

@@ -89,12 +89,8 @@ class ActionCycler : public Cycler
 public:
   // No-op action with the given length.
   ActionCycler(uint32_t length);
-  // Performs the action every frame.
-  ActionCycler(const std::function<void()>& action);
-  // Performs the action on the first frame of every N.
+  // Performs the action on the first frame of every N (length 1 = every frame).
   ActionCycler(uint32_t length, const std::function<void()>& action);
-  // Performs the action on the Kth frame of every N.
-  ActionCycler(uint32_t length, uint32_t action_frame, const std::function<void()>& action);
 
   uint32_t length() const override;
   uint32_t position() const override;
@@ -108,7 +104,6 @@ public:
 private:
   uint32_t _position;
   uint32_t _length;
-  uint32_t _action_frame;
   std::function<void()> _action;
 };
 

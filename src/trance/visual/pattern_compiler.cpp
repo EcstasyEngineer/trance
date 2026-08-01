@@ -35,8 +35,8 @@ namespace
     };
     switch (n.type) {
     case Node::Type::Action: {
-      // The leaf's behaviour comes from the caller's MakeAction (no-op for a pure
-      // timer). action_frame only matters once there is a real action to fire.
+      // The leaf's behaviour comes from the caller's MakeAction (no-op for a pure timer);
+      // an ActionCycler without one is just a counter.
       std::function<void()> fn = make_action ? make_action(n) : std::function<void()>{};
       // `divide N`: run the effects only every Nth firing. The counter is bounded
       // state owned here, so every MakeAction (tests + engine) gets it identically.
@@ -50,7 +50,7 @@ namespace
           }
         };
       }
-      c = fn ? new ActionCycler{n.length, n.action_frame, fn} : new ActionCycler{n.length};
+      c = fn ? new ActionCycler{n.length, fn} : new ActionCycler{n.length};
       break;
     }
     case Node::Type::Seq: {

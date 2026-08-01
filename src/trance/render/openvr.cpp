@@ -265,11 +265,6 @@ void OpenVrRenderer::render(const std::function<void(State)>& render_fn)
 
 bool OpenVrRenderer::render_idle(bool blank)
 {
-  // `blank` is deliberately unused -- see the header. There is no OpenVR analogue of
-  // xrEndFrame with layerCount=0, so this backend cannot honour a request to remove the
-  // content; the least-wrong thing it can do for either reason is keep the last frame
-  // correctly presented.
-  (void) blank;
   if (!_initialised || !_success) {
     return false;
   }
@@ -279,10 +274,30 @@ bool OpenVrRenderer::render_idle(bool blank)
   // for the duration of a pause or a Shift+F11 hide and the headset dropped to the
   // SteamVR grey void.
   //
-  // What resubmitting the unchanged eye textures buys is the handshake plus correct
-  // reprojection of the held frame against the fresh poses, so the image stays locked to
-  // the world instead of smearing with head motion.
+  // `blank` decides WHAT gets submitted, exactly as it does for OpenXR:
+  //   false (merely between visual frames) -- resubmit the unchanged eye textures. That
+  //     buys the handshake plus correct reprojection of the held frame against the fresh
+  //     poses, so the image stays locked to the world instead of smearing with head motion.
+  //   true (paused/hidden) -- black eye textures. OpenVR has no layerless submit
+  //     (no analogue of xrEndFrame with layerCount=0), but the EFFECT the flag asks for
+  //     is achievable without one: clearing the scene layer to black and submitting that
+  //     is what makes `hide` genuinely vanish in the headset. Re-presenting the held frame
+  //     here instead left Shift+F11 / the tray Hide item / the `hide` verb freezing the
+  //     image in the headset -- the panic button silently failing on one renderer.
   wait_get_poses();
+  if (blank) {
+    // Save and restore the clear colour: render()'s glClear shares this context and its
+    // (default, transparent-black) clear is deliberately left alone.
+    GLfloat prev_clear[4];
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, prev_clear);
+    glClearColor(0.f, 0.f, 0.f, 1.f);
+    for (int eye = 0; eye < 2; ++eye) {
+      glBindFramebuffer(GL_FRAMEBUFFER, _fbo[eye]);
+      glClear(GL_COLOR_BUFFER_BIT);
+      glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+    glClearColor(prev_clear[0], prev_clear[1], prev_clear[2], prev_clear[3]);
+  }
   submit_eyes();
   // WaitGetPoses already blocked to the compositor's cadence; the caller must not sleep
   // on top of it.

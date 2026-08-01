@@ -24,10 +24,10 @@ public:
   void init() override;
   bool update() override;
   void render(const std::function<void(State)>& render_fn) override;
-  // Compositor keep-alive when nothing was drawn (see Renderer::render_idle). NOTE the
-  // `blank` argument is accepted and ignored here: SteamVR has no layerless-submit
-  // equivalent, so this path can only resubmit the last frame against fresh poses --
-  // pause/hide freeze the image in the headset rather than removing it, unlike OpenXR.
+  // Compositor keep-alive when nothing was drawn (see Renderer::render_idle). SteamVR has
+  // no layerless-submit equivalent, so `blank` is honoured by clearing the eye textures to
+  // black and submitting those; pause/hide removes the content from the headset, same as
+  // OpenXR's layerCount=0, rather than freezing the last frame there.
   bool render_idle(bool blank) override;
 
 private:

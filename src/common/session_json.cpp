@@ -6,7 +6,6 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <sstream>
 #include <stdexcept>
 
@@ -977,36 +976,6 @@ namespace
     }
   }
 
-  // The tier spans must PARTITION image_path exactly: ThemeBank splits the pool back into
-  // tiers by OFFSET and has no per-image tag to fall back on, so a span that is short or
-  // long doesn't fail -- it silently re-tags images into a neighbouring ancestor's tier and
-  // draws them at that ancestor's weight. It holds today (every span is recorded from the
-  // pool it is about to append), but nothing enforced it, and a future filtering pass over
-  // image_path is exactly the kind of change that would break it without a symptom.
-  //
-  // Repaired rather than thrown: collapsing to one flat tier costs the weighting, which is
-  // a nuisance, where drawing from the wrong tier is unexplainable -- and a load-time throw
-  // on a mismatch nobody can act on would just make the session unopenable.
-  void check_tier_spans(const trance_pb::Session& session, SessionJsonSidecar& sidecar)
-  {
-    for (auto& pair : sidecar.theme_tiers) {
-      auto theme_it = session.theme_map().find(pair.first);
-      if (theme_it == session.theme_map().end()) {
-        continue;
-      }
-      uint64_t span = 0;
-      for (const auto& tier : pair.second) {
-        span += tier.second;
-      }
-      const auto pool = static_cast<uint64_t>(theme_it->second.image_path_size());
-      if (span != pool) {
-        std::cerr << "theme '" << pair.first << "': tier spans cover " << span << " of " << pool
-                  << " images; falling back to an unweighted pool" << std::endl;
-        pair.second = {{pair.first, static_cast<uint32_t>(pool)}};
-      }
-    }
-  }
-
   void load_variable(const json& obj, trance_pb::Variable& variable, const std::string& json_path)
   {
     check_unknown_keys(obj, {"description", "value", "default_value"}, json_path);
@@ -1394,11 +1363,8 @@ trance_pb::Session load_session_json(const std::string& path, const std::string&
   if (sidecar.theme_scan_root_auto) {
     discover_new_themes(session, root, sidecar);
   }
-  {
-    // After every theme exists: a theme can only inherit a pool that has been loaded.
-    resolve_theme_inheritance(session, sidecar);
-    check_tier_spans(session, sidecar);
-  }
+  // After every theme exists: a theme can only inherit a pool that has been loaded.
+  resolve_theme_inheritance(session, sidecar);
 
   if (const json* variables = find(root_json, "variable_map")) {
     if (!variables->is_object()) {

@@ -42,7 +42,7 @@ in plain words:
 
 | Node | What it does |
 |---|---|
-| **Action** (leaf) | The only node that *does* anything. Fires its effects every N frames (or on frame K-of-N, or every frame). |
+| **Action** (leaf) | The only node that *does* anything. Fires its effects on frame 0 of every N frames (N=1 = every frame). |
 | **One-shot** | Run its children together, once. Lasts as long as its longest child. |
 | **Parallel** | Run its children together, on repeat. |
 | **Sequence** | Run its children one after another. |

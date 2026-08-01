@@ -92,9 +92,6 @@ namespace
     case K::SpiralNew:
       api.change_spiral();
       break;
-    case K::SpiralRot:
-      api.rotate_spiral(e.rate);
-      break;
     case K::Subtext:
       api.change_subtext(slot_bool(e, regs));
       break;
@@ -103,9 +100,6 @@ namespace
       break;
     case K::Set:
       regs.scalars[e.target] = e.ivalue;
-      break;
-    case K::Inc:
-      regs.scalars[e.target] += e.ivalue;
       break;
     case K::Toggle:
       regs.scalars[e.target] ^= 1;

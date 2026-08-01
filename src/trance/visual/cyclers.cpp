@@ -60,23 +60,12 @@ float Cycler::progress() const
 }
 
 ActionCycler::ActionCycler(uint32_t length)
-: _position{0}, _length{length}, _action_frame{0}, _action{[] {}}
-{
-}
-
-ActionCycler::ActionCycler(const std::function<void()>& action)
-: _position{0}, _length{1}, _action_frame{0}, _action{action}
+: _position{0}, _length{length}, _action{[] {}}
 {
 }
 
 ActionCycler::ActionCycler(uint32_t length, const std::function<void()>& action)
-: _position{0}, _length{length}, _action_frame{0}, _action{action}
-{
-}
-
-ActionCycler::ActionCycler(uint32_t length, uint32_t action_frame,
-                           const std::function<void()>& action)
-: _position{0}, _length{length}, _action_frame{action_frame}, _action{action}
+: _position{0}, _length{length}, _action{action}
 {
 }
 
@@ -100,7 +89,9 @@ void ActionCycler::advance(bool trigger_actions)
   if (complete()) {
     reset();
   }
-  if (trigger_actions && _position == _action_frame) {
+  // Frame 0 of every period: the leaf fires as its counter wraps, which is what makes a
+  // leaf's rate exactly its length.
+  if (trigger_actions && !_position) {
     _action();
   }
   if (_length) {

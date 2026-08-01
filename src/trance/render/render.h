@@ -76,8 +76,9 @@ public:
   // `blank` distinguishes the two reasons for having nothing to draw, and the distinction
   // is load-bearing:
   //   true  (paused/hidden) -- the content should stop being visible. OpenXR submits
-  //         layerCount=0, which both keeps the handshake alive AND removes the quad, so
-  //         `hide` genuinely vanishes in the headset instead of freezing there.
+  //         layerCount=0 and OpenVR submits black eye textures; either way the handshake
+  //         stays alive AND the content goes away, so `hide` genuinely vanishes in the
+  //         headset instead of freezing there.
   //   false (merely between visual frames) -- the content must stay exactly as it is.
   //         Submitting layerless frames here would blank the view on every gap between
   //         visual frames, strobing the headset at (runtime rate - global_fps).

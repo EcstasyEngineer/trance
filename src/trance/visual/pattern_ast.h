@@ -32,10 +32,9 @@ namespace pattern
   struct Effect
   {
     enum class Kind {
-      Image, Text, Anim, Themes, Font, SpiralNew, SpiralRot, Subtext, SmallSub,
+      Image, Text, Anim, Themes, Font, SpiralNew, Subtext, SmallSub,
       // Scalar-register state ops:
       Set,       // scalars[target] = ivalue
-      Inc,       // scalars[target] += ivalue
       Toggle,    // scalars[target] ^= 1
       Roll,      // scalars[target] = choices[random(choices.size())]
       Pulse,     // bounded counter -> one-frame flag (see fields below)
@@ -57,13 +56,13 @@ namespace pattern
     std::string target = "current";  // image reg (Image / Copy dst) or scalar reg name
     std::string src;                 // Copy source image register
     uint32_t split = 0;              // SplitType for a Text effect
-    float rate = 0.f;                // rate for SpiralRot; constant volume (0..1) for Audio
-                                      // (a literal `volume` modulator sets it once at fire
-                                      // time instead of every frame -- see Audio in run_effect)
+    float rate = 0.f;                // constant volume (0..1) for Audio (a literal `volume`
+                                     // modulator sets it once at fire time instead of every
+                                     // frame -- see Audio in run_effect)
     bool force = false;              // force flag for Font / SmallSub; loop flag for Audio
 
     // Scalar-op operands:
-    int32_t ivalue = 0;              // Set value / Inc step
+    int32_t ivalue = 0;              // Set value / SpiralSet spiral type
     std::vector<int32_t> choices;    // Roll choices
     std::string mod_reg;             // Pulse modulus register (empty => mod_literal)
     int32_t mod_literal = 0;         // Pulse modulus literal
@@ -140,7 +139,6 @@ namespace pattern
 
     // Action leaf:
     uint32_t length = 0;
-    uint32_t action_frame = 0;
     std::vector<Effect> effects;
     // Rate divider: run the effects only every Nth time the leaf fires (1 = always).
     // Bounded named state owned by the compiled action, not a user variable.

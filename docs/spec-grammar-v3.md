@@ -279,8 +279,8 @@ spiral [speed <mod>]
   `spiral speed M` ⇒ `RenderStmt{Op::Spiral, speed=lower(M)}`. Every frame `eval_render`
   calls `api.rotate_spiral(eval_num(speed))` immediately before `api.render_spiral()`
   (`render_eval.cpp`), so a curve reads exactly like zoom/fade/origin — no stairstep unroll,
-  no `Effect::Kind::SpiralRot` leaf. (`SpiralRot` remains in the `Effect::Kind` enum for the
-  legacy runtime shape but the v3 parser never emits it.) `spiral speed M over NAME` works
+  no `Effect::Kind::SpiralRot` leaf. (`SpiralRot` has since been deleted from the
+  `Effect::Kind` enum outright -- nothing emitted it.) `spiral speed M over NAME` works
   like any other modulator's `over` — it is a live per-frame read, so the stairstep-vs-`over`
   incompatibility called out in earlier drafts no longer applies.
 - **Shape/width/color are NOT modulators** — they are settings (§8), set via
@@ -307,13 +307,13 @@ image concept origin (drunk <intensity-mod>) # used as a param modulator
   declined (§9, Extension #1b, out of scope for v3).
 - **How intensity works.** The intensity is itself a modulator
   (`drunk (curve 0 -> 0.4)` ramps drunkenness up), scaling the per-tick random step exactly
-  as `SpiralRot.rate` scales rotation. Intensity 0 = still; larger = wilder.
+  as `spiral speed` scales rotation. Intensity 0 = still; larger = wilder.
 - **Lowering — requires §9 Extension #2 (one new `Effect::Kind::Walk`).**
   1. **State.** A scalar register `W`, stored in fixed-point **milli-units** (registers are
      `int32`), zero-centered and clamped.
   2. **Walk effect.** A per-frame `Action` leaf (length 1) inside the pattern fires
      `Effect{Kind::Walk, target=W, rate=intensity}`. One new `run_effect` case (beside
-     `Inc`/`Roll`):
+     `Set`/`Roll`):
      `regs.scalars[W] = clamp(regs.scalars[W] + int(rate*1000)*(int(random(3))-1), -BOUND, +BOUND)`
      — a bounded zero-centered walk using the engine's existing RNG (same channel as `Roll`).
      (Critic note: a clamped walk biases toward center over long runs; `BOUND` is chosen
@@ -356,8 +356,9 @@ drunk <mod>                                                # sugar for `warp amp
 > **`copy`** (§4.8, the only user-visible state effect) and an **internal chance roll** — a
 > `chance P` param on a draw (§4.9's `parse_chance`) compiles to an `Effect::Kind::Roll` the
 > AUTHOR NEVER WRITES; the parser synthesizes it from `chance P` and prepends it before the
-> gated draw. `Effect::Kind::Set`/`Inc`/`Toggle`/`Roll` remain real runtime ops (used
-> internally by `chance` and `anim every Nth`'s pulse counter) but there is no grammar surface
+> gated draw. `Effect::Kind::Set`/`Toggle`/`Roll`/`Pulse` remain real runtime ops (used
+> internally by `chance` and `anim every Nth`'s pulse counter; `Inc` never had an emitter and
+> has since been deleted) but there is no grammar surface
 > that lets an author write `set`/`inc`/`roll` directly. Kept below as implementation history.
 
 ```
@@ -595,10 +596,10 @@ audio stop
     every frame regardless of shape; audio's volume instead explicitly forks because a
     per-frame `sf::Music::setVolume` call every frame forever is wasteful for the common case
     (a static mantra volume) and there is no visual harm in a fire-once set:
-    - A bare numeric literal (`volume 0.6`) ⇒ `Effect::rate` (reusing the field
-      `SpiralRot` uses for its rate — audio and spiral-rotation effects never coexist on one
-      `Effect`), applied ONCE via `set_theme_audio_volume` right after `play_theme_audio` in
-      the same firing. No render-side cost.
+    - A bare numeric literal (`volume 0.6`) ⇒ `Effect::rate` (the field the deleted
+      `SpiralRot` used for its rate; `Audio` is now its only user), applied ONCE via
+      `set_theme_audio_volume` right after `play_theme_audio` in the same firing. No
+      render-side cost.
     - A `curve`/`[expr]` volume (`volume (curve 0.2 -> 0.8)`) ⇒
       `RenderStmt{Op::AudioVolume, speed=lower(mod)}` (reusing the `speed` field — same
       convention `Warp` reuses `zoom`/`origin`/`speed` for unrelated params, §4.6), evaluated
