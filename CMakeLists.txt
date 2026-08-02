@@ -129,12 +129,34 @@ add_custom_command(
     protobuf::protoc
   VERBATIM)
 
+# The frozen upstream-era schema the legacy .session/.cfg importer parses against
+# (src/common/legacy.proto, package trance_legacy_pb). Deliberately a SECOND descriptor:
+# parsing legacy textproto against the live trance.proto would make every field this
+# fork adds part of the import surface. See legacy.proto's header and issue #47.
+add_custom_command(
+  OUTPUT
+    ${CMAKE_BINARY_DIR}/common/legacy.pb.h
+    ${CMAKE_BINARY_DIR}/common/legacy.pb.cc
+  COMMAND protobuf::protoc
+    --cpp_out=${CMAKE_BINARY_DIR}
+    --proto_path=${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/common/legacy.proto
+  DEPENDS
+    ${CMAKE_SOURCE_DIR}/src/common/legacy.proto
+    protobuf::protoc
+  VERBATIM)
+
 # The generated .cc is now a normal compiled TU (session.cpp includes the .pb.h).
 # Don't subject protobuf's generated code to our warning flags.
 set_source_files_properties(${CMAKE_BINARY_DIR}/common/trance.pb.cc PROPERTIES
   GENERATED TRUE
   COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/W0,-w>")
 set_source_files_properties(${CMAKE_BINARY_DIR}/common/trance.pb.h PROPERTIES
+  GENERATED TRUE)
+set_source_files_properties(${CMAKE_BINARY_DIR}/common/legacy.pb.cc PROPERTIES
+  GENERATED TRUE
+  COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/W0,-w>")
+set_source_files_properties(${CMAKE_BINARY_DIR}/common/legacy.pb.h PROPERTIES
   GENERATED TRUE)
 
 # ---------------------------------------------------------------------------
@@ -147,7 +169,8 @@ add_library(common_lib STATIC
   src/common/session_archive.cpp
   src/common/session_json.cpp
   src/common/session_legacy.cpp
-  ${CMAKE_BINARY_DIR}/common/trance.pb.cc)
+  ${CMAKE_BINARY_DIR}/common/trance.pb.cc
+  ${CMAKE_BINARY_DIR}/common/legacy.pb.cc)
 
 target_include_directories(common_lib PUBLIC
   src/

@@ -9,6 +9,7 @@
 #include <common/session.h>
 #include <common/session_archive.h>
 #include <common/session_json.h>
+#include <common/session_legacy.h>
 #include <common/trance.pb.h>
 
 #include <cstdio>
@@ -988,6 +989,219 @@ namespace
     const auto& loose = session.theme_map().at(kRootThemeName);
     check(loose.image_path_size() == 1 && loose.image_path(0) == "loose.png",
           "the loose root file is the /root/ theme's own content");
+  }
+
+  // -------------------------------------------------------------------------
+  // Legacy .session / system.cfg import (issue #47). The importer parses against the
+  // FROZEN fork-point descriptor (src/common/legacy.proto), so its accepted schema is
+  // the 2018 upstream one permanently: an upstream-era file must keep importing, and a
+  // file carrying a field this fork added must be rejected rather than absorbed.
+  // -------------------------------------------------------------------------
+
+  // Deliberately upstream-flavoured: deprecated flat playlist fields (100/101), a
+  // Windows backslash media path, and no field that postdates commit 0e97381.
+  const char* kUpstreamSession = R"proto(
+first_playlist_item: "main"
+playlist {
+  key: "main"
+  value {
+    standard {
+      program: "default"
+      play_time_seconds: 90
+    }
+    next_item {
+      playlist_item_name: "second"
+      random_weight: 4
+      condition_variable_name: "mood"
+      condition_variable_value: "deep"
+    }
+    audio_event {
+      type: AUDIO_PLAY
+      channel: 1
+      path: "audio\\loop.ogg"
+      loop: true
+      volume: 80
+    }
+  }
+}
+playlist {
+  key: "second"
+  value {
+    program: "default"
+    play_time_seconds: 30
+  }
+}
+program_map {
+  key: "default"
+  value {
+    enabled_theme { theme_name: "all" random_weight: 2 pinned: true }
+    enabled_theme_name: "old_style"
+    visual_type { type: SUPER_FAST random_weight: 3 }
+    global_fps: 120
+    zoom_intensity: 0.5
+    spiral_colour_a { r: 1.0 g: 0.5 b: 0.25 a: 1.0 }
+    reverse_spiral_direction: true
+  }
+}
+theme_map {
+  key: "all"
+  value {
+    image_path: ".\\hypno\\103827022_p4.png"
+    text_line: "line one"
+    font_path: "fonts\\a.ttf"
+  }
+}
+variable_map {
+  key: "mood"
+  value {
+    description: "how deep"
+    value: "light"
+    value: "deep"
+    default_value: "light"
+  }
+}
+)proto";
+
+  void test_legacy_upstream_session_imports()
+  {
+    auto root = scratch_root() / "legacy_upstream";
+    std::filesystem::remove_all(root);
+    auto path = root / "old.session";
+    write_file(path, kUpstreamSession);
+
+    trance_pb::Session session;
+    bool threw = false;
+    try {
+      session = load_legacy_session(path.string());
+    } catch (const std::exception& e) {
+      threw = true;
+      std::cout << "  (unexpected) " << e.what() << "\n";
+    }
+    check(!threw, "upstream-era .session still imports");
+    check(session.first_playlist_item() == "main", "legacy first_playlist_item survives");
+    check(session.playlist().count("main") == 1 && session.playlist().at("main").has_standard(),
+          "legacy standard playlist item survives");
+    check(session.playlist().at("main").standard().play_time_seconds() == 90,
+          "legacy standard.play_time_seconds survives");
+    check(session.playlist().at("main").next_item_size() == 1 &&
+              session.playlist().at("main").next_item(0).condition_variable_value() == "deep",
+          "legacy next_item conditions survive");
+    check(session.playlist().at("main").audio_event_size() == 1 &&
+              session.playlist().at("main").audio_event(0).type() == trance_pb::AudioEvent::AUDIO_PLAY,
+          "legacy audio_event enum survives");
+    check(session.playlist().at("main").audio_event(0).path() == "audio\\loop.ogg",
+          "backslash audio path survives the escape pre-pass");
+    // Deprecated fields 100/101 are carried across untouched; validate_session (not the
+    // importer) is what migrates them into standard{}.
+    check(session.playlist().at("second").program() == "default",
+          "deprecated flat PlaylistItem.program (100) survives");
+    check(session.playlist().at("second").play_time_seconds() == 30,
+          "deprecated flat PlaylistItem.play_time_seconds (101) survives");
+
+    const auto& program = session.program_map().at("default");
+    check(program.enabled_theme_size() == 1 && program.enabled_theme(0).pinned(),
+          "legacy enabled_theme pin survives");
+    check(program.enabled_theme_name_size() == 1 && program.enabled_theme_name(0) == "old_style",
+          "deprecated Program.enabled_theme_name (100) survives");
+    check(program.visual_type_size() == 1 &&
+              program.visual_type(0).type() == trance_pb::Program::SUPER_FAST,
+          "legacy VisualType enum survives");
+    check(program.global_fps() == 120, "legacy global_fps survives");
+    check(std::abs(program.zoom_intensity() - 0.5f) < 1e-6f, "legacy zoom_intensity survives");
+    check(program.has_spiral_colour_a() && std::abs(program.spiral_colour_a().g() - 0.5f) < 1e-6f,
+          "legacy colour survives with presence");
+    check(!program.has_spiral_colour_b(),
+          "an absent legacy colour stays absent (message presence preserved)");
+    check(program.reverse_spiral_direction(), "legacy reverse_spiral_direction survives");
+
+    const auto& theme = session.theme_map().at("all");
+    check(theme.image_path_size() == 1 && theme.image_path(0) == ".\\hypno\\103827022_p4.png",
+          "backslash-digit image path survives the escape pre-pass");
+    check(theme.text_line_size() == 1 && theme.font_path_size() == 1, "legacy theme content survives");
+    check(theme.audio_path_size() == 0, "fork-only Theme.audio_path has no legacy source");
+
+    const auto& variable = session.variable_map().at("mood");
+    check(variable.value_size() == 2 && variable.default_value() == "light",
+          "legacy variable_map survives");
+  }
+
+  void test_legacy_rejects_fork_added_fields()
+  {
+    auto root = scratch_root() / "legacy_fork_fields";
+    std::filesystem::remove_all(root);
+
+    struct Case {
+      const char* what;
+      const char* text;
+    };
+    const Case cases[] = {
+        {"entrainment",
+         "program_map { key: \"a\" value { entrainment { master_db: -28.0 } } }\n"},
+        {"custom_visual_pattern",
+         "program_map { key: \"a\" value { custom_visual_pattern { name: \"p\" } } }\n"},
+        {"visual_type pinned",
+         "program_map { key: \"a\" value { visual_type { type: ANIMATION pinned: true } } }\n"},
+        {"theme audio_path", "theme_map { key: \"t\" value { audio_path: \"a.ogg\" } }\n"},
+    };
+
+    for (const auto& c : cases) {
+      auto path = root / (std::string{"fork_"} + c.what + ".session");
+      write_file(path, c.text);
+      bool threw = false;
+      try {
+        load_legacy_session(path.string());
+      } catch (const std::exception&) {
+        threw = true;
+      }
+      check(threw, std::string{"fork-added field is rejected by the importer: "} + c.what);
+    }
+  }
+
+  void test_legacy_system_cfg_imports()
+  {
+    auto root = scratch_root() / "legacy_system";
+    std::filesystem::remove_all(root);
+
+    auto ok_path = root / "system.cfg";
+    write_file(ok_path,
+               "enable_vsync: true\n"
+               "renderer: OPENVR\n"
+               "draw_depth { draw_depth: 0.5 }\n"
+               "image_cache_size: 64\n"
+               "last_root_directory: \"C:\\\\media\"\n"
+               "last_session_map { key: \"a.session\" value { variable_map { key: \"mood\""
+               " value: \"deep\" } } }\n");
+
+    trance_pb::System system;
+    bool threw = false;
+    try {
+      system = load_legacy_system(ok_path.string());
+    } catch (const std::exception& e) {
+      threw = true;
+      std::cout << "  (unexpected) " << e.what() << "\n";
+    }
+    check(!threw, "upstream-era system.cfg still imports");
+    check(system.enable_vsync(), "legacy enable_vsync survives");
+    check(system.renderer() == trance_pb::System::OPENVR, "legacy renderer enum survives");
+    check(system.has_draw_depth() && std::abs(system.draw_depth().draw_depth() - 0.5f) < 1e-6f,
+          "legacy draw_depth survives with presence");
+    check(!system.has_eye_spacing(),
+          "an absent eye_spacing stays absent (validate_system fills the default, not the importer)");
+    check(system.image_cache_size() == 64, "legacy image_cache_size survives");
+    check(system.last_session_map().count("a.session") == 1 &&
+              system.last_session_map().at("a.session").variable_map().at("mood") == "deep",
+          "legacy last_session_map survives");
+
+    // OPENXR postdates the fork point: not a value the frozen Renderer enum knows.
+    auto openxr_path = root / "openxr.cfg";
+    write_file(openxr_path, "renderer: OPENXR\n");
+    bool openxr_threw = false;
+    try {
+      load_legacy_system(openxr_path.string());
+    } catch (const std::exception&) {
+      openxr_threw = true;
+    }
+    check(openxr_threw, "fork-added enum value OPENXR is rejected by the importer");
   }
 
 } // namespace

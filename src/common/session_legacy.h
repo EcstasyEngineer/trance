@@ -13,6 +13,13 @@ namespace trance_pb
 // which is what auto-migrates a .session path (including a sibling ./default.session)
 // into JSON on load. Playback itself stays JSON-only -- everything downstream of
 // load_session only ever sees the converted JSON.
+//
+// Scope, permanently: these read UPSTREAM-ERA files only. Parsing happens against the
+// frozen `legacy.proto` descriptor (the fork-point schema, commit 0e97381), not the
+// live `trance.proto`, and the result is translated into the current model explicitly
+// in session_legacy.cpp. Fields this fork added -- entrainment, custom_visual_pattern,
+// theme audio_path, OPENXR -- are outside the importer's contract by construction and
+// a file containing them is rejected, not half-read. docs/session-json-format.md sec 7.
 // Both throw std::runtime_error on a missing file or parse failure; neither
 // validates -- callers run validate_session/validate_system, matching the spec
 // pipeline (docs/session-json-format.md sec 7).
