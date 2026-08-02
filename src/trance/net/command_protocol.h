@@ -4,10 +4,10 @@
 
 // Pure protocol layer for the command channel (docs/spec-mcp-ambient-daemon.md sec 3/4):
 // line -> Verb struct, and the couple of pure formatting helpers for reply lines. Deliberately
-// has ZERO dependency on sockets, Director, Audio, or any runtime state -- that's what makes
-// it headlessly unit-testable (tests/command_protocol_test.cpp) and keeps it separate from
-// verb EXECUTION, which lives in main.cpp's per-frame drain/dispatch (execute_command /
-// handle_commands) on the render thread.
+// has ZERO dependency on sockets, Director, Audio, or any runtime state -- keeping it separate
+// from verb EXECUTION, which lives in main.cpp's per-frame drain/dispatch (execute_command /
+// handle_commands) on the render thread. QA'd end-to-end over a real socket by
+// tests/qa_command_channel.py against a live exe (#29).
 namespace command_protocol
 {
   enum class Verb {

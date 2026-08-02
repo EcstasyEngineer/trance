@@ -8,9 +8,10 @@ replacing the text-format protobuf `.session` / `.cfg` files.
 populates the proto structs and runs the existing `validate_session()` /
 `validate_system()` repair passes (`src/common/session.cpp:448,486`) unchanged. Replacing
 trance_pb with native structs is a named future step — the **trance_pb retirement wave** —
-which lands once `trance_convert` is the *only* remaining proto consumer: i.e. when the
-validate/repair passes and every runtime reader work on native structs, leaving the proto
-purely as the legacy `.session`/`.cfg` import schema. Until then, every JSON field below
+which lands once the legacy auto-migration path (`session_legacy.cpp`) is the *only*
+remaining proto consumer: i.e. when the validate/repair passes and every runtime reader
+work on native structs, leaving the proto purely as the migration target the frozen
+legacy schema translates into. Until then, every JSON field below
 has an exact proto mapping, and the proto file stays the schema of record for in-memory
 shapes.
 
@@ -564,14 +565,18 @@ ImGui editor's file-dialog memory and per-session variable memory (a behaviour i
 from the deleted wx creator). They stay in system.json — do not invent a second state file
 for them. `last_export_settings` is now read by nothing at all; see its table row.
 
-## 7. Converter
+## 7. Legacy migration
 
-`trance_convert <path>` (a standalone binary — no window/GL dependencies, safe on headless
-boxes) where path is a legacy `.session` or `.cfg`. Emits a sibling
-`<name>.session.json` (plus externalized `patterns/*.pattern`) or `system.json`. Never
-overwrites the input; errors rather than clobbering an existing output file.
+There is no converter binary: **loading is converting.** `trance.exe` given a legacy
+`.session` path (or finding a sibling `./default.session`) migrates it to a sibling
+`<name>.session.json` (plus externalized `patterns/*.pattern`) transparently on load
+(`convert_legacy_session`, session.cpp), and startup migrates a sibling legacy
+`system.cfg` into `system.json` when no loadable `system.json` exists (main.cpp). For a
+headless one-shot conversion — no window, no GL — run `trance --lint old.session`: lint
+loads the session through the same path, which writes the JSON, and validates its
+patterns for free. The original file is never overwritten.
 
-**One converter, frozen schema.** Input is parsed as text-format protobuf against the
+**One importer, frozen schema.** Input is parsed as text-format protobuf against the
 **frozen fork-point descriptor** (`src/common/legacy.proto`, package `trance_legacy_pb` —
 a verbatim copy of `trance.proto` at 0e97381, the last upstream commit), then translated
 field-by-field into the live `trance_pb` model in one place, `session_legacy.cpp`.
@@ -605,19 +610,18 @@ Pipeline:
 6. `system.cfg` → `system.json`: mechanical; `last_session_map` keys (old `.session`
    paths) are copied as-is — stale keys are a harmless convenience-cache miss.
 
-**Acceptance test:** convert → load the JSON (with pattern re-inlining) → compare the
-resulting `trance_pb::Session` against `validate_session(load_proto(original))` using
-`MessageDifferencer` with float tolerance 1/255 on colour components. Any other diff is a
-converter bug.
+**Acceptance test:** the migration contract is pinned by `session_json_test`'s legacy
+suite (upstream-era files import field-for-field; fork-added fields reject; message
+presence survives).
 
 **Lossy by design:** `#` comments in hand-edited textproto files are not carried over
 (TextFormat discards them at parse). Re-add them as `_note` keys after converting.
 
 ## 8. Loader dispatch and the ImGui editor
 
-**Playback and the editor load only `*.session.json` / `system.json`.** The legacy
-textproto parser survives solely inside `trance_convert`; there is no dual load path and no
-extension sniffing in the player. Constants change: `DEFAULT_SESSION_PATH =
+**Playback and the editor operate on `*.session.json` / `system.json`.** The legacy
+textproto parser survives solely as the §7 one-shot migration; nothing downstream of
+`load_session` ever sees a proto file. Constants change: `DEFAULT_SESSION_PATH =
 "default.json"`, `SYSTEM_CONFIG_PATH = "system.json"` (`common.h`). A missing
 `system.json` is regenerated from `get_default_system()` and saved, exactly as today
 (`main.cpp:563-570`).
@@ -675,12 +679,13 @@ change shape at that point — that is the test of the retirement wave.
 
 ## 10. Migration notes for existing sessions
 
-1. Run `trance_convert my.session` once per session; a `my.session.json` and a
-   `patterns/` dir appear beside it. Media files are not moved — relative paths were
-   already root-relative and copy through verbatim. Keep or delete the old `.session`
-   afterward; the player no longer reads it.
-2. `system.cfg`: either convert it (preserves cache sizes and variable memory) or just
-   delete it — a fresh `system.json` regenerates with defaults on next launch.
+1. Open `my.session` in the player once (or run `trance --lint my.session` for a
+   headless one-shot); a `my.session.json` and a `patterns/` dir appear beside it. Media
+   files are not moved — relative paths were already root-relative and copy through
+   verbatim. Keep or delete the old `.session` afterward; playback reads only the JSON.
+2. `system.cfg`: leave it next to the binary and the first launch migrates it into
+   `system.json` (preserves cache sizes and variable memory), or just delete it — a
+   fresh `system.json` regenerates with defaults.
 3. Custom patterns previously embedded in the `.session` become `patterns/*.pattern`
    files named by pattern-name slug; edit those files directly from now on.
 4. Sessions whose colours were hand-set to non-1/255-grid floats quantize to 8-bit on

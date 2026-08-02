@@ -28,19 +28,20 @@ extern "C" {
 namespace
 {
   const uint32_t spiral_type_max = 7;
+}
 
-  uint32_t locked_period_frames(const trance_pb::Program& program)
-  {
-    float best_db = -1e30f;
-    float hz = 0.f;
-    for (const auto& l : program.entrainment().layer()) {
-      if (l.pulse_hz() > 0.f && l.amplitude_db() >= best_db) {
-        best_db = l.amplitude_db();
-        hz = l.pulse_hz();
-      }
+// Declared in director.h; also used by main.cpp's --lint.
+uint32_t locked_period_frames(const trance_pb::Program& program)
+{
+  float best_db = -1e30f;
+  float hz = 0.f;
+  for (const auto& l : program.entrainment().layer()) {
+    if (l.pulse_hz() > 0.f && l.amplitude_db() >= best_db) {
+      best_db = l.amplitude_db();
+      hz = l.pulse_hz();
     }
-    return hz > 0.f ? uint32_t(double(program.global_fps()) / double(hz) + 0.5) : 0;
   }
+  return hz > 0.f ? uint32_t(double(program.global_fps()) / double(hz) + 0.5) : 0;
 }
 #include "shaders.h"
 

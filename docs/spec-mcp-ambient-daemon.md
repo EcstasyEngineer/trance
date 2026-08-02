@@ -223,8 +223,8 @@ the runtime or as a daemon.**
 ## 7. Build order (each step independently testable) — COMPLETE
 
 This ladder has been climbed; it is kept because it records *why* the pieces are layered
-the way they are, not as remaining work. The shipped verb surface is §4; the protocol
-parser has its own ctest (`tests/command_protocol_test.cpp`).
+the way they are, not as remaining work. The shipped verb surface is §4; the channel is
+QA'd end-to-end from Python against a live exe (`tests/qa_command_channel.py`, #29).
 
 1. **`CommandChannel`** + a `--command_port <port>` launch flag. Test with `netcat`: pipe a
    `status` line, get an `ok ...` reply. (No effects yet.)

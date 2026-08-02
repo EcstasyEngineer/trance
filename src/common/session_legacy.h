@@ -9,7 +9,7 @@ namespace trance_pb
 }
 
 // Legacy textproto readers (the pre-JSON .session / system.cfg formats). Shared by
-// trance_convert (the one-shot CLI converter) and session.cpp's convert_legacy_session,
+// session.cpp's convert_legacy_session and main.cpp's system.cfg startup migration,
 // which is what auto-migrates a .session path (including a sibling ./default.session)
 // into JSON on load. Playback itself stays JSON-only -- everything downstream of
 // load_session only ever sees the converted JSON.

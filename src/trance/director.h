@@ -26,6 +26,13 @@ class Image;
 class ThemeBank;
 class Visual;
 class VisualApiImpl;
+
+// Entrainment beat period in frames for `beats N` / `locked` lengths (spec §4.16): the
+// period of the program's highest-amplitude pulsed layer, 0 when there is no pulsed bed.
+// Shared by Director's pattern builds and main.cpp's --lint, so both parse a program's
+// patterns against the same clock.
+uint32_t locked_period_frames(const trance_pb::Program& program);
+
 class Director
 {
 public:

@@ -233,8 +233,8 @@ namespace
   std::string fnum(float v) { return std::to_string(v); }
 
   // Effect::split values, mirroring VisualControl::SplitType (api.h). Duplicated as a plain
-  // constant rather than included: this TU is deliberately free of api.h, which drags SFML and
-  // would break the headless v3_grammar_test target (see CMakeLists).
+  // constant rather than included: this TU stays deliberately free of api.h (which drags
+  // SFML) so the parser remains linkable into bare headless contexts.
   constexpr uint32_t kSplitWord = 0;
   constexpr uint32_t kSplitLine = 1;
 

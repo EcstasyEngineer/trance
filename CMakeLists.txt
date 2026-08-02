@@ -252,31 +252,19 @@ if(UNIX AND NOT APPLE)
   endif()
 endif()
 
-# ---------------------------------------------------------------------------
-# trance_convert (one-shot legacy .session/.cfg textproto -> JSON converter,
-# docs/session-json-format.md sec 7). No SFML/window/GL/audio deps -- links
-# common_lib (protobuf + nlohmann_json) only.
-# ---------------------------------------------------------------------------
-add_executable(trance_convert
-  src/tools/convert_main.cpp)
-
-target_link_libraries(trance_convert PRIVATE
-  common_lib
-  trance_options)
-
 # Keep the runtime output dir to the shippables: static libs and the linker's
 # import-lib byproducts (.lib/.exp) go to lib/ instead of sitting next to trance.exe.
-set_target_properties(common_lib trance trance_convert PROPERTIES
+set_target_properties(common_lib trance PROPERTIES
   ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 # ---------------------------------------------------------------------------
 # Install / bundle. `cmake --install build/<preset> --config Release --prefix <dir>`
-# produces the complete distributable: trance.exe, trance_convert.exe and, on
-# Windows, the DLLs vcpkg's applocal step deployed beside them (openvr_api.dll —
-# Valve ships OpenVR only as a DLL, so it cannot be linked static; everything else
-# is already static via the x64-windows-static-md triplet).
+# produces the complete distributable: trance.exe and, on Windows, the DLLs
+# vcpkg's applocal step deployed beside it (openvr_api.dll — Valve ships OpenVR
+# only as a DLL, so it cannot be linked static; everything else is already
+# static via the x64-windows-static-md triplet).
 # ---------------------------------------------------------------------------
-install(TARGETS trance trance_convert RUNTIME DESTINATION .)
+install(TARGETS trance RUNTIME DESTINATION .)
 if(WIN32)
   install(DIRECTORY $<TARGET_FILE_DIR:trance>/ DESTINATION .
     FILES_MATCHING PATTERN "*.dll")

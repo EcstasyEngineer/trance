@@ -4,8 +4,7 @@
 // the parts of the spec most likely to silently drift from the hand-editing contract.
 //
 // Headless: no SFML. Links common_lib (protobuf + nlohmann_json), same as session.cpp
-// itself; not "bare C++17 compiler" like v3_grammar_test but does not touch a window,
-// GL context, or audio device. Run via ctest.
+// itself; does not touch a window, GL context, or audio device. Run via ctest.
 #include <common/session.h>
 #include <common/session_archive.h>
 #include <common/session_json.h>

@@ -150,9 +150,8 @@ pattern super_parallel for 1152f {
   //   base  0- 8  HOLD at full  (17 full-alpha frames spanning the cycle boundary)
   //   base  9-15  fade out     (alpha 0.875 .. 0.125)
   //   base 16-48  ABSENT       (33f of animation alone -- the original's 32f hole)
-  // Those are measured off the compiled tree, not estimated; the animation case in
-  // tests/v3_grammar_test.cpp asserts the counts (33 absent / 17 full / 14 mid-ramp) and
-  // fails against `fade inout`, which scores 1 and 1.
+  // Those are measured off the compiled tree, not estimated (33 absent / 17 full /
+  // 14 mid-ramp frames per 64f turn; a plain `fade inout` scores 1 and 1).
   //
   // The legs are 8/16/8 rather than a literal 16/16/16 because the four legs of the intent
   // (16 in + 16 hold + 16 out + 32 absent) sum to 80f and cannot fit one 64f turn. Trading the

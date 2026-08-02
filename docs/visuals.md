@@ -171,8 +171,8 @@ working. Each value now maps to a v3 DSL source string in
 `Director::build_builtin_patterns()` (`director.cpp`) parses all eight at
 startup and throws on a parse failure: built-in sources are compile-time
 constants, so a typo is a build bug — fail fast rather than risk a null visual
-at selection time. `v3_grammar_test` parses and lowers all shipped built-ins
-headlessly.
+at selection time. `trance --lint` proves the same property headlessly (parses,
+lowers, compiles and expr-evaluates all eight) without opening a window.
 
 All eight formerly-hardcoded `*Visual` classes are deleted. `Visual`
 (`src/trance/visual/visual.h`) survives only as the small base interface
@@ -202,13 +202,15 @@ this frame. Visuals with no labelled section honestly show `section --`.
 
 ## Tests
 
-Four headless ctests (gated behind `-DTRANCE_BUILD_TESTS=ON`, run via `ctest`; CI
-runs them on every pull request):
+Ctest entries (gated behind `-DTRANCE_BUILD_TESTS=ON`, run via `ctest`; CI runs
+them on every pull request):
 
-- `v3_grammar_test` — sanity + behavioral harness for the v3 grammar: parses and
-  lowers the shipped built-ins, checks crossfade-from-primitives and
-  register-scope isolation. Deliberately **not** a parity test (see CLAUDE.md,
-  "supersede, not parity").
-- `session_json_test` — the `*.session.json` loader round-trip.
+- `grammar_lint` — `trance --lint`: the product binary parses, lowers, compiles
+  and expr-evaluates all eight built-ins. Deliberately **not** a parity test
+  (see CLAUDE.md, "supersede, not parity").
+- `session_json_test` — the `*.session.json` loader round-trip + the frozen
+  legacy-import contract (#47).
 - `playlist_runner_test` — the playlist stack machine (`playlist_runner.{h,cpp}`).
-- `command_protocol_test` — the `--command_port` line→verb protocol parser.
+
+The `--command_port` channel is QA'd end-to-end from Python against a live exe
+(`tests/qa_command_channel.py`, #29).

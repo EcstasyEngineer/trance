@@ -5,8 +5,8 @@ A session is a `*.session.json` file — plain JSON, spec in
 `src/common/session_json.cpp`. It holds everything a session needs except the
 media files themselves (which it references by relative path). In memory it
 becomes a `trance_pb::Session` — the protobuf (`src/common/trance.proto`) is the
-**frozen in-memory model only**; legacy protobuf `.session` files are no longer
-read directly and convert via `trance_convert`. This document tours the
+**frozen in-memory model only**; legacy protobuf `.session` files are
+auto-migrated to JSON on load. This document tours the
 schema, the load path, theme shuffling, and — in detail — the playlist "VM" that
 the README mentions but doesn't explain.
 
@@ -59,9 +59,9 @@ session root.
 
 `main()` (`src/trance/main.cpp`) loads the session:
 
-1. `load_session(path)` (`src/common/session.cpp`) requires a `*.session.json`
-   path (a legacy `.session`/`.cfg` proto path is a fatal error with a
-   `trance_convert` hint), parses it via `load_session_json()`
+1. `load_session(path)` (`src/common/session.cpp`) takes a `*.session.json`
+   path (a legacy `.session` proto path is transparently migrated to a JSON
+   sibling first — session-json-format.md §7), parses it via `load_session_json()`
    (`src/common/session_json.cpp`), then runs `validate_session()`.
 2. `validate_session()` (`session.cpp`) is the repair pass: it fills empty
    maps with defaults, migrates deprecated fields (`enabled_theme_name` →

@@ -2,6 +2,7 @@
 #include <common/session.h>
 #include <common/session_archive.h>
 #include <common/session_json.h>
+#include <common/session_legacy.h>
 #include <common/util.h>
 #include <trance/director.h>
 #include <trance/media/audio.h>
@@ -16,9 +17,15 @@
 #include <trance/runtime_state.h>
 #include <trance/theme_bank.h>
 #include <trance/ui/app_ui.h>
+#include <trance/visual/builtin_patterns.h>
 #include <trance/visual/builtin_visuals.h>
+#include <trance/visual/cyclers.h>
+#include <trance/visual/pattern_compiler.h>
+#include <trance/visual/pattern_parser_v3.h>
+#include <trance/visual/render_eval.h>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <filesystem>
 #include <fstream>
@@ -998,6 +1005,12 @@ DEFINE_string(renderer, "",
              "never written back, so the F2 System radios stay the persistent setting. "
              "Empty (default) means use system.json, where a missing key is monitor "
              "mode (which SteamVR then mirrors as a flat virtual desktop).");
+DEFINE_bool(lint, false,
+            "parse + lower + compile every built-in pattern (and, given a session "
+            "argument, its custom patterns against that program's entrainment beat), "
+            "evaluate the lowered render exprs, print per-pattern results and exit "
+            "nonzero on any failure. No window, no GL, no audio. Loading a legacy "
+            ".session here auto-migrates it to JSON exactly as playback would.");
 DEFINE_int32(command_port, 0,
             "command channel (docs/spec-mcp-ambient-daemon.md): TCP port to bind on "
             "127.0.0.1 for the localhost line-protocol control socket (pause/resume, "
@@ -1053,13 +1066,130 @@ namespace
     }
     return std::string{std::istreambuf_iterator<char>{f}, std::istreambuf_iterator<char>{}};
   }
+
+  // --lint: the grammar's lean proof, run inside the product binary. Parse + lower +
+  // compile each pattern, then evaluate every lowered render [expr] against live cycler
+  // state at frames {0, mid, end-1} -- parse-time name resolution can't catch a
+  // malformed expr the LOWERING itself emits (it silently evaluates to 0.0 or worse),
+  // so the tripwire is finite-and-sane, not exact values. Nothing here touches a
+  // window, GL, or audio, which is what lets CI run it on a bare runner.
+  int lint_expr_failures(const pattern::RenderStmt& st, const pattern::Registers& regs,
+                         const pattern::NodeMap& nodes, const Cycler* root)
+  {
+    int fails = 0;
+    auto num = [&](const std::string& expr, double dflt) {
+      double v = pattern::eval_expr(expr, dflt, regs, nodes, root);
+      if (!std::isfinite(v) || std::fabs(v) > 16.0) {
+        ++fails;
+      }
+    };
+    num(st.alpha, 1.0);
+    num(st.origin, 0.0);
+    num(st.zoom, 0.0);
+    num(st.shadow_origin, 0.0);
+    num(st.shadow_zoom, 0.0);
+    num(st.speed, 0.0);
+    // Boolean guards: evaluated for crash/parse coverage only -- they are conditions,
+    // not bounded numerics.
+    (void)pattern::eval_cond_expr(st.when, regs, nodes, root);
+    (void)pattern::eval_cond_expr(st.anim_gate, regs, nodes, root);
+    return fails;
+  }
+
+  bool lint_pattern(const std::string& label, const std::string& source, uint32_t locked)
+  {
+    auto pr = patternv3::parse(source, locked);
+    if (!pr.ok) {
+      std::cout << "FAIL  " << label << ": " << pr.error << std::endl;
+      return false;
+    }
+    for (const auto& warning : pr.warnings) {
+      std::cout << "warn  " << label << ": " << warning << std::endl;
+    }
+    uint32_t length = 0;
+    {
+      Cycler* probe = pattern::compile(pr.root);
+      length = probe ? probe->length() : 0;
+      delete probe;
+    }
+    if (!length) {
+      std::cout << "FAIL  " << label << ": compiles to an empty tree" << std::endl;
+      return false;
+    }
+    int fails = 0;
+    for (uint32_t target : {0u, length / 2, length - 1}) {
+      pattern::NodeMap node_map;
+      Cycler* compiled = pattern::compile(pr.root, pattern::MakeAction{}, node_map);
+      if (!compiled) {
+        ++fails;
+        continue;
+      }
+      pattern::Registers regs;
+      // advance() N+1 times => frame() == N, matching Director::update()'s
+      // one-advance-per-frame loop.
+      for (uint32_t i = 0; i <= target; ++i) {
+        compiled->advance();
+      }
+      for (const auto& st : pr.render_block) {
+        fails += lint_expr_failures(st, regs, node_map, compiled);
+      }
+      delete compiled;
+    }
+    if (fails) {
+      std::cout << "FAIL  " << label << ": " << fails
+                << " render expr evaluations non-finite or out of sane bounds" << std::endl;
+      return false;
+    }
+    std::cout << "  ok  " << label << " (" << length << "f)" << std::endl;
+    return true;
+  }
+
+  int run_lint(int argc, char** argv)
+  {
+    bool ok = true;
+    for (const auto& visual : builtin_visuals()) {
+      if (!lint_pattern(std::string{"builtin "} + visual.name,
+                        builtin::pattern_source_v3(visual.type), 0)) {
+        ok = false;
+      }
+    }
+    if (!FLAGS_pattern.empty()) {
+      if (!lint_pattern("--pattern " + FLAGS_pattern, read_file(FLAGS_pattern), 0)) {
+        ok = false;
+      }
+    }
+    if (argc >= 2) {
+      SessionJsonSidecar sidecar;
+      trance_pb::Session session;
+      try {
+        session = load_session(argv[1], sidecar);
+      } catch (const std::runtime_error& e) {
+        std::cout << "FAIL  " << argv[1] << ": " << e.what() << std::endl;
+        std::cout << "LINT FAILED" << std::endl;
+        return 1;
+      }
+      for (const auto& pair : session.program_map()) {
+        // The same beat period director.cpp threads into the live parse, so `beats N` /
+        // `locked` lengths lint against the program's real clock.
+        const uint32_t locked = locked_period_frames(pair.second);
+        for (const auto& custom : pair.second.custom_visual_pattern()) {
+          if (!lint_pattern("program '" + pair.first + "' pattern '" + custom.name() + "'",
+                            custom.source_text(), locked)) {
+            ok = false;
+          }
+        }
+      }
+    }
+    std::cout << (ok ? "LINT OK" : "LINT FAILED") << std::endl;
+    return ok ? 0 : 1;
+  }
 }
 
 int main(int argc, char** argv)
 {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   if (argc > 3) {
-    std::cerr << "usage: " << argv[0] << " [session.cfg [system.cfg]]" << std::endl;
+    std::cerr << "usage: " << argv[0] << " [session.json [system.json]]" << std::endl;
     return 1;
   }
   if (!FLAGS_visual.empty() && !FLAGS_pattern.empty()) {
@@ -1078,6 +1208,9 @@ int main(int argc, char** argv)
   if (FLAGS_command_port < 0 || FLAGS_command_port > 65535) {
     std::cerr << "error: --command_port must be between 0 and 65535" << std::endl;
     return 1;
+  }
+  if (FLAGS_lint) {
+    return run_lint(argc, argv);
   }
   // --renderer: eagerly validated for the same reason, and resolved into an optional
   // override play_session applies on top of system.json (never writing it back).
@@ -1131,8 +1264,8 @@ int main(int argc, char** argv)
   try {
     session = load_session(session_path, sidecar);
   } catch (std::runtime_error& e) {
-    // An EXPLICITLY named session that fails to load (legacy .session needing
-    // trance_convert, JSON typo, missing file) must be a fatal error -- silently playing
+    // An EXPLICITLY named session that fails to load (corrupt legacy .session,
+    // JSON typo, missing file) must be a fatal error -- silently playing
     // default content instead of what was asked for is worse than exiting.
     // Same for an EXISTING ./default.json that fails to parse: overwriting a
     // hand-edited-but-broken file with a generated one would destroy the user's edits.
@@ -1177,12 +1310,29 @@ int main(int argc, char** argv)
   }
 
   std::string system_path{argc >= 3 ? argv[2] : "./" + SYSTEM_CONFIG_PATH};
+  // Someone passing the old system.cfg directly gets it migrated, not clobbered: the
+  // JSON always lands at a .json sibling, never over the .cfg input.
+  if (ext_is(system_path, "cfg")) {
+    system_path =
+        (std::filesystem::path{system_path}.parent_path() / SYSTEM_CONFIG_PATH).string();
+  }
   trance_pb::System system;
   try {
     system = load_system(system_path);
   } catch (std::runtime_error& e) {
-    std::cerr << e.what() << std::endl;
-    system = get_default_system();
+    // No loadable system.json: a sibling legacy system.cfg is migrated in place -- the
+    // same courtesy load_session extends to a legacy .session -- before falling back to
+    // the generated default. This is the only remaining system.cfg reader.
+    auto legacy_cfg = std::filesystem::path{system_path}.parent_path() / "system.cfg";
+    try {
+      system = load_legacy_system(legacy_cfg.string());
+      validate_system(system);
+      std::cout << "migrated legacy " << legacy_cfg.string() << " -> " << system_path
+                << std::endl;
+    } catch (const std::runtime_error&) {
+      std::cerr << e.what() << std::endl;
+      system = get_default_system();
+    }
     save_system(system, system_path);
   }
 

@@ -6,7 +6,7 @@ Guidance for working in this repo. Read it before making changes.
 
 A fullscreen visual hypnosis / media player (C++17, SFML 3). It plays **sessions**
 (`*.session.json`, spec in `docs/session-json-format.md`; legacy protobuf `.session` files
-convert via `trance_convert`) that drive a stream of timed visuals — flashing images/text,
+auto-migrate to JSON on load) that drive a stream of timed visuals — flashing images/text,
 spirals, animations — over audio with optional binaural/isochronic entrainment beds and
 theme audio. Also: a click-through `--overlay` mode (X11 and Win32), an
 ImGui F2 in-app UI, a system tray icon (Windows) + global Shift+F11 hide-everything hotkey, and a
@@ -30,7 +30,7 @@ cmake --build --preset linux-release          # or linux-debug
 # Run (realtime windowed; needs a real GPU — software GL won't do)
 ./build/windows-msvc/Release/trance.exe "C:\path\to\some.session"
 
-# Bundle a clean distributable (trance.exe + trance_convert.exe + openvr_api.dll, nothing else)
+# Bundle a clean distributable (trance.exe + openvr_api.dll, nothing else)
 cmake --install build/windows-msvc --config Release --prefix dist
 ```
 
@@ -47,10 +47,15 @@ cmake --build --preset windows-release
 ctest --test-dir build/windows-msvc -C Release --output-on-failure
 ```
 
-Five tests: `v3_grammar_test`, `session_json_test`, `playlist_runner_test`,
-`command_protocol_test`, `theme_bank_test`. CI runs ctest on every pull request. Test
-targets live in `tests/CMakeLists.txt`; their binaries and intermediates land under
-`build/<preset>/tests/`, keeping `Release/` to the shippable binaries only.
+Four ctest entries: `grammar_lint` (runs `trance --lint` — the product binary parses,
+lowers, compiles and expr-evaluates all 8 built-ins; no GL context needed), plus three
+C++ test exes: `session_json_test`, `playlist_runner_test`, `theme_bank_test`. Each C++
+test exists only because its subject is unreachable from outside the process (proto-state
+assertions, the playlist VM, the GL-uploading loader). CI runs ctest on every pull
+request. Test targets live in `tests/CMakeLists.txt`; their binaries and intermediates
+land under `build/<preset>/tests/`, keeping `Release/` to the shippable binaries only.
+The command channel is QA'd end-to-end from Python against a live exe
+(`tests/qa_command_channel.py`, issue #29) — hands-on, never in ctest.
 
 `theme_bank_test` is the one that is **not** headless: it drives ThemeBank's tiered image
 selection against a real synthetic media tree, and `get_image` uploads textures, so it needs
@@ -62,9 +67,10 @@ than reddening CI.
 stale test binaries in place and `ctest` then reports false passes — that is exactly how
 `session_json_test` sat red on master unnoticed.
 
-`tests/v3_grammar_test.cpp` is a **sanity + behavioral** harness for the v3 grammar (parses &
-lowers the shipped built-ins; checks crossfade-from-primitives + register-scope isolation). It
-is **not** a parity test — see "supersede, not parity" below.
+`trance --lint [session]` is the grammar's validation surface: it proves the built-ins
+(and a session's custom patterns, against that program's real entrainment beat) parse,
+lower, compile and evaluate — and doubles as the pattern author's linter. It is **not** a
+parity test — see "supersede, not parity" below.
 
 ## Architecture
 
@@ -129,4 +135,4 @@ render, media, main), `src/common` (proto `trance.proto`, session), `docs/`, `te
   `-Werror` (legacy 2014-era code). Keep new code warning-clean on MSVC.
 - Branch for changes; `master` is the single long-lived branch. Don't leave stray branches.
 - `system.json` is a runtime-written config (gitignored), not source. (`system.cfg` is its
-  retired protobuf ancestor — convert with `trance_convert`.)
+  retired protobuf ancestor — a sibling one is auto-migrated at startup.)

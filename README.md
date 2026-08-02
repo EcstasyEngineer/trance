@@ -120,7 +120,7 @@ just above the banner.
 
 Sessions are plain JSON ([docs/session-json-format.md](docs/session-json-format.md) is the
 normative spec) — edit them live from the in-app **F2** panel or in any text editor. Legacy
-protobuf `.session` files from older versions convert with `trance_convert`. (The old
+protobuf `.session` files from older versions are auto-migrated to JSON on load. (The old
 `creator.exe` graphical editor has been removed; F2 and a text editor replace it.)
 
 ## Supported file formats

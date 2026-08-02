@@ -74,5 +74,4 @@ jobs:
           name: trance-windows-x64
           path: |
             build/windows-msvc/Release/trance.exe
-            build/windows-msvc/Release/trance_convert.exe
             build/windows-msvc/Release/*.dll

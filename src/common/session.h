@@ -55,7 +55,8 @@ void search_resources(trance_pb::Session& session, const std::string& root,
 void search_resources(trance_pb::Theme& theme, const std::string& root);
 
 // Loads system.json (session_json.h). A legacy .cfg proto path is rejected with a
-// fatal error -- trance.exe no longer reads proto system configs.
+// fatal error -- main.cpp's startup migrates a sibling legacy system.cfg into
+// system.json (load_legacy_system) before this is ever retried.
 trance_pb::System load_system(const std::string& path);
 void save_system(const trance_pb::System&, const std::string& path);
 trance_pb::System get_default_system();

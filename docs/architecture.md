@@ -7,19 +7,17 @@ subsystem. For the feature list and build instructions, see the
 
 ## Two executables, one session model
 
-`trance` ships as two binaries that share the in-memory session model (the
-`trance_pb::Session` protobuf, `src/common/trance.proto`) and the `common`
-support code, but otherwise have no runtime dependency on each other:
-
-- **`trance`** — the realtime player. Loads a session, runs the frame loop,
-  and renders to a window (or VR headset). Entry point: `src/trance/main.cpp`.
-- **`trance_convert`** — a one-shot legacy-proto → JSON converter.
+`trance` ships as ONE binary: the realtime player. It loads a session, runs the
+frame loop, and renders to a window (or VR headset). Entry point:
+`src/trance/main.cpp`. (`--lint` is the same binary run headlessly: it proves the
+built-in and custom patterns parse/lower/compile without opening a window.)
 
 The **on-disk format is JSON**: `*.session.json`, spec in
 [session-json-format.md](session-json-format.md), loader
-`src/common/session_json.cpp`. The proto is the frozen *in-memory* model only —
-legacy protobuf `.session` files are no longer read directly and convert via
-`trance_convert`.
+`src/common/session_json.cpp`. The proto (`trance_pb::Session`,
+`src/common/trance.proto`) is the frozen *in-memory* model only — a legacy
+protobuf `.session` (or sibling `system.cfg`) is auto-migrated to JSON on load,
+parsing against the frozen fork-point schema (`src/common/legacy.proto`, #47).
 
 Editing happens in the in-app F2 (ImGui) panel or directly in the JSON. A third
 binary, a wxWidgets `creator` editor, used to ship and was deleted; the handful of
@@ -31,10 +29,10 @@ things it did that F2 still does not are tracked in
 The player's lifecycle lives in `play_session()` (`src/trance/main.cpp`):
 
 1. **Load.** `main()` calls `load_session()` (`src/common/session.cpp`), which
-   requires a `*.session.json` path and parses it via `load_session_json()`
+   takes a `*.session.json` path and parses it via `load_session_json()`
    (`src/common/session_json.cpp`) into the in-memory `trance_pb::Session`; a
-   legacy `.session`/`.cfg` proto path is rejected with a fatal hint to run
-   `trance_convert`. `validate_session()` then fills in defaults and repairs
+   legacy `.session` proto path is transparently migrated to JSON first
+   (`convert_legacy_session`). `validate_session()` then fills in defaults and repairs
    dangling references. If the file is missing it falls back to
    `get_default_session()` and `search_resources()` (auto-generates a session
    from media found next to the binary).
@@ -81,8 +79,8 @@ play_session frame loop ──► Director ──► Visual (cycler tree + effec
 
 | Path | What lives here |
 |---|---|
-| `src/common/` | Shared, executable-agnostic code: the `trance.proto` in-memory schema, the JSON loader/saver (`session_json.{h,cpp}`), session load/save/validate (`session.{h,cpp}`), the legacy-proto reader for `trance_convert` (`session_legacy.{h,cpp}`), small utilities (`util.h`, `common.h`). |
-| `src/common/media/` | Decoders shared by both binaries: `Image`, the `Streamer` animation interface (`streamer.{h,cpp}`). |
+| `src/common/` | Shared, executable-agnostic code: the `trance.proto` in-memory schema, the JSON loader/saver (`session_json.{h,cpp}`), session load/save/validate (`session.{h,cpp}`), the legacy-proto auto-migration reader (`session_legacy.{h,cpp}` + the frozen `legacy.proto`), small utilities (`util.h`, `common.h`). |
+| `src/common/media/` | Decoders: `Image`, the `Streamer` animation interface (`streamer.{h,cpp}`). |
 | `src/trance/` | The realtime player: `main.cpp`, `director.{h,cpp}`, `theme_bank.{h,cpp}`, `playlist_runner.{h,cpp}` (the playlist stack machine), GLSL `shaders.h`. |
 | `src/trance/media/` | Player-side media: `audio.{h,cpp}`, `entrainment.{h,cpp}` (the synthesised bed), `font.{h,cpp}`, `async_streamer.{h,cpp}`. |
 | `src/trance/render/` | The `Renderer` interface and its subclasses: `render.{h,cpp}` (screen — also home of the click-through overlay window hints, `apply_overlay_hints` / `clear_overlay_hints`), `openvr.{h,cpp}` (SteamVR), `openxr.{h,cpp}` (OpenXR head-locked quad-layer backend — Quest Link, any conformant runtime). |
