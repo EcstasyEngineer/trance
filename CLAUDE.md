@@ -29,6 +29,9 @@ cmake --build --preset linux-release          # or linux-debug
 
 # Run (realtime windowed; needs a real GPU — software GL won't do)
 ./build/windows-msvc/Release/trance.exe "C:\path\to\some.session"
+
+# Bundle a clean distributable (trance.exe + trance_convert.exe + openvr_api.dll, nothing else)
+cmake --install build/windows-msvc --config Release --prefix dist
 ```
 
 There are exactly two build configurations: **Debug** and **Release**. Do not add bespoke
@@ -45,7 +48,9 @@ ctest --test-dir build/windows-msvc -C Release --output-on-failure
 ```
 
 Five tests: `v3_grammar_test`, `session_json_test`, `playlist_runner_test`,
-`command_protocol_test`, `theme_bank_test`. CI runs ctest on every pull request.
+`command_protocol_test`, `theme_bank_test`. CI runs ctest on every pull request. Test
+targets live in `tests/CMakeLists.txt`; their binaries and intermediates land under
+`build/<preset>/tests/`, keeping `Release/` to the shippable binaries only.
 
 `theme_bank_test` is the one that is **not** headless: it drives ThemeBank's tiered image
 selection against a real synthetic media tree, and `get_image` uploads textures, so it needs

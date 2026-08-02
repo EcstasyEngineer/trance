@@ -1,9 +1,9 @@
 // trance_convert -- one-shot legacy .session/.cfg (textproto) -> JSON converter.
-// Spec: docs/session-json-format.md sec 7 ("Converter"). This is the ONLY place in the
-// tree that still reads the legacy textproto format; playback (session.{h,cpp}) is
-// JSON-only per sec 8. Because the fork's trance.proto is a verified strict superset of
-// the 2017 upstream schema, this one descriptor parses both old-upstream and fork files
-// -- no sniffing, no second schema.
+// Spec: docs/session-json-format.md sec 7 ("Converter"). Playback (session.{h,cpp}) is
+// JSON-only per sec 8. Parsing happens in load_legacy_session/load_legacy_system
+// against the FROZEN fork-point schema (src/common/legacy.proto, issue #47): an
+// upstream-era file imports; a file carrying a field this fork added is rejected with
+// a diagnostic, not half-read. Fork-era files are already JSON and never come here.
 //
 // No SFML/window deps -- links common_lib (protobuf + nlohmann_json) only.
 #include <common/common.h>

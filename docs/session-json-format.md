@@ -571,16 +571,20 @@ boxes) where path is a legacy `.session` or `.cfg`. Emits a sibling
 `<name>.session.json` (plus externalized `patterns/*.pattern`) or `system.json`. Never
 overwrites the input; errors rather than clobbering an existing output file.
 
-**One converter, one schema.** Input is parsed as text-format protobuf with the **fork's
-`trance.proto` descriptor** (existing files are textproto, not binary — `load_proto`,
-session.cpp:231-243). Because the fork proto is a strict superset of the 2017 upstream
-proto, original ohgodwhydidido-era files and fork files both parse with this one
-descriptor; upstream files simply leave the fork fields (`entrainment`,
-`custom_visual_pattern`, `animation_buffer_size`, `draw_depth`, `eye_spacing`) unset. No
-sniffing, no second schema.
+**One converter, frozen schema.** Input is parsed as text-format protobuf against the
+**frozen fork-point descriptor** (`src/common/legacy.proto`, package `trance_legacy_pb` —
+a verbatim copy of `trance.proto` at 0e97381, the last upstream commit), then translated
+field-by-field into the live `trance_pb` model in one place, `session_legacy.cpp`.
+Upstream-era files import unchanged; a file carrying a field this fork added
+(`entrainment`, `custom_visual_pattern`, theme `audio_path`, `renderer: OPENXR`) is
+**rejected with a diagnostic naming the field**, not half-read — fork-era files are
+already JSON and are not legacy input. Pinning the schema keeps the import contract
+permanent: changes to the live `trance.proto` can never silently widen what the importer
+accepts (issue #47).
 
 Pipeline:
-1. `TextFormat::ParseFromString` with the fork descriptor.
+1. `TextFormat::ParseFromString` against the frozen `trance_legacy_pb` descriptor;
+   explicit translation into `trance_pb` (`session_legacy.cpp`).
 2. `validate_session()` / `validate_system()` — this is where legacy/dead proto fields are
    handled; the JSON emitter never sees them:
    - `Program.enabled_theme_name` (100) → `enabled_theme` entries, weight 1
