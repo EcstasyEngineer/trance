@@ -1,5 +1,4 @@
 cmake_minimum_required(VERSION 3.25)
-cmake_policy(SET CMP0091 NEW)  # MSVC runtime selected via CMAKE_MSVC_RUNTIME_LIBRARY
 project(trance CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -11,16 +10,6 @@ list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
 # where it was built and can be run/moved from anywhere.
 set(CMAKE_BUILD_RPATH_USE_ORIGIN ON)
 
-# Multi-config MSVC (VS generator) otherwise falls back to a dependency's Debug
-# import when building Release, producing LNK2038 _ITERATOR_DEBUG_LEVEL /
-# RuntimeLibrary mismatches (notably from openal-soft via sfml-audio). Force
-# non-Debug configs to map to the Release-imported libraries.
-if(MSVC)
-  set(CMAKE_MAP_IMPORTED_CONFIG_RELEASE Release "")
-  set(CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO RelWithDebInfo Release "")
-  set(CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL MinSizeRel Release "")
-endif()
-
 # ---------------------------------------------------------------------------
 # Dependencies (resolved by vcpkg manifest mode via the toolchain file; see
 # CMakePresets.json). Nothing is vendored — `vcpkg install` restores everything.
@@ -28,30 +17,29 @@ endif()
 find_package(Protobuf CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(SFML 3 COMPONENTS System Window Graphics Audio CONFIG REQUIRED)
-if(WIN32)
-  if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
-    set(_trance_vcpkg_lib_dir "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib")
-    set(_trance_vcpkg_debug_lib_dir "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug/lib")
-
-    # SFML's audio config uses module-style imported targets for Vorbis/Ogg/FLAC.
-    # The module search can cache debug .lib paths under the Visual Studio
-    # multi-config generator, so give the actual targets per-config locations.
-    function(trance_pin_imported_audio_dep target debug_lib release_lib)
-      if(TARGET ${target})
-        set_target_properties(${target} PROPERTIES
-          IMPORTED_CONFIGURATIONS "DEBUG;RELEASE;RELWITHDEBINFO;MINSIZEREL"
-          IMPORTED_LOCATION_DEBUG "${_trance_vcpkg_debug_lib_dir}/${debug_lib}"
-          IMPORTED_LOCATION_RELEASE "${_trance_vcpkg_lib_dir}/${release_lib}"
-          IMPORTED_LOCATION_RELWITHDEBINFO "${_trance_vcpkg_lib_dir}/${release_lib}"
-          IMPORTED_LOCATION_MINSIZEREL "${_trance_vcpkg_lib_dir}/${release_lib}")
-      endif()
-    endfunction()
-    trance_pin_imported_audio_dep(Ogg::ogg ogg.lib ogg.lib)
-    trance_pin_imported_audio_dep(Vorbis::vorbis vorbis.lib vorbis.lib)
-    trance_pin_imported_audio_dep(Vorbis::vorbisfile vorbisfile.lib vorbisfile.lib)
-    trance_pin_imported_audio_dep(Vorbis::vorbisenc vorbisenc.lib vorbisenc.lib)
-    trance_pin_imported_audio_dep(FLAC::FLAC FLAC.lib FLAC.lib)
-  endif()
+if(WIN32 AND DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
+  # SFML's config finds Ogg/Vorbis/FLAC via module-style Find scripts, which cache a
+  # single .lib path and hand it to every config of a multi-config generator. Left
+  # alone, the Release trance.exe links the DEBUG ogg/vorbis/FLAC (LNK4098, mixed
+  # CRTs — verified by inspecting the generated vcxproj). Give the imported targets
+  # real per-config locations instead.
+  set(_trance_vcpkg_lib_dir "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib")
+  set(_trance_vcpkg_debug_lib_dir "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug/lib")
+  function(trance_pin_imported_audio_dep target lib)
+    if(TARGET ${target})
+      set_target_properties(${target} PROPERTIES
+        IMPORTED_CONFIGURATIONS "DEBUG;RELEASE;RELWITHDEBINFO;MINSIZEREL"
+        IMPORTED_LOCATION_DEBUG "${_trance_vcpkg_debug_lib_dir}/${lib}"
+        IMPORTED_LOCATION_RELEASE "${_trance_vcpkg_lib_dir}/${lib}"
+        IMPORTED_LOCATION_RELWITHDEBINFO "${_trance_vcpkg_lib_dir}/${lib}"
+        IMPORTED_LOCATION_MINSIZEREL "${_trance_vcpkg_lib_dir}/${lib}")
+    endif()
+  endfunction()
+  trance_pin_imported_audio_dep(Ogg::ogg ogg.lib)
+  trance_pin_imported_audio_dep(Vorbis::vorbis vorbis.lib)
+  trance_pin_imported_audio_dep(Vorbis::vorbisfile vorbisfile.lib)
+  trance_pin_imported_audio_dep(Vorbis::vorbisenc vorbisenc.lib)
+  trance_pin_imported_audio_dep(FLAC::FLAC FLAC.lib)
 endif()
 find_package(GLEW REQUIRED)
 find_package(OpenGL REQUIRED)
@@ -84,12 +72,9 @@ target_compile_definitions(trance_options INTERFACE
   $<$<CONFIG:Debug>:DEBUG>)
 
 if(MSVC)
-  # WORKAROUND: CMAKE_MSVC_RUNTIME_LIBRARY was broken with the VS 18 2026
-  # generator in CMake 4.1.2 (it rejected "MultiThreadedDLLDebug"). Set the
-  # /MD[d] flags directly. The x64-windows-static-md triplet matches this:
-  # static deps, dynamic CRT.
+  # CRT selection is CMake's CMP0091 default: /MD, /MDd in Debug — which is what
+  # the x64-windows-static-md triplet expects (static deps, dynamic CRT).
   target_compile_options(trance_options INTERFACE
-    $<$<CONFIG:Debug>:/MDd> $<$<NOT:$<CONFIG:Debug>>:/MD>
     /W3 /WX /MP /wd4800 /wd4005)
   target_compile_definitions(trance_options INTERFACE
     _SCL_SECURE_NO_WARNINGS
@@ -266,8 +251,7 @@ set_target_properties(common_lib trance PROPERTIES
 # ---------------------------------------------------------------------------
 install(TARGETS trance RUNTIME DESTINATION .)
 if(WIN32)
-  install(DIRECTORY $<TARGET_FILE_DIR:trance>/ DESTINATION .
-    FILES_MATCHING PATTERN "*.dll")
+  install(FILES $<TARGET_FILE_DIR:trance>/openvr_api.dll DESTINATION .)
 endif()
 
 # ---------------------------------------------------------------------------
