@@ -214,7 +214,9 @@ void set_paused(CommandRuntimeState& state, Audio& audio, bool paused)
 std::string execute_command(const command_protocol::ParsedCommand& cmd, Director& director,
                             Audio& audio, const ThemeBank& themes, AppUi* app_ui,
                             bool screenshot_supported, CommandRuntimeState& state,
-                            const std::chrono::steady_clock::time_point& start_time)
+                            const std::chrono::steady_clock::time_point& start_time,
+                            const std::function<trance_pb::Program*()>& active_program,
+                            const std::function<void()>& apply_program_change)
 {
   using command_protocol::Verb;
   if (!cmd.ok) {
@@ -263,7 +265,8 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
                       .count();
     std::ostringstream out;
     out << "visual=" << director.status_visual_name() << " bed="
-        << (director.status_bed_active() ? "on" : "off") << " overlay="
+        << (director.status_bed_active() ? "on" : "off") << " muted="
+        << (audio.Muted() ? "on" : "off") << " overlay="
         << (state.overlay_on ? "on" : "off") << " hidden="
         << (state.hidden ? "on" : "off") << " uptime=" << uptime;
     // ThemeBank's four queue slots (prev|primary|alternate|next), so an external
@@ -294,6 +297,106 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
     }
     state.screenshot_path = cmd.value;
     return command_protocol::format_ok("writing " + cmd.value + " after the next frame");
+  case Verb::kMuteOn:
+  case Verb::kMuteOff: {
+    // Set-to-state over the same toggle the M key / F2 checkbox drive, so the verb
+    // is idempotent and the surfaces can never disagree.
+    const bool want = cmd.verb == Verb::kMuteOn;
+    if (audio.Muted() != want) {
+      audio.ToggleMute();
+    }
+    return command_protocol::format_ok();
+  }
+  case Verb::kBedOn: {
+    auto* program = active_program();
+    if (!program) {
+      return command_protocol::format_err("bed: no active session program");
+    }
+    // Same contract as the F2 "Enable bed" button: absent block = no bed, and
+    // enabling writes the stock default bed. Idempotent when a bed already exists.
+    if (program->entrainment().layer_size() == 0) {
+      *program->mutable_entrainment() = default_entrainment_bed();
+      apply_program_change();
+    }
+    return command_protocol::format_ok();
+  }
+  case Verb::kBedOff: {
+    auto* program = active_program();
+    if (!program) {
+      return command_protocol::format_err("bed: no active session program");
+    }
+    if (program->has_entrainment()) {
+      program->clear_entrainment();
+      apply_program_change();
+    }
+    return command_protocol::format_ok();
+  }
+  case Verb::kBedMaster: {
+    auto* program = active_program();
+    if (!program) {
+      return command_protocol::format_err("bed: no active session program");
+    }
+    if (program->entrainment().layer_size() == 0) {
+      return command_protocol::format_err("bed master: bed is off (send `bed on` first)");
+    }
+    program->mutable_entrainment()->set_master_db(cmd.number);
+    apply_program_change();
+    return command_protocol::format_ok();
+  }
+  case Verb::kBedLayerAdd: {
+    auto* program = active_program();
+    if (!program) {
+      return command_protocol::format_err("bed: no active session program");
+    }
+    // Same seed as the F2 "+ add layer" button.
+    auto* layer = program->mutable_entrainment()->add_layer();
+    layer->set_center_hz(200.f);
+    layer->set_binaural_hz(3.f);
+    layer->set_amplitude_db(-6.f);
+    apply_program_change();
+    return command_protocol::format_ok(
+        "layers=" + std::to_string(program->entrainment().layer_size()));
+  }
+  case Verb::kBedLayerRemove: {
+    auto* program = active_program();
+    if (!program) {
+      return command_protocol::format_err("bed: no active session program");
+    }
+    auto* entrainment = program->mutable_entrainment();
+    if (cmd.index >= entrainment->layer_size()) {
+      return command_protocol::format_err(
+          "bed layer remove: no layer " + std::to_string(cmd.index) + " (bed has " +
+          std::to_string(entrainment->layer_size()) + ")");
+    }
+    entrainment->mutable_layer()->DeleteSubrange(cmd.index, 1);
+    apply_program_change();
+    return command_protocol::format_ok(
+        "layers=" + std::to_string(entrainment->layer_size()));
+  }
+  case Verb::kBedLayerSet: {
+    auto* program = active_program();
+    if (!program) {
+      return command_protocol::format_err("bed: no active session program");
+    }
+    auto* entrainment = program->mutable_entrainment();
+    if (cmd.index >= entrainment->layer_size()) {
+      return command_protocol::format_err(
+          "bed layer: no layer " + std::to_string(cmd.index) + " (bed has " +
+          std::to_string(entrainment->layer_size()) + ")");
+    }
+    auto* layer = entrainment->mutable_layer(cmd.index);
+    if (cmd.value == "carrier") {
+      layer->set_center_hz(cmd.number);
+    } else if (cmd.value == "binaural") {
+      layer->set_binaural_hz(cmd.number);
+    } else if (cmd.value == "pulse") {
+      layer->set_pulse_hz(cmd.number);
+    } else {
+      layer->set_amplitude_db(cmd.number);
+    }
+    apply_program_change();
+    return command_protocol::format_ok();
+  }
   case Verb::kUnknown:
     break;
   }
@@ -306,12 +409,15 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
 void handle_commands(CommandChannel& channel, Director& director, Audio& audio,
                      const ThemeBank& themes, AppUi* app_ui, bool screenshot_supported,
                      CommandRuntimeState& state,
-                     const std::chrono::steady_clock::time_point& start_time)
+                     const std::chrono::steady_clock::time_point& start_time,
+                     const std::function<trance_pb::Program*()>& active_program,
+                     const std::function<void()>& apply_program_change)
 {
   for (const auto& command : channel.drain()) {
     auto parsed = command_protocol::parse_command(command.line);
     auto reply = execute_command(parsed, director, audio, themes, app_ui,
-                                 screenshot_supported, state, start_time);
+                                 screenshot_supported, state, start_time,
+                                 active_program, apply_program_change);
     channel.reply(command.conn_id, reply);
   }
 }
@@ -455,27 +561,33 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   // command channel can disengage the overlay at runtime, and the panel must exist
   // to serve as the control surface afterwards. Still not wired for VR (per-eye
   // render path, no single flat 2D pass to composite onto).
+  // Mutable mirror of the program() lambda above, for the UI's Program/Themes
+  // sections AND the command channel's `bed ...` verbs: resolves the ACTIVE program
+  // in the session's program_map, or nullptr when the built-in default fallback is
+  // playing (the panel disables itself; the verbs reply err).
+  std::function<trance_pb::Program*()> active_program = [&]() -> trance_pb::Program* {
+    if (!playlist.current().has_standard()) {
+      return nullptr;
+    }
+    auto it = session.mutable_program_map()->find(playlist.current().standard().program());
+    if (it == session.mutable_program_map()->end()) {
+      return nullptr;
+    }
+    return &it->second;
+  };
+  // Live apply after a UI or command-channel program edit: the same ThemeBank/
+  // Director/entrainment refresh the playlist-switch path (on_playlist_enter below)
+  // does. The bed refresh matters for the F2 Audio section and the `bed` verbs;
+  // EntrainmentStream::Configure no-ops on an unchanged config, so program edits
+  // that don't touch the bed cost nothing here.
+  std::function<void()> on_program_change = [&] {
+    theme_bank->set_program(program());
+    director.set_program(program());
+    audio.SetEntrainment(program().entrainment());
+  };
+
   std::unique_ptr<AppUi> app_ui;
   if (!director.vr_enabled()) {
-    // Mutable mirror of the program() lambda above, for the UI's Program/Themes
-    // sections: resolves the ACTIVE program in the session's program_map, or nullptr
-    // when the built-in default fallback is playing (the panel disables itself).
-    auto active_program = [&]() -> trance_pb::Program* {
-      if (!playlist.current().has_standard()) {
-        return nullptr;
-      }
-      auto it = session.mutable_program_map()->find(playlist.current().standard().program());
-      if (it == session.mutable_program_map()->end()) {
-        return nullptr;
-      }
-      return &it->second;
-    };
-    // Live apply after a UI edit: the same ThemeBank/Director pair the playlist-
-    // switch path in the while-loop below calls.
-    auto on_program_change = [&] {
-      theme_bank->set_program(program());
-      director.set_program(program());
-    };
     app_ui.reset(new AppUi(session, session_path, sidecar, system, system_path,
                            command_state, on_program_change, active_program, vr_failure));
     if (!app_ui->init(renderer->window())) {
@@ -578,7 +690,8 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       // main.cpp's per-frame loop, right after handle_events").
       if (command_channel) {
         handle_commands(*command_channel, director, audio, *theme_bank, app_ui.get(),
-                        screenshot_supported, command_state, command_start_time);
+                        screenshot_supported, command_state, command_start_time,
+                        active_program, on_program_change);
       }
       // SystemControl requests (tray menu / global Shift+F11): drained on the render
       // thread like the command mailbox above; both funnel into the same

@@ -52,9 +52,16 @@
 //     main.cpp's CommandRuntimeState via the get_overlay/set_overlay callbacks; the
 //     main loop's apply seam (shared with the `overlay ...` verbs) pushes changes
 //     onto the actual window.
-//   - Entrainment: mute toggle (Audio::ToggleMute). No volume slider: Audio exposes
-//     only a global mute (sf::Listener::setGlobalVolume 0/100 in ToggleMute), not a
-//     settable gain -- see the note in draw_entrainment_section.
+//   - Audio: global mute (Audio::ToggleMute -- the SAME toggle the M key and the
+//     hide path use, over all audio, not just the bed) + the entrainment bed editor:
+//     enable/disable, master dB, and per-layer carrier/binaural/pulse/level sliders
+//     editing Program::entrainment in place. "Enable bed" writes the stock default
+//     bed (default_entrainment_bed) into a program whose JSON has no entrainment
+//     block -- absent block = no bed, and this button is what keeps that from
+//     locking the feature behind hand-edited JSON. Slider edits write the proto per
+//     drag tick but commit (fire on_program_change, which also refreshes the live
+//     bed via Audio::SetEntrainment) on RELEASE, so the stream isn't restarted per
+//     tick. Persistence is Session > Save, same as every other program edit.
 //   - System: renderer selection (Monitor / SteamVR / OpenXR), windowed mode, eye
 //     spacing -- edits trance_pb::System in place and persists immediately to
 //     system.json via save_system. Renderer/windowed take effect on next launch
@@ -305,6 +312,13 @@ private:
   std::string _system_status;
   bool _system_error = false;
   float _system_status_ttl = 0.f;
+
+  // The bed the Audio section's "Disable bed" click cleared, serialized, so a
+  // re-enable in the same run round-trips the user's layers instead of resetting
+  // them to the defaults. Program identity compared, never dereferenced (the
+  // playlist can advance under us -- same idiom as _weight_stash_program).
+  std::string _bed_stash;
+  const trance_pb::Program* _bed_stash_program = nullptr;
 };
 
 #endif

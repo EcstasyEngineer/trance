@@ -169,7 +169,7 @@ void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Au
   if (ImGui::CollapsingHeader("Overlay")) {
     draw_overlay_section();
   }
-  if (ImGui::CollapsingHeader("Entrainment")) {
+  if (ImGui::CollapsingHeader("Audio")) {
     draw_entrainment_section(audio);
   }
   if (ImGui::CollapsingHeader("System")) {
@@ -1375,16 +1375,126 @@ void AppUi::draw_overlay_section()
 
 void AppUi::draw_entrainment_section(Audio& audio)
 {
+  // One mute, one scope: the same Audio::ToggleMute the M key and the Shift+F11 hide
+  // path drive, over ALL audio (bed + music channels), not just the bed. Reading
+  // Muted() fresh each frame is what keeps the checkbox and the M key aligned.
   bool muted = audio.Muted();
-  if (ImGui::Checkbox("Mute", &muted)) {
+  if (ImGui::Checkbox("mute all audio (M)", &muted)) {
     audio.ToggleMute();
   }
-  // TODO: no volume slider. Audio only exposes a global on/off mute
-  // (ToggleMute -> sf::Listener::setGlobalVolume(0/100)); per-channel volume is
-  // driven by session AudioEvents / fades (audio.cpp), not a public setter. Add
-  // Audio::SetMasterVolume(float) (or similar) if a continuous slider is wanted,
-  // then wire it here.
-  ImGui::TextDisabled("(volume slider: no setter on Audio yet)");
+  ImGui::Separator();
+
+  trance_pb::Program* program = _active_program();
+  if (!program) {
+    ImGui::TextDisabled("(bed editing needs a session program; the built-in default is playing)");
+    return;
+  }
+
+  // Absent/empty entrainment block = no bed (the JSON contract, session_json.cpp).
+  // "Enable bed" is what keeps that contract from locking new users out: it writes
+  // the stock default bed into the program, no hand-edited JSON required.
+  const bool bed_on = program->entrainment().layer_size() > 0;
+  if (!bed_on) {
+    ImGui::TextUnformatted("bed: off");
+    ImGui::SameLine();
+    if (ImGui::Button("Enable bed")) {
+      trance_pb::Entrainment restored;
+      if (_bed_stash_program == program && restored.ParseFromString(_bed_stash) &&
+          restored.layer_size() > 0) {
+        // Same-run round-trip of the bed the Disable click cleared.
+        *program->mutable_entrainment() = restored;
+      } else {
+        *program->mutable_entrainment() = default_entrainment_bed();
+      }
+      _on_program_change();
+    }
+    return;
+  }
+
+  auto* entrainment = program->mutable_entrainment();
+  if (ImGui::Button("Disable bed")) {
+    _bed_stash = entrainment->SerializeAsString();
+    _bed_stash_program = program;
+    program->clear_entrainment();
+    _on_program_change();
+    return;
+  }
+
+  // Sliders write the proto per drag tick (no side effects) and COMMIT on release:
+  // the commit reconfigures the live stream (stop, recalibrate, play) and re-pushes
+  // the program for the `locked` beat clock, neither of which belongs on every tick.
+  bool commit = false;
+
+  // Display the effective master (0 in the proto means the -28 default); the first
+  // edit writes an explicit value, so UI-touched beds never rely on the sentinel.
+  // The range stops at -6: with RMS normalisation to master, anything hotter is a
+  // hazard, and it keeps 0 dB (the sentinel) unreachable from this slider.
+  float master = entrainment->master_db() != 0.f ? entrainment->master_db() : -28.f;
+  if (ImGui::SliderFloat("master dB", &master, -60.f, -6.f, "%.1f dB")) {
+    entrainment->set_master_db(master);
+  }
+  commit |= ImGui::IsItemDeactivatedAfterEdit();
+
+  int remove_index = -1;
+  for (int i = 0; i < entrainment->layer_size(); ++i) {
+    auto* layer = entrainment->mutable_layer(i);
+    ImGui::PushID(i);
+    ImGui::Separator();
+    ImGui::Text("layer %d", i);
+    ImGui::SameLine();
+    if (ImGui::SmallButton("remove")) {
+      remove_index = i;
+    }
+    float center = layer->center_hz();
+    if (ImGui::SliderFloat("carrier Hz", &center, 20.f, 1000.f, "%.0f Hz",
+                           ImGuiSliderFlags_Logarithmic)) {
+      layer->set_center_hz(center);
+    }
+    commit |= ImGui::IsItemDeactivatedAfterEdit();
+    float binaural = layer->binaural_hz();
+    if (ImGui::SliderFloat("binaural Hz", &binaural, 0.f, 40.f,
+                           binaural > 0.f ? "%.2f Hz" : "off")) {
+      layer->set_binaural_hz(binaural);
+    }
+    commit |= ImGui::IsItemDeactivatedAfterEdit();
+    float pulse = layer->pulse_hz();
+    if (ImGui::SliderFloat("pulse Hz", &pulse, 0.f, 40.f,
+                           pulse > 0.f ? "%.2f Hz" : "continuous")) {
+      layer->set_pulse_hz(pulse);
+    }
+    commit |= ImGui::IsItemDeactivatedAfterEdit();
+    // "mix", not "level": this IS dB mathematically (10^(db/20) in the synth), but
+    // the whole bed is RMS-normalised to master afterwards, so per-layer dB only
+    // sets the RELATIVE balance between layers -- it cannot make the bed louder.
+    // dB stays the right unit for a mix control (hearing is log; equal slider
+    // steps sound like equal steps, which a linear ratio slider would not give).
+    float level = layer->amplitude_db();
+    if (ImGui::SliderFloat("mix dB", &level, -24.f, 0.f, "%.1f dB")) {
+      layer->set_amplitude_db(level);
+    }
+    commit |= ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::PopID();
+  }
+  if (remove_index >= 0) {
+    entrainment->mutable_layer()->DeleteSubrange(remove_index, 1);
+    commit = true;
+  }
+
+  ImGui::Separator();
+  if (ImGui::Button("+ add layer")) {
+    auto* layer = entrainment->add_layer();
+    layer->set_center_hz(200.f);
+    layer->set_binaural_hz(3.f);
+    layer->set_amplitude_db(-6.f);
+    commit = true;
+  }
+  ImGui::TextDisabled("(mix dB balances layers against each other; overall loudness is\n"
+                      "master dB. pulse drives `every locked`/`beats` pattern timing;\n"
+                      "edits apply live, Session > Save persists)");
+
+  if (commit) {
+    _on_program_change();
+  }
 }
 
 void AppUi::draw_system_section()

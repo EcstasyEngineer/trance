@@ -35,14 +35,29 @@ namespace command_protocol
     kUiOn,
     kUiOff,
     kScreenshot,
+    // Audio (spec sec 4 "Audio"): the same surface as the F2 Audio section. `mute` is the
+    // global mute (all audio, same toggle as the M key); the `bed ...` verbs edit the ACTIVE
+    // program's entrainment in place and apply live through the same program-change seam the
+    // UI uses, so the reconfigure morphs rather than cuts. Numeric args are clamped to the
+    // UI's slider ranges (the clamp01 precedent below).
+    kMuteOn,
+    kMuteOff,
+    kBedOn,
+    kBedOff,
+    kBedMaster,
+    kBedLayerAdd,
+    kBedLayerRemove,
+    kBedLayerSet,
   };
 
   struct ParsedCommand {
     Verb verb = Verb::kUnknown;
     // Populated depending on verb: kOverlayOpacity -> number; kLoadPattern/kScreenshot ->
-    // value (the file path).
+    // value (the file path); kBedMaster -> number; kBedLayerRemove -> index;
+    // kBedLayerSet -> index + value (field name: carrier|binaural|pulse|level) + number.
     std::string value;
     float number = 0.f;
+    int index = 0;
     // Set when the line is malformed (wrong arg count, non-numeric where a number is
     // required, or an unrecognised verb token). `error` carries what to put after "err ".
     bool ok = true;

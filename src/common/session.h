@@ -8,11 +8,18 @@ struct SessionJsonSidecar;
 namespace trance_pb
 {
   class Colour;
+  class Entrainment;
   class PlaylistItem_NextItem;
   class Session;
   class System;
   class Theme;
 }
+
+// The stock binaural + isochronic bed every brand-new session gets
+// (set_default_program), exposed so the F2 Audio section's "Enable bed" can hand the
+// same bed to a session whose JSON has no entrainment block -- absent block = no bed,
+// and without this the feature would be reachable only by hand-editing the JSON.
+trance_pb::Entrainment default_entrainment_bed();
 
 bool is_enabled(const trance_pb::PlaylistItem_NextItem& next_item,
                 const std::map<std::string, std::string>& variables);

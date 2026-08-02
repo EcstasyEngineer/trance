@@ -163,6 +163,32 @@ make trance vanish instantly without killing the process**):
 Loading:
 - **`load pattern FILE`** — load/compile a single v3 pattern file as the active visual.
 
+Audio (added 2026-08-02 — the same surface as the F2 Audio section; `bed` edits apply to
+the ACTIVE program in place, live through the program-change seam, and reconfigures MORPH
+— glide/crossfade over ~300 ms — rather than cutting; see entrainment.cpp):
+- **`mute on|off`** — global mute over ALL audio (bed + music channels). The same toggle
+  the M key and the F2 checkbox drive: idempotent, and every surface reads one flag, so
+  they can never disagree. Note `hide` also mutes and `show` restores the pre-hide state;
+  a `mute` sent while hidden updates what `show` restores.
+- **`bed on`** — enable the entrainment bed. If the program has no bed (absent block = no
+  bed), writes the stock default bed — same as the F2 "Enable bed" button, so a session
+  whose JSON never mentions entrainment can still be driven entirely from here. Idempotent
+  when a bed exists.
+- **`bed off`** — remove the bed (fades out, then silence). Idempotent.
+- **`bed master DB`** — bed output level in dB RMS, clamped to `-60..-6` (the F2 slider's
+  range; the top stays below 0 dB both as a loudness guard and because 0 in the stored
+  config means "default"). Errs if the bed is off.
+- **`bed layer add`** — append a layer (200 Hz carrier, 3 Hz binaural, continuous, −6 dB
+  mix — the F2 "+ add layer" seed). Replies `ok layers=N`.
+- **`bed layer remove I`** — remove layer `I` (0-based). Replies `ok layers=N`; errs on a
+  bad index.
+- **`bed layer I FIELD VALUE`** — set one field of layer `I`. `FIELD` is `carrier`
+  (20..1000 Hz), `binaural` (0..40 Hz, 0 = no split), `pulse` (0..40 Hz, 0 = continuous),
+  or `level` (−24..0 dB **relative mix** — layers balance against each other; absolute
+  loudness is `bed master`'s job, the bed being RMS-normalised to it). Values clamp to the
+  listed ranges, matching the F2 sliders.
+- `status` now also reports `muted=on|off`.
+
 > **Retired 2026-08-01: `intensity`, `set`, `get`, `load session`.** All four shipped as
 > protocol-complete stubs and none of them ever gained a consumer. `set`/`get` answered
 > `err unknown key` for every key, `load session` answered `err not yet supported`, and

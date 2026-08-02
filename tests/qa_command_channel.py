@@ -41,10 +41,31 @@ VERBS = [
     ("hide", True),                  # idempotent: hide-while-hidden is an ok no-op
     ("show", True),
     ("show", True),                  # idempotent: show-while-shown is an ok no-op
+    # Audio surface (spec sec 4 "Audio"). This instance plays a throwaway session, so
+    # bed edits are fair game; they only ever touch the in-memory program.
+    ("mute on", True),
+    ("mute off", True),
+    ("bed off", True),
+    ("bed off", True),               # idempotent
+    ("bed on", True),                # restores the default bed
+    ("bed on", True),                # idempotent
+    ("bed master -30", True),
+    ("bed master -100", True),       # clamped to -60, still ok
+    ("bed layer 0 carrier 300", True),
+    ("bed layer 0 binaural 4", True),
+    ("bed layer 0 pulse 6", True),
+    ("bed layer 0 level -3", True),
+    ("bed layer add", True),
+    ("bed layer remove 2", True),    # removes the layer just added (default bed has 2)
     ("", False),                     # empty line -> err, not silence
     ("frobnicate", False),           # unknown verb -> err
     ("overlay opacity potato", False),  # non-numeric -> err
     ("overlay", False),              # wrong arg count -> err
+    ("mute", False),                 # missing arg -> err
+    ("bed", False),                  # missing subverb -> err
+    ("bed master potato", False),    # non-numeric -> err
+    ("bed layer 99 carrier 300", False),  # bad index -> err
+    ("bed layer 0 bogus 1", False),  # unknown field -> err
 ]
 
 

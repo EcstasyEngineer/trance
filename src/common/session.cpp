@@ -84,15 +84,7 @@ namespace
     // Default entrainment bed: a binaural + isochronic drone (carrier / beat /
     // pulse / level). Stored in full so the session is self-contained; delete
     // these layers from the .session to disable the bed.
-    auto add_layer = [&](float center, float binaural, float pulse, float amplitude_db) {
-      auto* layer = program.mutable_entrainment()->add_layer();
-      layer->set_center_hz(center);
-      layer->set_binaural_hz(binaural);
-      layer->set_pulse_hz(pulse);
-      layer->set_amplitude_db(amplitude_db);
-    };
-    add_layer(312.f, 3.f, 5.f, 0.f);
-    add_layer(60.f, 3.f, 3.25f, -6.f);
+    *program.mutable_entrainment() = default_entrainment_bed();
   }
 
   void set_default_playlist(trance_pb::Session& session, const std::string& program)
@@ -483,6 +475,24 @@ namespace
 } // anonymous namespace
 
 const char* const kRootThemeName = "/root/";
+
+trance_pb::Entrainment default_entrainment_bed()
+{
+  trance_pb::Entrainment entrainment;
+  auto add_layer = [&](float center, float binaural, float pulse, float amplitude_db) {
+    auto* layer = entrainment.add_layer();
+    layer->set_center_hz(center);
+    layer->set_binaural_hz(binaural);
+    layer->set_pulse_hz(pulse);
+    layer->set_amplitude_db(amplitude_db);
+  };
+  add_layer(312.f, 3.f, 5.f, 0.f);
+  add_layer(60.f, 3.f, 3.25f, -6.f);
+  // Explicit master rather than relying on the 0-means-default sentinel, so anything
+  // this bed is written into round-trips through JSON/the F2 sliders unambiguously.
+  entrainment.set_master_db(-28.f);
+  return entrainment;
+}
 
 bool is_enabled(const trance_pb::PlaylistItem_NextItem& next,
                 const std::map<std::string, std::string>& variables)
