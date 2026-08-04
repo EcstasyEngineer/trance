@@ -57,12 +57,18 @@ AppUi::AppUi(trance_pb::Session& session, const std::string& session_path,
 , _active_program{std::move(active_program)}
 , _vr_failure{std::move(vr_failure)}
 {
-  // Seed Save As with the loaded path so "tweak the filename" is the common case.
-  std::snprintf(_save_as_buf, sizeof(_save_as_buf), "%s", session_path.c_str());
+  // Seed Export with the loaded path so "tweak the filename" is the common case.
+  std::snprintf(_export_buf, sizeof(_export_buf), "%s", session_path.c_str());
 }
 
 AppUi::~AppUi()
 {
+  // Last-chance flush. update()'s seam covers every edit whose widget got to
+  // deactivate, but the exit paths that bypass this panel entirely -- the window close
+  // button, the tray's Quit -- can land with an edit still active and unwritten.
+  // autosave_session() swallows its own failures (there is no panel left to show them
+  // in), so this cannot throw out of a destructor.
+  autosave_session();
   if (_initialized) {
     ImGui::SFML::Shutdown();
   }
@@ -100,22 +106,26 @@ void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Au
   }
   ImGui::SFML::Update(window, dt);
   _frame_started = true;
-  if (_save_status_ttl > 0.f) {
-    _save_status_ttl -= dt.asSeconds();
+  if (_export_status_ttl > 0.f) {
+    _export_status_ttl -= dt.asSeconds();
   }
   if (_system_status_ttl > 0.f) {
     _system_status_ttl -= dt.asSeconds();
   }
-  // Weight stashes are keyed by visual TYPE / pattern NAME / theme NAME, none of which
-  // are unique across programs: a playlist advance re-points _active_program at a
-  // program whose "slow_flash" row is a different row with a different weight, and a
-  // kept stash would restore the OLD program's weight onto it. Dropped here rather
-  // than in a section, since a collapsed CollapsingHeader never draws to notice.
+  if (_autosave_retry_in > 0.f) {
+    _autosave_retry_in -= dt.asSeconds();
+  }
+  // Tweens are per-row and purely cosmetic; a playlist advance re-points
+  // _active_program at a program whose "slow_flash" row is a different row, so an
+  // in-flight animation on the old one is meaningless and gets dropped. Done here
+  // rather than in a section, since a collapsed CollapsingHeader never draws to notice.
+  // (The weight STASHES used to be dropped here too, which is what made an off/on
+  // round-trip forget the row's weight and come back at kDefaultRowWeight: switching a
+  // row off and back on across a program change -- a matter of seconds in a playlist --
+  // lost the number. They are keyed by program now and survive.)
   const trance_pb::Program* current = _active_program ? _active_program() : nullptr;
   if (current != _weight_stash_program) {
     _weight_stash_program = current;
-    _visual_last_weight.clear();
-    _theme_last_weight.clear();
     _weight_tweens.clear();
   }
 
@@ -134,13 +144,19 @@ void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Au
   }
 
   if (!_visible) {
+    // Closed mid-edit (F2, `ui off`, the overlay engaging): the widget that was
+    // blocking the flush below will never deactivate now, so write here instead. This
+    // branch runs every frame while the panel is closed, so it takes the backoff too.
+    autosave_if_due();
     return;
   }
 
   // One window, top-left, with collapsing sections (the old three overlapping
   // windows folded in). FirstUseEver so the user can still move/resize it.
   ImGui::SetNextWindowPos(ImVec2(10.f, 10.f), ImGuiCond_FirstUseEver);
-  ImGui::SetNextWindowSize(ImVec2(420.f, 640.f), ImGuiCond_FirstUseEver);
+  // Wide enough for a full weight row -- on/pin/inherit, bar, number, share -- plus the
+  // row's name after it. FirstUseEver, so an existing imgui.ini keeps the user's size.
+  ImGui::SetNextWindowSize(ImVec2(500.f, 640.f), ImGuiCond_FirstUseEver);
   ImGui::Begin("trance");
   // Above every section, unmissable and never timed out: a requested VR backend failed
   // and this desktop window is the fallback (#41). Wrapped -- the reason string is
@@ -148,6 +164,16 @@ void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Au
   if (!_vr_failure.empty()) {
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.4f, 0.4f, 1.f));
     ImGui::TextWrapped("VR UNAVAILABLE: %s", _vr_failure.c_str());
+    ImGui::PopStyleColor();
+    ImGui::Separator();
+  }
+  // Same treatment for a failed autosave, and for the same reason: every edit in this
+  // panel is supposed to be on disk already, so "it silently isn't" is not something to
+  // report in a status line inside a section that is collapsed by default. Persistent
+  // until a save succeeds.
+  if (!_autosave_error.empty()) {
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.4f, 0.4f, 1.f));
+    ImGui::TextWrapped("NOT SAVING: %s", _autosave_error.c_str());
     ImGui::PopStyleColor();
     ImGui::Separator();
   }
@@ -162,9 +188,6 @@ void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Au
   }
   if (ImGui::CollapsingHeader("Themes")) {
     draw_themes_section();
-  }
-  if (ImGui::CollapsingHeader("Session")) {
-    draw_session_section();
   }
   if (ImGui::CollapsingHeader("Overlay")) {
     draw_overlay_section();
@@ -181,9 +204,20 @@ void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Au
   ImGui::Separator();
   ImGui::Spacing();
   if (ImGui::Button("Quit trance")) {
+    // Before the flag, not after: main.cpp tears the run down on the next poll, and an
+    // edit committed this frame has not reached the seam below yet.
+    autosave_session();
     _quit_requested = true;
   }
   ImGui::End();
+
+  // The autosave seam. Deferred to here, and gated on nothing being ACTIVE, so a slider
+  // drag or a half-typed pattern name is written once when the user lets go rather than
+  // once per frame -- and so a single write covers a frame that dirtied several
+  // sections. No-op unless something actually changed.
+  if (!ImGui::IsAnyItemActive()) {
+    autosave_if_due();
+  }
 }
 
 void AppUi::render(sf::RenderWindow& window)
@@ -238,9 +272,21 @@ void AppUi::draw_status_section(Director& director, Audio& audio, const ThemeBan
   ImGui::Text("vr enabled: %s", director.vr_enabled() ? "yes" : "no");
   // TODO: no public Director accessor for the current visual name.
 
+  // Same content breakdown as the F1 overlay, and for the same reason: an all-gif theme
+  // has 0 images and is perfectly healthy, which reads as broken without the anim count.
   auto snap = themes.debug_snapshot();
-  ImGui::Text("theme primary  : %s", snap.slots[1].valid ? snap.slots[1].name.c_str() : "(empty)");
-  ImGui::Text("theme alternate: %s", snap.slots[2].valid ? snap.slots[2].name.c_str() : "(empty)");
+  auto theme_line = [](const char* label, const ThemeBank::DebugSnapshot::Slot& slot) {
+    if (!slot.valid) {
+      ImGui::Text("%s: (empty)", label);
+      return;
+    }
+    ImGui::Text("%s: %s", label, slot.name.c_str());
+    ImGui::TextDisabled("    %u/%u images loaded, %u animation(s)%s", slot.loaded, slot.total,
+                        slot.animations,
+                        !slot.total && slot.animations ? "  -- all-animation theme" : "");
+  };
+  theme_line("theme primary  ", snap.slots[1]);
+  theme_line("theme alternate", snap.slots[2]);
 
   const auto& entrainment = program.entrainment();
   if (entrainment.layer().empty()) {
@@ -313,7 +359,8 @@ std::string AppUi::visual_row_key(bool is_custom, int builtin_index, const std::
 AppUi::WeightRowResult AppUi::draw_weight_row(const char* label, const std::string& key,
                                               uint32_t* weight, bool* pinned, uint64_t pool_total,
                                               std::map<std::string, uint32_t>& stash,
-                                              const char* slider_tooltip, bool pool_pinned)
+                                              const char* slider_tooltip, bool pool_pinned,
+                                              const std::function<void()>& after_pin)
 {
   WeightRowResult result;
   ImGui::PushID(key.c_str());
@@ -379,6 +426,15 @@ AppUi::WeightRowResult AppUi::draw_weight_row(const char* label, const std::stri
     ImGui::SameLine();
   }
 
+  // Caller-owned buttons in the same run of toggles (the Themes section's `inherit`).
+  // They belong here, with on/off and pin, rather than trailing the row's NAME: they
+  // are the same kind of control, and a button that hangs off the end of a
+  // variable-width name never lands in the same place twice down the column.
+  if (after_pin) {
+    after_pin();
+    ImGui::SameLine();
+  }
+
   // Green accent while the row is contributing; an animating row is on its way out,
   // so it greys with the rest.
   const bool accent = on && !animating;
@@ -387,25 +443,43 @@ AppUi::WeightRowResult AppUi::draw_weight_row(const char* label, const std::stri
     ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, kActiveGreen);
     ImGui::PushStyleColor(ImGuiCol_FrameBg, kActiveGreenDim);
   }
-  ImGui::SetNextItemWidth(130.f);
+  // Narrower than it was: the bar is now the coarse control and the box beside it is the
+  // exact one, so pixels spent here come straight out of the row's NAME.
+  ImGui::SetNextItemWidth(90.f);
   // Disabled only for input: the bar still redraws each frame, which is what makes
   // the animation visible.
   ImGui::BeginDisabled(animating);
-  if (ImGui::SliderInt("##weight", &shown, 0, kMaxRowWeight, "weight %d")) {
+  if (ImGui::SliderInt("##weight", &shown, 0, kMaxRowWeight, "%d")) {
     *weight = static_cast<uint32_t>(std::max(0, std::min(kMaxRowWeight, shown)));
   }
-  ImGui::EndDisabled();
   // EndDisabled pushes no item of its own, so IsItem* here still refers to the slider.
   // Committed on release, not per tick: a drag would otherwise re-parse every custom
   // pattern in the program on every frame of the drag (Director::set_program).
-  if (ImGui::IsItemDeactivatedAfterEdit()) {
+  bool committed = ImGui::IsItemDeactivatedAfterEdit();
+  if (slider_tooltip && ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("%s", slider_tooltip);
+  }
+  ImGui::SameLine();
+
+  // Type the number in. The slider spans 0..100 in ~100 pixels, so the low end -- where
+  // the interesting values are, since a weight only means anything against the pool --
+  // is a one-pixel target: 1 is indistinguishable from off by dragging. This box is the
+  // same value, exact. (ImGui's ctrl+click-to-type on the slider does the same thing,
+  // but nothing on screen says so.) AutoSelectAll so a click-and-type replaces rather
+  // than appends.
+  ImGui::SetNextItemWidth(38.f);
+  int typed = shown;
+  if (ImGui::InputInt("##weight_num", &typed, 0, 0,
+                      ImGuiInputTextFlags_AutoSelectAll | ImGuiInputTextFlags_CharsDecimal)) {
+    *weight = static_cast<uint32_t>(std::max(0, std::min(kMaxRowWeight, typed)));
+  }
+  ImGui::EndDisabled();
+  committed = committed || ImGui::IsItemDeactivatedAfterEdit();
+  if (committed) {
     if (*weight) {
       stash[key] = *weight;
     }
     result.weight_changed = true;
-  }
-  if (slider_tooltip && ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("%s", slider_tooltip);
   }
   if (accent) {
     ImGui::PopStyleColor(3);
@@ -518,6 +592,10 @@ void AppUi::draw_visuals_section(Director& director)
   // live over in the Program section, which meant the same pool was split across two
   // menus with the source viewer in one and the weights in the other. Sampled once for
   // the frame so every row's percent is against the same total even mid-drag.
+  // This program's off/on weight memory (see _visual_last_weight): one stash per
+  // program, so a row switched off here still remembers its weight after the playlist
+  // has been round the houses and come back.
+  auto& visual_stash = _visual_last_weight[program];
   const uint64_t pool_total = visual_pool_total(*program);
   // A pinned visual owns the pool: change_visual returns it every time and never runs
   // the lottery, so the rows show 100%/0% rather than a share of a draw that no
@@ -561,7 +639,7 @@ void AppUi::draw_visuals_section(Director& director)
     // Empty label: the TreeNode below names the row, matching the Themes section's
     // layout (weight row, then the name as an expander holding the row's content).
     auto row = draw_weight_row("", visual_row_key(false, i, {}), &weight, &pinned, pool_total,
-                               _visual_last_weight, kVisualSliderTooltip, pool_pinned);
+                               visual_stash, kVisualSliderTooltip, pool_pinned);
     config->set_random_weight(weight);
     if (row.weight_changed) {
       pool_changed = true;
@@ -609,7 +687,7 @@ void AppUi::draw_visuals_section(Director& director)
     // materializes the row moves to its "b<index>" key next frame -- the orphaned
     // stash entry is cosmetic (the row is at 0 with nothing worth restoring).
     auto row = draw_weight_row("", "bt" + std::to_string(visual.type), &weight, &pinned,
-                               pool_total, _visual_last_weight, kVisualSliderTooltip,
+                               pool_total, visual_stash, kVisualSliderTooltip,
                                pool_pinned);
     if (row.weight_changed || row.pin_changed) {
       auto* added = program->add_visual_type();
@@ -662,6 +740,7 @@ void AppUi::draw_visuals_section(Director& director)
     added->set_enabled(true);
     // New rows compile immediately so the lint line starts out truthful, and the
     // pattern joins the shuffle without a separate Apply click.
+    mark_session_dirty();
     if (_on_program_change) {
       _on_program_change();
     }
@@ -691,12 +770,12 @@ void AppUi::draw_visuals_section(Director& director)
       uint32_t weight = pattern->enabled() ? pattern->random_weight() : 0;
       if (!pattern->enabled() && pattern->random_weight()) {
         auto key = visual_row_key(true, 0, pattern->name());
-        _visual_last_weight.emplace(key, pattern->random_weight());
+        visual_stash.emplace(key, pattern->random_weight());
       }
       bool pinned = pattern->pinned();
       // Empty label: the TreeNode below names the row (the Themes section's layout).
       auto row = draw_weight_row("", visual_row_key(true, 0, pattern->name()), &weight, &pinned,
-                                 pool_total, _visual_last_weight, kVisualSliderTooltip,
+                                 pool_total, visual_stash, kVisualSliderTooltip,
                                  pool_pinned);
       // Only ever written on a real user edit. The pass-through case (drawing a
       // disabled pattern, which the row shows at 0) must not clobber the weight the
@@ -704,9 +783,12 @@ void AppUi::draw_visuals_section(Director& director)
       if (row.weight_changed || weight != (pattern->enabled() ? pattern->random_weight() : 0)) {
         pattern->set_random_weight(weight);
         pattern->set_enabled(weight > 0);
+        // The mid-drag values are written to the proto but never reach disk: the
+        // autosave seam waits for the widget to go inactive (see update()).
+        mark_session_dirty();
         // A pin on a disabled pattern is dead: rebuild_custom_patterns skips the
         // pattern entirely, so the panel would draw an active force that does nothing
-        // and Save would persist a pin validate_program strips on the next load.
+        // and the autosave would persist a pin validate_program strips on the next load.
         if (!pattern->enabled()) {
           pattern->set_pinned(false);
         }
@@ -774,8 +856,12 @@ void AppUi::draw_visuals_section(Director& director)
     if (open) {
       ImGui::SetNextItemWidth(200.f);
       if (ImGui::InputText("##name", pattern->mutable_name())) {
+        // Persisted like every other edit -- but only once the field goes inactive, so
+        // a name is never written to disk half-typed (and the rename never lands as a
+        // duplicate the loader would reject).
+        mark_session_dirty();
         // Duplicate names are a load-time error (session_json.cpp), so the lint has to
-        // catch them here rather than at Save. The WHOLE cache goes, not just this row:
+        // catch them here rather than at save time. The WHOLE cache goes, not just this row:
         // duplicate-ness is a property of the entire list, so renaming a to b must also
         // re-lint the row already called b (and renaming away from a collision must
         // clear the other row's error).
@@ -810,6 +896,9 @@ void AppUi::draw_visuals_section(Director& director)
       if (ImGui::InputTextMultiline("##source", pattern->mutable_source_text(),
                                     ImVec2(-FLT_MIN, 160.f),
                                     ImGuiInputTextFlags_WordWrap)) {
+        // Same deferral as the name field: the source reaches patterns/<slug>.pattern
+        // when the box goes inactive, not on every keystroke.
+        mark_session_dirty();
         _pattern_lint.erase(i);
       }
       if (!lint_message.empty()) {
@@ -831,8 +920,11 @@ void AppUi::draw_visuals_section(Director& director)
   // One re-push for the whole section, on release/click only (see draw_weight_row):
   // Director::set_program re-parses every custom pattern, so a per-drag-tick fire
   // would recompile the program on every frame of a slider drag.
-  if (pool_changed && _on_program_change) {
-    _on_program_change();
+  if (pool_changed) {
+    mark_session_dirty();
+    if (_on_program_change) {
+      _on_program_change();
+    }
   }
 
   if (!_last_pattern_error.empty()) {
@@ -940,8 +1032,13 @@ void AppUi::draw_program_section()
   edit_colour("spiral a", program->mutable_spiral_colour_a());
   edit_colour("spiral b", program->mutable_spiral_colour_b());
 
-  if (changed && _on_program_change) {
-    _on_program_change();
+  if (changed) {
+    // Both widgets here report per drag tick, which is what the live preview wants;
+    // the write to disk is what the autosave seam holds back until release.
+    mark_session_dirty();
+    if (_on_program_change) {
+      _on_program_change();
+    }
   }
 }
 
@@ -993,9 +1090,10 @@ uint32_t AppUi::predicted_pool_size(const std::string& name) const
 
 void AppUi::draw_themes_section()
 {
-  // ThemeBank is built once at startup and has no live-rebuild path; image_path
-  // edits only take effect via Save + restart. Weight/enable edits DO live-apply
-  // (they go through ThemeBank::set_program like a playlist switch).
+  // ThemeBank is built once at startup and has no live-rebuild path; image_path edits
+  // are saved immediately like everything else but only take effect on the next
+  // launch. Weight/enable edits DO live-apply (they go through ThemeBank::set_program
+  // like a playlist switch).
   ImGui::TextDisabled("(content changes need restart)");
   trance_pb::Program* program = _active_program ? _active_program() : nullptr;
   if (!program) {
@@ -1029,6 +1127,9 @@ void AppUi::draw_themes_section()
     bool auto_rescan = _sidecar.theme_scan_root_auto;
     if (ImGui::Checkbox("auto re-scan folder for new content", &auto_rescan)) {
       _sidecar.theme_scan_root_auto = auto_rescan;
+      // Sidecar edits change nothing in the running program (they are load-time
+      // instructions), so they mark dirty directly rather than riding `changed`.
+      mark_session_dirty();
     }
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("ON: directories that appear become themes, re-derived every load.\n"
@@ -1073,12 +1174,14 @@ void AppUi::draw_themes_section()
           _sidecar.theme_inherit.insert(name);
         }
       }
+      mark_session_dirty();
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(!inheriting);
     if (ImGui::Button("none")) {
       _sidecar.theme_inherit.clear();
+      mark_session_dirty();
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
@@ -1093,7 +1196,51 @@ void AppUi::draw_themes_section()
 
   for (const auto& name : names) {
     ImGui::PushID(name.c_str());
+
+    // Inherit-parent toggle. Only offered for a scan theme with a parent: an explicit
+    // image-list theme has no folder to inherit from, and the root theme has nothing
+    // above it. Drawn INSIDE the weight row (after pin, before the bar) so it lines up
+    // down the column instead of trailing each name at a different offset; the
+    // pool-size consequence still reads after the name, where it describes the theme
+    // rather than the button.
+    const std::string parent = theme_parent(name);
+    const bool inheritable = !parent.empty() && _sidecar.theme_scan.count(name) != 0;
+    auto draw_inherit_button = [&]() {
+      const bool inherits = _sidecar.theme_inherit.count(name) != 0;
+      if (inherits) {
+        ImGui::PushStyleColor(ImGuiCol_Button, kPinGold);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.f, 0.f, 0.f, 1.f));
+      }
+      // Same 32px as on/off and pin -- it is a third state toggle in that run, and the
+      // full word would push the theme name off a default-width panel. The tooltip
+      // carries the meaning.
+      if (ImGui::Button("inh", ImVec2(32.f, 0.f))) {
+        if (inherits) {
+          _sidecar.theme_inherit.erase(name);
+        } else {
+          _sidecar.theme_inherit.insert(name);
+        }
+        mark_session_dirty();
+      }
+      if (inherits) {
+        ImGui::PopStyleColor(2);
+      }
+      if (ImGui::IsItemHovered()) {
+        // The chain is the non-obvious part: this button only reaches the grandparent
+        // when the parent's own button is on too.
+        const bool parent_inherits = _sidecar.theme_inherit.count(parent) != 0;
+        ImGui::SetTooltip("Inherit: fold '%s' into this theme's pool.\n"
+                          "Chains: this reaches what '%s' itself inherits, and '%s' is\n"
+                          "currently %s.\n"
+                          "Takes effect on the next load (themes are built at startup).",
+                          parent.c_str(), parent.c_str(), parent.c_str(),
+                          parent_inherits ? "inheriting" : "NOT inheriting");
+      }
+    };
+
     if (program) {
+      // Per-program off/on weight memory, same as the Visuals section's.
+      auto& theme_stash = _theme_last_weight[program];
       // Find this theme's enabled_theme entry. enabled == entry with weight > 0;
       // disabling keeps the entry at weight 0, matching ThemeBank::set_program.
       trance_pb::Program::EnabledTheme* entry = nullptr;
@@ -1119,12 +1266,16 @@ void AppUi::draw_themes_section()
       bool pinned = entry && entry->pinned();
       const uint32_t before_weight = weight;
       auto row = draw_weight_row("", "t" + name, &weight, &pinned, theme_pool_total,
-                                 _theme_last_weight,
+                                 theme_stash,
                                  "Rotation weight: each theme swap picks the next theme with\n"
                                  "chance weight/total across enabled themes. 0 = never picked.\n"
                                  "A PINNED theme stays resident even at weight 0 -- the weights\n"
                                  "then only choose the other of the two live slots.\n"
-                                 "(The bank still only keeps its 4-slot window loaded.)");
+                                 "(The bank still only keeps its 4-slot window loaded.)",
+                                 // Themes never report pool_pinned: a pinned theme holds one
+                                 // of the two slots, it does not win the lottery for the other.
+                                 false, inheritable ? std::function<void()>{draw_inherit_button}
+                                                    : std::function<void()>{});
       if (weight != before_weight) {
         ensure_entry()->set_random_weight(weight);
       }
@@ -1152,41 +1303,12 @@ void AppUi::draw_themes_section()
     auto theme_it = _session.mutable_theme_map()->find(name);
     const bool node_open = ImGui::TreeNode(name.c_str());
 
-    // Inherit-parent toggle, with the pool-size consequence spelled out rather than
-    // left to be discovered. Only offered for a scan theme with a parent: an explicit
-    // image-list theme has no folder to inherit from, and the root theme has nothing
-    // above it. Sized live from the OWN counts the loader recorded, so the arrow shows
-    // what the next restart will actually produce.
-    const std::string parent = theme_parent(name);
-    if (!parent.empty() && _sidecar.theme_scan.count(name)) {
-      ImGui::SameLine();
-      const bool inherits = _sidecar.theme_inherit.count(name) != 0;
-      if (inherits) {
-        ImGui::PushStyleColor(ImGuiCol_Button, kPinGold);
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.f, 0.f, 0.f, 1.f));
-      }
-      if (ImGui::Button("inherit")) {
-        if (inherits) {
-          _sidecar.theme_inherit.erase(name);
-        } else {
-          _sidecar.theme_inherit.insert(name);
-        }
-      }
-      if (inherits) {
-        ImGui::PopStyleColor(2);
-      }
-      if (ImGui::IsItemHovered()) {
-        // The chain is the non-obvious part: this button only reaches the grandparent
-        // when the parent's own button is on too.
-        const bool parent_inherits = _sidecar.theme_inherit.count(parent) != 0;
-        ImGui::SetTooltip("Fold '%s' into this theme's pool.\n"
-                          "Chains: this reaches what '%s' itself inherits, and '%s' is\n"
-                          "currently %s.\n"
-                          "Takes effect on the next load (themes are built at startup).",
-                          parent.c_str(), parent.c_str(), parent.c_str(),
-                          parent_inherits ? "inheriting" : "NOT inheriting");
-      }
-      // own -> effective, so the cost of the toggle is visible before clicking it.
+    // The inherit toggle's consequence, after the name where it reads as a property of
+    // the theme: own count -> what the pool becomes with inheritance folded in. Sized
+    // live from the OWN counts the loader recorded, so the arrow shows what the next
+    // restart will actually produce -- the cost of the button is visible before it is
+    // clicked. (The button itself is up in the weight row, see draw_inherit_button.)
+    if (inheritable) {
       auto own_it = _sidecar.theme_own_count.find(name);
       const uint32_t own = own_it != _sidecar.theme_own_count.end() ? own_it->second : 0;
       const uint32_t effective = predicted_pool_size(name);
@@ -1268,6 +1390,7 @@ void AppUi::draw_themes_section()
           } else {
             excludes.push_back(path);
           }
+          mark_session_dirty();
         }
       }
       if (!excludes.empty()) {
@@ -1295,50 +1418,94 @@ void AppUi::draw_themes_section()
     ImGui::TextColored(kWarnAmber, "all weights 0 -- resets to defaults on reload");
   }
 
-  if (changed && _on_program_change) {
-    _on_program_change();
+  if (changed) {
+    mark_session_dirty();
+    if (_on_program_change) {
+      _on_program_change();
+    }
   }
 }
 
-void AppUi::draw_session_section()
+void AppUi::draw_session_file_controls()
 {
-  ImGui::Text("loaded: %s", _session_path.c_str());
-  if (ImGui::Button("Save")) {
-    save_session_to(_session_path);
-  }
+  ImGui::TextUnformatted("Session file:");
+  ImGui::TextDisabled("%s", _session_path.c_str());
+  // Stated, not implied. There is no Save button here any more and the absence of one
+  // is only reassuring if the panel says why.
+  ImGui::TextDisabled("(edits above are saved to it as you make them)");
+
+  ImGui::Spacing();
+  ImGui::TextUnformatted("Export a copy:");
   ImGui::SetNextItemWidth(-80.f);
-  ImGui::InputText("##save_as_path", _save_as_buf, sizeof(_save_as_buf));
+  ImGui::InputText("##export_path", _export_buf, sizeof(_export_buf));
   ImGui::SameLine();
-  if (ImGui::Button("Save As")) {
-    save_session_to(_save_as_buf);
+  if (ImGui::Button("Export")) {
+    export_session_to(_export_buf);
   }
-  if (_save_status_ttl > 0.f && !_save_status.empty()) {
-    ImGui::TextColored(_save_error ? ImVec4(1.f, 0.4f, 0.4f, 1.f) : ImVec4(0.4f, 1.f, 0.4f, 1.f),
-                       "%s", _save_status.c_str());
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Write the session as it stands to another path, patterns and\n"
+                      "all. The live file above keeps playing and keeps saving --\n"
+                      "this is a copy, not a switch.\n"
+                      "(For a copy with the MEDIA bundled in, run\n"
+                      "trance --export_archive=<file>.)");
+  }
+  if (_export_status_ttl > 0.f && !_export_status.empty()) {
+    ImGui::TextColored(_export_error ? ImVec4(1.f, 0.4f, 0.4f, 1.f) : ImVec4(0.4f, 1.f, 0.4f, 1.f),
+                       "%s", _export_status.c_str());
   }
 }
 
-void AppUi::save_session_to(const std::string& path)
+void AppUi::autosave_if_due()
 {
-  _save_status_ttl = 6.f;
-  if (path.empty()) {
-    _save_status = "error: empty path";
-    _save_error = true;
+  // Everything autosave_session() does, minus the retry storm a persistently failing
+  // write would otherwise produce from the two per-frame call sites.
+  if (_autosave_retry_in <= 0.f) {
+    autosave_session();
+  }
+}
+
+void AppUi::autosave_session()
+{
+  if (!_session_dirty) {
     return;
   }
   try {
     // The sidecar overload so pattern files / scan-dir themes round-trip instead of
     // being frozen inline (session_json.cpp handles scan themes on save itself; no
     // UI special-casing beyond the restart note in the Themes section).
-    // save_session_json checks its output stream and throws on any failed write
-    // (unopenable path, read-only file, disk full), so a normal return really
-    // means the file landed.
-    save_session(_session, path, _sidecar);
-    _save_status = "saved " + path;
-    _save_error = false;
+    // save_session_json writes through a temp file and renames, and throws on any
+    // failed write (unopenable path, read-only file, disk full), so a normal return
+    // really means the file landed -- whole, not half.
+    save_session(_session, _session_path, _sidecar);
+    // Cleared only on success: a failed write leaves the edit pending, so the next
+    // flush retries it rather than dropping it on the floor.
+    _session_dirty = false;
+    _autosave_error.clear();
   } catch (const std::exception& e) {
-    _save_status = std::string("error: ") + e.what();
-    _save_error = true;
+    _autosave_error = std::string(e.what()) + " (edits are live but NOT on disk)";
+    // Still dirty, so the edit is not lost -- but back off before trying again.
+    _autosave_retry_in = 5.f;
+  }
+}
+
+void AppUi::export_session_to(const std::string& path)
+{
+  _export_status_ttl = 6.f;
+  if (path.empty()) {
+    _export_status = "error: empty path";
+    _export_error = true;
+    return;
+  }
+  try {
+    // Same call the autosave makes, at a different path. The sidecar's pattern-file
+    // entries are ROOT-relative, so the copy's patterns/ sidecars land next to the
+    // copy and the live session's own paths are untouched.
+    save_session(_session, path, _sidecar);
+    _export_status = "exported " + path;
+    _export_error = false;
+  } catch (const std::exception& e) {
+    _export_status = std::string("error: ") + e.what();
+    _export_error = true;
   }
 }
 
@@ -1406,6 +1573,7 @@ void AppUi::draw_entrainment_section(Audio& audio)
       } else {
         *program->mutable_entrainment() = default_entrainment_bed();
       }
+      mark_session_dirty();
       _on_program_change();
     }
     return;
@@ -1416,6 +1584,7 @@ void AppUi::draw_entrainment_section(Audio& audio)
     _bed_stash = entrainment->SerializeAsString();
     _bed_stash_program = program;
     program->clear_entrainment();
+    mark_session_dirty();
     _on_program_change();
     return;
   }
@@ -1490,9 +1659,10 @@ void AppUi::draw_entrainment_section(Audio& audio)
   }
   ImGui::TextDisabled("(mix dB balances layers against each other; overall loudness is\n"
                       "master dB. pulse drives `every locked`/`beats` pattern timing;\n"
-                      "edits apply live, Session > Save persists)");
+                      "edits apply live and are saved as you make them)");
 
   if (commit) {
+    mark_session_dirty();
     _on_program_change();
   }
 }
@@ -1501,6 +1671,8 @@ void AppUi::draw_system_section()
 {
   // Edits main()'s live trance_pb::System in place and persists IMMEDIATELY to
   // system.json (save_system_config below) -- there's no separate Apply/Save step.
+  // This was the first section to work that way and is now the model for all of them
+  // (see the persistence model in app_ui.h).
   // The renderer and window are constructed once at play_session startup, so
   // renderer/windowed changes only land on the next launch; the note below makes
   // that explicit so a radio click that visibly does nothing isn't read as a bug.
@@ -1551,6 +1723,13 @@ void AppUi::draw_system_section()
                                      : ImVec4(0.4f, 1.f, 0.4f, 1.f),
                        "%s", _system_status.c_str());
   }
+
+  // The session file lives here, at the very bottom, rather than in a section of its
+  // own: with the autosave there is no Save button left for such a section to hold, and
+  // what remains -- which file is live, and Export -- is the same kind of thing as the
+  // rest of System (config that persists on the click, not content).
+  ImGui::Separator();
+  draw_session_file_controls();
 }
 
 void AppUi::save_system_config()

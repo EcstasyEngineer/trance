@@ -508,12 +508,19 @@ At the trance_pb retirement wave it dissolves into real fields on the native str
 
 Writer output: 2-space indent, keys in schema order, default-valued fields omitted (§2.6).
 
-**Known limitation:** the editor's save path serializes from the proto + sidecar, so
-`_`-prefixed comment keys and hand-chosen key ordering do not survive an editor save.
-Hand edits are safe as long as playback never writes the session — which holds today
-(only the editor writes). Comment preservation is explicitly deferred to the trance_pb
-retirement wave (native model can carry them); do not build a JSON-DOM patching layer
-this wave.
+Saves are atomic: the writer fills a `<path>.tmp` sibling and renames it over the target
+(`write_file_atomically`, session_json.cpp), so an interrupted write leaves the previous
+file intact rather than a truncated one. `.tmp` is on the scan-ignore list (§3.3), so a
+temp file left behind by a killed process is never mistaken for content.
+
+**Known limitation — comments do not survive a save, and the F2 panel now saves by
+itself.** The save path serializes from the proto + sidecar, so `_`-prefixed comment keys
+and hand-chosen key ordering are dropped. This used to cost a deliberate Save click; as of
+the autosave model (see [controls.md](controls.md)) *any* edit made in the F2 panel
+rewrites the loaded file, so a session you want to keep commented should be edited in a
+text editor and not opened for tweaking in F2 — or kept as a copy that the app does not
+load. Comment preservation is deferred to the trance_pb retirement wave (the native model
+can carry them); do not build a JSON-DOM patching layer this wave.
 
 ## 6. `system.json` schema
 
@@ -634,8 +641,14 @@ in main.cpp, director, theme_bank, audio — consumes `trance_pb` objects and is
 **What the ImGui editor reads/writes:**
 - Reads/writes `*.session.json` through the same load/save layer (proto + sidecar). It is
   the only component that writes sessions; playback never does.
-- Edits pattern text in a multiline widget; save writes the text to the pattern's `file`
-  (§5), not into the JSON.
+- **Autosaves.** The loaded file is live state: every committed edit (slider release,
+  button, defocused text field) is written straight back to the path the session was
+  loaded from. There is no Save button. `Export` writes a copy to another path and does
+  not change which file is live. The command channel (`--command_port`) is the exception
+  and edits memory only, by design — a remote control surface must not rewrite the
+  user's session.
+- Edits pattern text in a multiline widget; the save writes the text to the pattern's
+  `file` (§5), not into the JSON.
 - Reads/writes `system.json` for its own state: `last_root_directory` (file dialogs) and
   `last_session_map` (pre-filling the launch variable picker, keyed by session path).
 - Surfaces loader strict-mode errors (unknown key, bad path, missing pattern file,

@@ -123,6 +123,14 @@ normative spec) — edit them live from the in-app **F2** panel or in any text e
 protobuf `.session` files from older versions are auto-migrated to JSON on load. (The old
 `creator.exe` graphical editor has been removed; F2 and a text editor replace it.)
 
+**The loaded session is live state, not a document.** trance opens `./default.json`
+(bootstrapping one on a cold start) or the file named on the command line, and the F2
+panel writes every edit straight back to it — there is no Save button and nothing to
+lose by quitting. The panel's **System → Export** writes a *copy* elsewhere, leaving the
+live file playing and saving; `--export_archive=<file>` writes a copy with the media
+bundled in. Writes go through a temp file and a rename, so an interrupted save cannot
+truncate a session.
+
 ## Supported file formats
 
 | Type | Formats |

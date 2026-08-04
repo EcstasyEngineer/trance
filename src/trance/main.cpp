@@ -423,8 +423,9 @@ void handle_commands(CommandChannel& channel, Director& director, Audio& audio,
 }
 
 // `session` is non-const (and `session_path`/`sidecar` are threaded through) for the F2
-// UI: its Program/Themes sections mutate the proto in place and its Session section saves
-// it back to disk with the sidecar (pattern files / scan-dir themes round-trip). Director/
+// UI: its Program/Themes sections mutate the proto in place and its autosave writes it
+// back to `session_path` with the sidecar (pattern files / scan-dir themes round-trip,
+// and the loaded file is treated as live state, not an unsaved document). Director/
 // ThemeBank keep their const refs -- in-place field mutation keeps map value addresses
 // stable, and the UI never reorders/erases map entries. `system` is non-const (and
 // `system_path` threaded through) for the same reason: the UI's System section edits

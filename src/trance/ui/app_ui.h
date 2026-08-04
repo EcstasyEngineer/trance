@@ -45,9 +45,6 @@
 // custom patterns -- Director::change_visual draws from both at once). Weight edits
 // fire on_program_change on RELEASE, not per drag tick: set_program re-parses every
 // custom pattern in the program.
-//   - Session: loaded path, Save (back to that path) and Save As, via
-//     save_session(session, path, sidecar) so pattern files / scan-dir themes
-//     round-trip instead of being frozen inline.
 //   - Overlay: live click-through overlay toggle + opacity slider. Reads/writes
 //     main.cpp's CommandRuntimeState via the get_overlay/set_overlay callbacks; the
 //     main loop's apply seam (shared with the `overlay ...` verbs) pushes changes
@@ -61,13 +58,33 @@
 //     locking the feature behind hand-edited JSON. Slider edits write the proto per
 //     drag tick but commit (fire on_program_change, which also refreshes the live
 //     bed via Audio::SetEntrainment) on RELEASE, so the stream isn't restarted per
-//     tick. Persistence is Session > Save, same as every other program edit.
+//     tick. Persisted by the autosave, same as every other program edit.
 //   - System: renderer selection (Monitor / SteamVR / OpenXR), windowed mode, eye
 //     spacing -- edits trance_pb::System in place and persists immediately to
 //     system.json via save_system. Renderer/windowed take effect on next launch
-//     (the renderer/window are constructed once at startup).
+//     (the renderer/window are constructed once at startup). Ends with the session
+//     FILE controls (what used to be its own Session section, which held nothing but
+//     a save button): the loaded path, and Export, which writes a copy elsewhere via
+//     save_session(session, path, sidecar) so pattern files / scan-dir themes
+//     round-trip instead of being frozen inline.
 // Plus a separated "Quit trance" button at the bottom (polled by main.cpp via
 // quit_requested()).
+//
+// PERSISTENCE MODEL: the loaded session file is live state, not a document with
+// unsaved changes. trance loads ./default.json (or argv[1]) at startup, and every edit
+// made here is written straight back to that path -- no Save button, matching the
+// System section, which has always persisted on the click. Export is the only outward
+// file operation: it writes a COPY somewhere else and leaves the live file alone.
+//
+// The write is debounced rather than per-mutation: mark_session_dirty() flags the
+// change (at the same commit points that fire on_program_change -- slider RELEASE, not
+// per drag tick -- plus the edits that mutate the session/sidecar without touching the
+// running program at all: pattern name/source text, theme excludes, inherit flags), and
+// update() flushes at the end of the frame once no ImGui item is active, so a drag or a
+// half-typed pattern name never hits the disk. The panel closing and ~AppUi flush too,
+// which covers the exit paths that never deactivate the widget (window close, tray
+// Quit). save_session_json writes through a temp file + rename, so a crash mid-autosave
+// can't truncate the session.
 //
 // TODO: persist last-forced-visual / mute state / UI-open once JSON settings land.
 #include <cstdint>
@@ -103,8 +120,8 @@ public:
   // per-frame Update/Render cost or touches the click-through window.
   //
   // `session`/`sidecar`/`command_state` are play_session's live objects (outliving
-  // this AppUi); the Program/Themes sections mutate `session` in place, the Session
-  // section saves it back to disk, and the Overlay section reads/writes
+  // this AppUi); the Program/Themes sections mutate `session` in place, the autosave
+  // writes it back to `session_path`, and the Overlay section reads/writes
   // `command_state`'s overlay fields (main.cpp's per-frame apply seam pushes any
   // change onto the actual window). `on_program_change` must re-push the active
   // program into ThemeBank/Director (the same pair the playlist-switch path calls)
@@ -141,7 +158,7 @@ public:
 
   // True while an ImGui text field is active (io.WantTextInput). handle_events()
   // checks this before the Escape/F2 panel toggle: Escape's standard ImGui meaning
-  // inside an active InputText (e.g. the Session section's Save As field) is
+  // inside an active InputText (e.g. the System section's Export path field) is
   // "cancel the edit", and it must not also close the whole panel.
   bool wants_text_input() const;
 
@@ -181,7 +198,9 @@ private:
   // stand. Recomputed from the sidecar's per-theme own counts rather than measured off
   // theme_map, which already has the last load's unions folded into it.
   uint32_t predicted_pool_size(const std::string& name) const;
-  void draw_session_section();
+  // The session FILE controls at the tail of the System section: which file is live,
+  // and Export (write a copy elsewhere). No Save -- see the persistence model above.
+  void draw_session_file_controls();
   void draw_overlay_section();
   void draw_entrainment_section(Audio& audio);
   void draw_system_section();
@@ -212,10 +231,15 @@ private:
     bool weight_changed = false;  // committed (release / button), not per drag tick
     bool pin_changed = false;
   };
+  // `after_pin`, when set, draws the caller's own controls in the run of toggles at the
+  // head of the row -- after pin, before the weight bar. The Themes section's `inherit`
+  // button rides here rather than trailing the theme NAME, so the column of buttons
+  // stays a column instead of stepping in and out with each name's width.
   WeightRowResult draw_weight_row(const char* label, const std::string& key, uint32_t* weight,
                                   bool* pinned, uint64_t pool_total,
                                   std::map<std::string, uint32_t>& stash,
-                                  const char* slider_tooltip = nullptr, bool pool_pinned = false);
+                                  const char* slider_tooltip = nullptr, bool pool_pinned = false,
+                                  const std::function<void()>& after_pin = {});
 
   // Sum of every weight in the visual pool: built-in visual_type entries PLUS
   // enabled custom patterns. They share one lottery (director.cpp's change_visual),
@@ -235,8 +259,20 @@ private:
   // The stash/tween key for a visual row: "b<row index>" built-in, "c<name>" custom.
   static std::string visual_row_key(bool is_custom, int builtin_index,
                                     const std::string& custom_name);
-  // Save (with sidecar) to `path`, recording a transient status line either way.
-  void save_session_to(const std::string& path);
+  // The session was edited and the change has not reached disk yet. Set at each commit
+  // point rather than per mutation, so a drag's intermediate values are never written.
+  void mark_session_dirty() { _session_dirty = true; }
+  // Write the live session back to _session_path if dirty. No-op otherwise, so it is
+  // cheap to call every frame. A failure leaves _autosave_error set, which the panel
+  // shows as a persistent banner -- an autosave that silently isn't happening is the
+  // one failure mode this model has that a Save button didn't.
+  void autosave_session();
+  // autosave_session() behind the failure backoff -- what the two per-frame call sites
+  // (the end-of-update seam and the panel-closed early-out) use.
+  void autosave_if_due();
+  // Write a COPY to `path` (Export), recording a transient status line either way.
+  // Never touches _session_path or the dirty flag: the live file is autosaved.
+  void export_session_to(const std::string& path);
   // Persist the System proto back to _system_path, recording a transient status line.
   void save_system_config();
 
@@ -273,9 +309,19 @@ private:
   const trance_pb::Program* _pattern_lint_program = nullptr;
 
   // Last nonzero weight per theme, so the on/off button round-trips a theme's
-  // weight instead of resetting it to 1 (off keeps the enabled_theme entry at
-  // weight 0, matching ThemeBank::set_program's semantics).
-  std::map<std::string, uint32_t> _theme_last_weight;
+  // weight instead of resetting it to kDefaultRowWeight (off keeps the enabled_theme
+  // entry at weight 0, matching ThemeBank::set_program's semantics).
+  //
+  // Keyed by PROGRAM first. Theme/visual names are not unique across programs -- one
+  // program's "hypno" row is a different row with a different weight from another's --
+  // so an undifferentiated stash would restore the wrong number after a playlist
+  // advance. That used to be handled by clearing the stashes whenever the active
+  // program changed, which meant a row switched off and back on either side of an
+  // advance forgot its weight entirely. The program pointer is used as IDENTITY only
+  // and never dereferenced (same idiom as _weight_stash_program); program_map values
+  // are address-stable for the run, so a playlist that returns to a program finds its
+  // stash intact.
+  std::map<const trance_pb::Program*, std::map<std::string, uint32_t>> _theme_last_weight;
   // The same stash for visual rows, keyed by visual_row_key(): "b<row index>" for a
   // built-in visual_type entry, "c<name>" for a custom pattern. Built-ins key on the
   // ROW INDEX because duplicate entries of one type are legal and a type-derived key
@@ -283,7 +329,7 @@ private:
   // shifts every row below it and a stale index would restore the wrong row's weight.
   // (A built-in with no row yet is drawn under a transient "bt<type>" key until its
   // entry materializes -- see the second pass in draw_visuals_section.)
-  std::map<std::string, uint32_t> _visual_last_weight;
+  std::map<const trance_pb::Program*, std::map<std::string, uint32_t>> _visual_last_weight;
 
   // In-flight "animate the slider to 0" tweens from the off button, keyed the same
   // way as the stashes above ("t<name>" for themes). PURELY COSMETIC: the model
@@ -301,12 +347,25 @@ private:
   // program's identically-named row. Compared only for identity -- never dereferenced.
   const trance_pb::Program* _weight_stash_program = nullptr;
 
-  // Session section state: Save As target (seeded with the loaded path) + a
-  // transient "saved"/error status line with a countdown.
-  char _save_as_buf[512] = {};
-  std::string _save_status;
-  bool _save_error = false;
-  float _save_status_ttl = 0.f;
+  // Export state: the target path (seeded with the loaded path -- "tweak the filename"
+  // is the common case) + a transient "exported"/error status line with a countdown.
+  char _export_buf[512] = {};
+  std::string _export_status;
+  bool _export_error = false;
+  float _export_status_ttl = 0.f;
+
+  // Autosave state. `_session_dirty` is set by mark_session_dirty() and cleared by a
+  // successful write; `_autosave_error` holds the last failure and is PERSISTENT (no
+  // ttl, like _vr_failure) until a later save succeeds -- a session that has silently
+  // stopped persisting has to stay on screen, not scroll past in six seconds.
+  bool _session_dirty = false;
+  std::string _autosave_error;
+  // Seconds before the per-frame seam retries after a failed write. A failure leaves
+  // the session dirty (deliberately -- the edit is not abandoned), and without this the
+  // seam would re-attempt the write on every frame: a read-only session file would mean
+  // 60 failed opens a second for the rest of the run. Only the per-frame callers honour
+  // it; the panel-closing and shutdown flushes always try.
+  float _autosave_retry_in = 0.f;
 
   // System section state: transient "saved system.json"/error status line.
   std::string _system_status;

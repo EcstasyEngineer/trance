@@ -165,7 +165,16 @@ Loading:
 
 Audio (added 2026-08-02 — the same surface as the F2 Audio section; `bed` edits apply to
 the ACTIVE program in place, live through the program-change seam, and reconfigures MORPH
-— glide/crossfade over ~300 ms — rather than cutting; see entrainment.cpp):
+— glide/crossfade over ~300 ms — rather than cutting; see entrainment.cpp).
+
+**Channel edits are in-memory only.** The F2 panel autosaves the session file on every
+edit; this channel deliberately does not. A remote/automated control surface that
+rewrote the user's session as a side effect of a `bed master` would be a much worse
+default than one whose changes end with the run — and the QA harness
+(`tests/qa_command_channel.py`) drives every verb here against whatever session is
+loaded, which only stays safe while this holds. An edit made over the channel does
+become persistent if the user then commits an edit in the F2 panel: both surfaces mutate
+the one live program, and the autosave writes whatever it finds:
 - **`mute on|off`** — global mute over ALL audio (bed + music channels). The same toggle
   the M key and the F2 checkbox drive: idempotent, and every surface reads one flag, so
   they can never disagree. Note `hide` also mutes and `show` restores the pre-hide state;

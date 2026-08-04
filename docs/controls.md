@@ -13,11 +13,24 @@ Work while the trance window has focus (realtime mode):
 | **Escape** | Quit trance |
 | **F2** | Toggle the in-app control panel (ImGui) |
 | **F1** | Toggle the debug overlay (visual/cycler/theme state) |
+
 | **M** | Toggle audio mute |
 
 Escape quits outright; the other ways out are closing the window, the tray menu's
 **Quit**, and the control panel's **Quit trance** button. While a control-panel text
 field is being edited, Escape cancels that edit instead of quitting.
+
+The F1 overlay's THEMES block reads `<loaded>/<total> img  <n> anim` per slot. Stills are
+cached, so they have a loaded/total ratio; gifs are streamed on demand and have no such
+ratio, which is why they are counted separately. **`0/0 img  17 anim` is a healthy folder
+of gifs, not an empty theme** — a theme draws whichever kind it has, so an all-gif theme
+serves `image` draws from its gifs and a stills-only theme serves `anim` draws from its
+stills.
+
+Every edit made in the F2 panel is saved as you make it — visual/theme weights, colours,
+pattern text and the entrainment bed go back to the loaded session file, renderer and
+window settings to `system.json`. There is no Save button; **System → Export** writes a
+copy of the session somewhere else and leaves the live file alone.
 
 The F2 panel is **not built in VR mode** (there is no single flat 2D pass to composite
 it onto). Its **System → Renderer** radios persist to

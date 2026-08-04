@@ -1380,6 +1380,43 @@ trance_pb::Session load_session_json(const std::string& path, const std::string&
   return session;
 }
 
+namespace
+{
+  // Write-then-rename, shared by both savers below. The F2 panel autosaves the live
+  // session on every committed edit, so these files are rewritten constantly -- and
+  // default.json is the user's only copy. A plain ofstream truncates on open, so a
+  // process that dies mid-write (crash, kill, full disk) would leave half a JSON where
+  // the session used to be. Renaming a sibling temp file over the target is atomic on
+  // the same volume, so a reader (or the next launch) sees either the old file or the
+  // new one, never a partial one.
+  void write_file_atomically(const std::string& path, const std::string& contents)
+  {
+    const auto temp = path + ".tmp";
+    {
+      // Text mode, matching what these files were always written in -- switching to
+      // binary would silently rewrite every line ending on Windows.
+      std::ofstream f{temp};
+      if (!f) {
+        throw std::runtime_error("couldn't open " + temp + " for writing");
+      }
+      f << contents;
+      f.flush();
+      if (!f) {
+        throw std::runtime_error("couldn't write " + temp);
+      }
+    }
+    std::error_code ec;
+    // std::filesystem::rename replaces an existing regular file (MoveFileEx with
+    // REPLACE_EXISTING under MSVC), so there is no unlink-first window to lose.
+    std::filesystem::rename(temp, path, ec);
+    if (ec) {
+      std::error_code ignored;
+      std::filesystem::remove(temp, ignored);
+      throw std::runtime_error("couldn't replace " + path + ": " + ec.message());
+    }
+  }
+}
+
 void save_session_json(const trance_pb::Session& session, const std::string& path,
                         const std::string& root, SessionJsonSidecar& sidecar)
 {
@@ -1436,18 +1473,10 @@ void save_session_json(const trance_pb::Session& session, const std::string& pat
     root_json["variable_map"] = std::move(variables);
   }
 
-  // A silent failure here is worse than a throw: callers (F2 UI Save, legacy
-  // auto-convert) report "saved"/reload the file on a normal return, so a write
-  // that never landed (read-only dir, disk full) must surface as an error.
-  std::ofstream f{path};
-  if (!f) {
-    throw std::runtime_error("couldn't open " + path + " for writing");
-  }
-  f << root_json.dump(2);
-  f.flush();
-  if (!f) {
-    throw std::runtime_error("couldn't write " + path);
-  }
+  // A silent failure here is worse than a throw: callers (the F2 panel's autosave and
+  // Export, legacy auto-convert) report "saved"/reload the file on a normal return, so
+  // a write that never landed (read-only dir, disk full) must surface as an error.
+  write_file_atomically(path, root_json.dump(2));
 }
 
 trance_pb::System load_system_json(const std::string& path)
@@ -1578,15 +1607,9 @@ void save_system_json(const trance_pb::System& system, const std::string& path)
     root_json["last_session_map"] = std::move(session_map);
   }
 
-  // Same stream checking as save_session_json above: a failed write must throw,
-  // not return normally (the F2 UI's System section reports "saved" on return).
-  std::ofstream f{path};
-  if (!f) {
-    throw std::runtime_error("couldn't open " + path + " for writing");
-  }
-  f << root_json.dump(2);
-  f.flush();
-  if (!f) {
-    throw std::runtime_error("couldn't write " + path);
-  }
+  // Same atomic write as save_session_json above: a failed write must throw rather
+  // than return normally (the F2 UI's System section reports "saved" on return), and
+  // the System section persists on every radio click, so this file is rewritten often
+  // enough to deserve the same crash-safety.
+  write_file_atomically(path, root_json.dump(2));
 }
