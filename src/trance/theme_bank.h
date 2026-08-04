@@ -259,7 +259,11 @@ private:
   void do_reconcile(ThemeInfo& theme);
   void do_load(ThemeInfo& theme);
   void do_unload(ThemeInfo& theme);
-  std::unique_ptr<Streamer> do_load_animation(bool alternate);
+  // The returned tag is the lane's ThemeInfo* at pick time (read once, so the pick and
+  // the tag can never disagree). AsyncStreamer carries it so a streamer preloaded under
+  // one theme is detectably stale once the lane holds another -- the mechanism that used
+  // to put the unloading theme's animation on screen after every swap.
+  StreamerLoad do_load_animation(bool alternate);
   void do_video_upload(const Image& image) const;
   void do_purge();
 
@@ -281,10 +285,11 @@ private:
 
   std::unique_ptr<AsyncStreamer> _streamer;
   std::unique_ptr<AsyncStreamer> _alt_streamer;
-  bool _animation_theme_changed = false;
-  bool _alt_animation_theme_changed = false;
-  // [0] primary, [1] alternate. Bumped by advance_theme() on the same condition that
-  // sets the two flags above -- the lane's theme actually changed. See lane_generation().
+  // [0] primary, [1] alternate. Bumped by advance_theme() when the lane's theme actually
+  // changed. See lane_generation(). (The streamers themselves no longer need a
+  // theme-changed flag: they compare each streamer's load-time tag against the lane's
+  // live ThemeInfo*, which cannot miss a swap or be reset out from under a reader the
+  // way the old cross-thread bools could.)
   std::array<uint32_t, 2> _lane_generation = {0, 0};
   bool _change_animation = false;
   bool _alt_change_animation = false;

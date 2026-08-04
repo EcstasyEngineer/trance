@@ -14,11 +14,13 @@ namespace
   const std::size_t kMaxFramesPerTick = 8;
 }
 
-AsyncStreamer::AsyncStreamer(const std::function<std::unique_ptr<Streamer>()>& load_function,
+AsyncStreamer::AsyncStreamer(const std::function<StreamerLoad()>& load_function,
                              size_t buffer_size)
 : _load_function{load_function}, _buffer_size{buffer_size}
 {
-  _a.streamer = load_function();
+  auto initial = load_function();
+  _a.streamer = std::move(initial.streamer);
+  _a.tag = initial.tag;
   _a.buffer.resize(_buffer_size);
   _b.buffer.resize(_buffer_size);
   _a.delays.assign(_buffer_size, kDefaultFrameDelaySeconds);
@@ -37,21 +39,50 @@ AsyncStreamer::AsyncStreamer(const std::function<std::unique_ptr<Streamer>()>& l
   }
 }
 
-Image AsyncStreamer::get_frame(const std::function<void(const Image&)>& function) const
+Image AsyncStreamer::get_frame(const void* live_tag,
+                               const std::function<void(const Image&)>& function) const
 {
   std::lock_guard<std::mutex> lock{_swap_mutex};
+  // A frame from a streamer loaded for something other than the lane's current tag is
+  // the wrong theme's content, however it got here (installed by an old switch, or the
+  // lane's theme changed under a playing streamer). Refusing it -- rather than serving
+  // it because it happens to be valid -- is what keeps every caller's "current theme"
+  // reasoning honest; the callers' fallback chains own what shows instead.
+  if (!_current->streamer || _current->tag != live_tag) {
+    return {};
+  }
   function(_current->buffer[_index]);
   Image image = _current->buffer[_index];
   return image;
 }
 
-void AsyncStreamer::advance_frame(uint32_t global_fps, bool maybe_switch, bool force_switch)
+void AsyncStreamer::advance_frame(uint32_t global_fps, bool maybe_switch, const void* live_tag)
 {
   std::lock_guard<std::mutex> lock{_swap_mutex};
-  bool can_change = _current->streamer && _next->streamer && !_old_streamer &&
-      (!_current->streamer->success() || !_current->size ||
-       (maybe_switch && (_reached_end || force_switch) &&
-        (_next->end || _next->size >= _buffer_size)));
+  // A switch installs _next, so EVERY branch requires it fresh (loaded for the lane's
+  // current tag -- installing a known-stale streamer is how wrong-theme content used to
+  // reach the screen) and fully buffered. Fully buffered also closes a race the old
+  // dead-current branch had: async_update() decodes into _next with _swap_mutex
+  // RELEASED around next_frame(), and a swap during that window redirects the decode
+  // into the wrong Animation. A full (or ended) next is one the async thread has
+  // stopped decoding.
+  //
+  // Three reasons to switch onto it:
+  //   - current is dead or was never loaded (a lane whose first theme had no
+  //     animations used to be bricked forever here: can_change demanded a non-null
+  //     current, which only a switch could provide);
+  //   - current is STALE (its tag is not the lane's): self-healing, no maybe_switch
+  //     traffic required -- patterns that never fire `anim` on a lane still get the
+  //     right theme's animation;
+  //   - the ordinary case: an `anim` effect asked (maybe_switch) and the current
+  //     animation has completed a pass (_reached_end).
+  const bool next_ready = _next->streamer && _next->tag == live_tag && !_old_streamer &&
+      (_next->end || _next->size >= _buffer_size);
+  const bool current_dead =
+      !_current->streamer || !_current->streamer->success() || !_current->size;
+  const bool current_stale = _current->streamer && _current->tag != live_tag;
+  const bool can_change =
+      next_ready && (current_dead || current_stale || (maybe_switch && _reached_end));
   if (can_change) {
     std::swap(_current, _next);
     _next->begin = 0;
@@ -115,7 +146,8 @@ void AsyncStreamer::advance_frame(uint32_t global_fps, bool maybe_switch, bool f
   }
 }
 
-void AsyncStreamer::async_update(const std::function<void(const Image&)>& cleanup_function)
+void AsyncStreamer::async_update(const void* live_tag,
+                                 const std::function<void(const Image&)>& cleanup_function)
 {
   {
     std::lock_guard<std::mutex> lock{_old_mutex};
@@ -141,9 +173,24 @@ void AsyncStreamer::async_update(const std::function<void(const Image&)>& cleanu
     if (!_current->streamer || _current->end || _index == _current->begin) {
       break;
     }
+    // The streamer being decoded, captured UNDER the lock and called through the local:
+    // next_frame() runs with the lock released, and the render thread can swap current
+    // and next in that window (a stale current switches to a fresh next the moment the
+    // next is buffered -- no anim traffic required). After the swap, `_current` names
+    // the OTHER Animation, so both halves of the old `_current->streamer->next_frame()`
+    // were wrong: the member read raced the swap, and the decoded frame would be
+    // appended into the freshly-installed animation's buffer -- a frame of the OUTGOING
+    // theme inserted into a buffer whose tag says otherwise, which is exactly the
+    // wrong-content class this file just closed. Streamer objects are only destroyed on
+    // this thread (via _old_streamer), so calling through the local is safe; the
+    // identity re-check after relocking drops the frame if a swap landed.
+    Streamer* decoding = _current->streamer.get();
     swap_lock.unlock();
-    auto image = _current->streamer->next_frame();
+    auto image = decoding->next_frame();
     swap_lock.lock();
+    if (_current->streamer.get() != decoding) {
+      break;
+    }
     if (!image) {
       _current->end = true;
       break;
@@ -181,11 +228,29 @@ void AsyncStreamer::async_update(const std::function<void(const Image&)>& cleanu
   } while (true);
 
   std::unique_lock<std::mutex> swap_lock{_swap_mutex};
+  // A preloaded next whose tag has fallen behind the lane is a wrong-theme animation
+  // waiting to be installed. Retire it (when the old-streamer slot is free to absorb it
+  // -- next pass otherwise) so the slot reloads for the lane's current theme; without
+  // this the fresh load below never runs and the lane starves on stale content.
+  // Same _swap_mutex-then-_old_mutex order as advance_frame's swap block.
+  if (_next->streamer && _next->tag != live_tag) {
+    std::lock_guard<std::mutex> lock{_old_mutex};
+    if (!_old_streamer) {
+      _old_streamer.swap(_next->streamer);
+      for (auto& image : _next->buffer) {
+        _old_buffer.emplace_back(std::move(image));
+      }
+      _next->begin = 0;
+      _next->size = 0;
+      _next->end = false;
+    }
+  }
   if (!_next->streamer) {
     swap_lock.unlock();
-    auto next_streamer = _load_function();
+    auto next_load = _load_function();
     swap_lock.lock();
-    _next->streamer.swap(next_streamer);
+    _next->streamer = std::move(next_load.streamer);
+    _next->tag = next_load.tag;
   }
   for (auto i = 0; i < 8; ++i) {
     if (!_next->streamer || _next->end || _next->size == _buffer_size) {

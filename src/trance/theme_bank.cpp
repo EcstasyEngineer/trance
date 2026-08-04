@@ -362,8 +362,8 @@ void ThemeBank::set_program(const trance_pb::Program& program)
 
 void ThemeBank::advance_frames()
 {
-  _streamer->advance_frame(_global_fps, _change_animation, _animation_theme_changed);
-  _alt_streamer->advance_frame(_global_fps, _alt_change_animation, _alt_animation_theme_changed);
+  _streamer->advance_frame(_global_fps, _change_animation, _active_themes[1].load());
+  _alt_streamer->advance_frame(_global_fps, _alt_change_animation, _active_themes[2].load());
   _change_animation = _alt_change_animation = false;
 }
 
@@ -384,6 +384,14 @@ Image ThemeBank::get_image(bool alternate)
   Image frame = get_animation_frame(alternate);
   if (frame) {
     last_good = frame;
+    // An `image` pull is a request for a NEW piece of content, and on a stills theme it
+    // gets one (the shuffle). Served from the animation lane instead, it used to get
+    // whatever animation was already playing -- every cut of a visual showed the same
+    // gif, which is exactly "the same image many times in a row" on an animation-only
+    // theme. Requesting the next animation here gives cuts the same variety stills have;
+    // the switch still waits for the current animation to finish a pass (_reached_end)
+    // and for the next one to be buffered, so it cannot thrash at fast cut rates.
+    change_animation(alternate);
     return frame;
   }
   // Nothing available at all this instant (a theme mid-swap, or one whose every file
@@ -449,9 +457,12 @@ bool ThemeBank::lane_is_animation_only(bool alternate) const
 
 Image ThemeBank::get_animation_frame(bool alternate)
 {
-  return (alternate ? _alt_streamer : _streamer)->get_frame([&](const Image& image) {
-    do_video_upload(image);
-  });
+  // Passing the lane's live theme is what makes this honest: a streamer loaded for a
+  // theme that no longer occupies the lane serves nothing, rather than the outgoing
+  // theme's animation. get_current_theme_image's contract depends on this.
+  return (alternate ? _alt_streamer : _streamer)
+      ->get_frame(_active_themes[alternate ? 2 : 1].load(),
+                  [&](const Image& image) { do_video_upload(image); });
 }
 
 Image ThemeBank::get_still_image(bool alternate)
@@ -629,20 +640,24 @@ uint32_t ThemeBank::cache_per_theme() const
 void ThemeBank::async_update()
 {
   do_purge();
+  auto callback = [&](const Image& image) {
+    _purge_mutex.lock();
+    _purgeable_images.push_back(image.get_sf_image());
+    _purge_mutex.unlock();
+  };
+  // The streamers pump on EVERY tick, cooldown or not. The cooldown paces the image
+  // cache's load/unload churn after a theme swap -- but a swap is exactly when a lane's
+  // animation needs replacing (its streamer was loaded for the outgoing theme), and
+  // sitting behind the cooldown guaranteed 500 ticks (~5s) of the wrong theme's
+  // animation on any animation-backed lane before the reload could even start.
+  _streamer->async_update(_active_themes[1].load(), callback);
+  _alt_streamer->async_update(_active_themes[2].load(), callback);
   if (_cooldown) {
     --_cooldown;
     return;
   }
 
   ++_updates;
-
-  auto callback = [&](const Image& image) {
-    _purge_mutex.lock();
-    _purgeable_images.push_back(image.get_sf_image());
-    _purge_mutex.unlock();
-  };
-  _streamer->async_update(callback);
-  _alt_streamer->async_update(callback);
   // Swap some images from the active themes in and out every so often.
   if (_updates == 128) {
     do_swap(1);
@@ -695,14 +710,13 @@ void ThemeBank::advance_theme()
   _active_themes.back() = _themes[random_theme_index].get();
   // After the shift, slot 0 is the OLD primary and slot 1 the new one; slot 1 is the old
   // alternate and slot 2 the new one. So these two comparisons are exactly "this lane's
-  // theme changed" -- which is what the animation streamers have always used them for,
-  // and what a holder of a captured still needs to know too.
+  // theme changed" -- what a holder of a captured still needs to know. (The animation
+  // streamers notice the same event on their own, by tag comparison against the live
+  // slot pointer.)
   if (_active_themes[0].load() != _active_themes[1].load()) {
-    _animation_theme_changed = true;
     ++_lane_generation[0];
   }
   if (_active_themes[1].load() != _active_themes[2].load()) {
-    _alt_animation_theme_changed = true;
     ++_lane_generation[1];
   }
 }
@@ -874,9 +888,13 @@ void ThemeBank::do_unload(ThemeInfo& theme)
   --theme.loaded_size;
 }
 
-std::unique_ptr<Streamer> ThemeBank::do_load_animation(bool alternate)
+StreamerLoad ThemeBank::do_load_animation(bool alternate)
 {
-  auto& theme = *_active_themes[alternate ? 2 : 1].load();
+  // ONE read of the lane's slot: the pick below and the tag returned with it must name
+  // the same theme, or a swap landing between two reads would stamp the new theme's tag
+  // on the old theme's animation and the staleness check would wave it through.
+  ThemeInfo* theme_ptr = _active_themes[alternate ? 2 : 1].load();
+  auto& theme = *theme_ptr;
   // Membership is checked EXPLICITLY rather than trusted to the shuffler. Shuffler
   // gives every index priority 0 and next() draws from the highest occupied level, so
   // "this theme's animations" is expressed only as "its own indices sit at priority 1".
@@ -890,12 +908,12 @@ std::unique_ptr<Streamer> ThemeBank::do_load_animation(bool alternate)
   //   - a theme whose own animations have all been marked dead (the -5 below), which
   //     drops them under the untouched rest of the pool.
   if (theme.animation_members.empty()) {
-    return {};
+    return {nullptr, theme_ptr};
   }
   auto index = theme.animation_shuffler.next();
   if (!theme.animation_members.count(index) || index >= _all_animations.size() ||
       _animation_dead[index]) {
-    return {};
+    return {nullptr, theme_ptr};
   }
 
   auto streamer = load_animation(_root_path + "/" + _all_animations[index]);
@@ -911,12 +929,7 @@ std::unique_ptr<Streamer> ThemeBank::do_load_animation(bool alternate)
       other_theme->animation_shuffler.modify(index, -5);
     }
   }
-  if (alternate) {
-    _alt_animation_theme_changed = false;
-  } else {
-    _animation_theme_changed = false;
-  }
-  return streamer;
+  return {std::move(streamer), theme_ptr};
 }
 
 void ThemeBank::do_video_upload(const Image& image) const
