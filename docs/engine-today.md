@@ -23,6 +23,31 @@ The engine has a **fixed, small vocabulary of draw operations** (`VisualControl`
 - **An image** — pulled from a **theme** (see §5). Can be drawn as a still, or as its
   **animated** form (a gif/webm). "Animation" is not a separate thing — it's just
   "draw this image slot as its moving version instead of a still."
+  - Still-vs-animated is a **preference, not a partition, and never black**. A theme is
+    whatever files its folder holds: a folder of nothing but gifs has zero stills, and a
+    folder of nothing but jpegs has zero gifs. So `image` on an all-gif theme draws its
+    gif, `anim` on a stills-only theme draws its still, and either falling short repeats
+    the lane's last good frame. A draw op can only produce nothing when its lane has
+    shown nothing at all yet. The pattern author asks for the *look*; which kind of file
+    a given folder happens to contain is not something they can know.
+  - And a substituted animation **still animates**. An `image` effect captures one `Image`
+    into a register and the render block redraws that captured value for the rest of the
+    cut — correct for a still, a freeze-frame for a gif. So when a register's lane holds
+    an animation-only theme, the renderer re-reads the lane's live frame at draw time
+    rather than the captured one (`VisualApiImpl::render_image`). Without it, one theme
+    looked animated under a pattern drawing `anim` and like a stuck photograph under a
+    pattern drawing plain `image`. Known edge: a fade whose `prev` register was captured
+    before a theme swap shows the new lane's live frame for the rest of the fade, since
+    the register records the slot and not which theme filled it.
+  - An animation's **own frames run on its own clock**: each frame is shown for the
+    duration its file specifies (a GIF's per-frame delay, a WebM's default duration /
+    frame rate / block timestamps), independent of `global_fps` and of whatever the
+    pattern driving it is doing. What the grammar controls is *which* animation is on
+    screen and *when it is swapped* — not how fast it plays. (`AsyncStreamer::advance_frame`
+    banks 1/global_fps of content time per tick and advances when the current frame's
+    delay is paid off; `Streamer::frame_delay_seconds` carries the per-frame timing, which
+    the ring buffer holds alongside each decoded frame. Before this, every animation
+    played at a flat 15fps regardless of how it was authored.)
 - **Text** — big foreground words, split by word / line / once.
 - **Subtext** — a secondary scrolling text line.
 - **Small text** — small caption text.
@@ -79,6 +104,23 @@ is a hard limit baked into the data model. **Anything that wants 3+ themes at on
 is exactly what associative conditioning across multiple concept-themes would need — is
 impossible today** without a real change to the theme bank, the loader, and the draw API.
 This is the single most important runtime limitation to know.
+
+A theme's content is **strictly its own** (plus whatever it explicitly inherits, folded in
+at load time — `docs/session-json-format.md` §3.3). ThemeBank checks that explicitly at the
+point of selection rather than trusting `Shuffler`, which encodes membership as a priority
+level and silently widens to the whole session's pool when a theme has nothing above the
+base level — a theme with no gifs of its own would otherwise draw every other theme's
+(`ThemeInfo::animation_members` / `image_members`; regression test: `theme_bank_test`
+case 4).
+
+Those two rules are a pair and must stay one: **content isolation says where a frame may
+come from, the never-black fallback says what to draw when the preferred kind isn't
+there.** Shipping the first without the second is what turned a cross-theme gif leak into
+black screens — most themes in a real corpus are stills-only, so every `anim` draw landing
+on one had been quietly borrowing a stranger's gif, and closing that off left nothing
+behind it. `theme_bank_test` case 4 asserts both directions, and asserts the leak by the
+fixture's image WIDTH rather than by emptiness precisely so that "it drew something" can
+never again be mistaken for "it drew the right thing".
 
 ## 6. The render block: "what's drawn," separately from "when"
 

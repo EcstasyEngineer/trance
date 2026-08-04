@@ -13,6 +13,12 @@ ImGui F2 in-app UI, a system tray icon (Windows) + global Shift+F11 hide-everyth
 `--command_port` line-protocol control channel. (The legacy wxWidgets **creator** editor has
 been deleted; the F2 panel plus hand-edited JSON is the editing story.)
 
+The loaded session file is **live state, not a document**: the F2 panel autosaves every
+committed edit back to it (no Save button), and `System > Export` is the only way to write
+a session somewhere else. Both savers write through a temp file + rename. Consequence to
+keep in mind when hand-editing: `_`-prefixed comment keys do not survive an autosave, so a
+commented session should not be opened for tweaking in F2.
+
 ## Build & run
 
 Dependencies are restored by **vcpkg manifest mode** (`vcpkg.json`) via the toolchain file;
@@ -58,7 +64,8 @@ The command channel is QA'd end-to-end from Python against a live exe
 (`tests/qa_command_channel.py`, issue #29) — hands-on, never in ctest.
 
 `theme_bank_test` is the one that is **not** headless: it drives ThemeBank's tiered image
-selection against a real synthetic media tree, and `get_image` uploads textures, so it needs
+selection and its per-theme content isolation (a theme must never draw another theme's
+image or gif) against a real synthetic media tree, and `get_image` uploads textures, so it needs
 a current OpenGL context (`sf::Context` — no window). It is labelled `gpu`, so
 `ctest -LE gpu` skips it; run without a GPU it prints a loud SKIP banner and exits 0 rather
 than reddening CI.
@@ -133,6 +140,9 @@ render, media, main), `src/common` (proto `trance.proto`, session), `docs/`, `te
 
 - MSVC builds with **`/W3 /WX`** (warnings are errors). Linux is `-Wall -Wextra` without
   `-Werror` (legacy 2014-era code). Keep new code warning-clean on MSVC.
-- Branch for changes; `master` is the single long-lived branch. Don't leave stray branches.
+- Commit to `master`. This repo does not use feature branches: it is a single-developer
+  repo with no review gate, so a branch is pure ceremony. (A "branch for changes" line
+  used to sit here; it was never the user's convention, it came in with the generated
+  CLAUDE.md in 78b45f7.)
 - `system.json` is a runtime-written config (gitignored), not source. (`system.cfg` is its
   retired protobuf ancestor — a sibling one is auto-migrated at startup.)
