@@ -199,7 +199,8 @@ void VisualApiImpl::render_animation_or_image(Anim type, const Image& image, flo
 
   if (anim) {
     ThemeSlot anim_slot = type == Anim::ANIM_ALTERNATE ? ThemeSlot::Alternate : ThemeSlot::Primary;
-    render_image(anim, alpha, zoom_origin, zoom, anim_slot);
+    // Already the live frame, pulled a line ago -- no substitution to do.
+    render_image_raw(anim, alpha, zoom_origin, zoom, anim_slot);
   } else {
     render_image(image, alpha, zoom_origin, zoom, slot);
   }
@@ -207,6 +208,37 @@ void VisualApiImpl::render_animation_or_image(Anim type, const Image& image, flo
 
 void VisualApiImpl::render_image(const Image& image, float alpha, float zoom_origin,
                                  float zoom, ThemeSlot slot) const
+{
+  // An `image` effect CAPTURES one Image into a register (compiled_visual.cpp) and the
+  // render block then redraws that captured value every frame until the next capture.
+  // For a still that is exactly right. For a theme that is nothing but gifs -- where
+  // get_image can only answer with a frame of an animation -- it freezes the gif on
+  // whichever frame happened to be on screen when the effect fired, so the same theme
+  // looks animated under a pattern that draws `anim` and like a stuck photograph under
+  // one that draws a plain `image`. Re-read the lane's live frame instead: the register
+  // carries the slot it was filled from, which is all this needs to know.
+  //
+  // Deliberately gated on the theme having NO stills, rather than on "this Image came
+  // from the animation lane": that is a durable property of the theme, cheap to test,
+  // and it leaves every ordinary still theme on the captured-value path untouched.
+  //
+  // Known edge: a fade whose `prev` register was captured before a theme swap will show
+  // the NEW lane's live frame for the rest of the fade instead of the old theme's frame,
+  // because the register records the slot and not which theme filled it. Bounded to
+  // fades that straddle a swap, and the alternative is a gif that never moves.
+  if ((slot == ThemeSlot::Primary || slot == ThemeSlot::Alternate) &&
+      _themes.lane_is_animation_only(slot == ThemeSlot::Alternate)) {
+    Image live = _themes.get_animation(slot == ThemeSlot::Alternate);
+    if (live) {
+      render_image_raw(live, alpha, zoom_origin, zoom, slot);
+      return;
+    }
+  }
+  render_image_raw(image, alpha, zoom_origin, zoom, slot);
+}
+
+void VisualApiImpl::render_image_raw(const Image& image, float alpha, float zoom_origin,
+                                     float zoom, ThemeSlot slot) const
 {
   _debug_layers.push_back({alpha, slot});
   _director.render_image(image, alpha, zoom_origin, zoom_intensity(zoom_origin, zoom));

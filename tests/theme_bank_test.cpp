@@ -100,6 +100,23 @@ namespace
     f.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
   }
 
+  // A 2-frame 1x1 GIF89a, hand-assembled: header, 1x1 logical screen with a 2-colour
+  // global table (black, white), then two frames each wrapped in a graphics-control
+  // extension carrying a 10/100s delay, each one LZW-coded pixel. Written out rather than
+  // checked in as a binary for the same reason as the PNGs above -- and because the
+  // animation-leak case needs a file the real GifStreamer will actually open.
+  const unsigned char kGif2Frame[] = {
+      'G',  'I',  'F',  '8',  '9',  'a',              // header
+      0x01, 0x00, 0x01, 0x00, 0xf0, 0x00, 0x00,       // 1x1, global table of 2, bg 0
+      0x00, 0x00, 0x00, 0xff, 0xff, 0xff,             // palette: black, white
+      0x21, 0xf9, 0x04, 0x00, 0x0a, 0x00, 0x00, 0x00, // GCE, delay = 10 (0.1s)
+      0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,  // image descriptor
+      0x02, 0x02, 0x44, 0x01, 0x00,                   // LZW: clear, index 0, end
+      0x21, 0xf9, 0x04, 0x00, 0x0a, 0x00, 0x00, 0x00, // GCE, delay = 10 (0.1s)
+      0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,  // image descriptor
+      0x02, 0x02, 0x4c, 0x01, 0x00,                   // LZW: clear, index 1, end
+      0x3b};                                          // trailer
+
   // A real synthetic media tree plus the session that describes it:
   //
   //   <root>/media/          parent_count 1x1 PNGs   -> theme "media"
@@ -350,6 +367,169 @@ namespace
     check(after.own_share() >= .10 && after.own_share() <= .30,
           "reversing the rotation weights to 1:4 moves the own tier to 10-30% of frames");
   }
+  // ------------------------------------------------------------------------------------
+  // CASE 4 -- ANIMATIONS STAY IN THEIR OWN THEME.
+  //
+  // Failure mode (reported live: "a lot of hypno gifs loading in folders that contain
+  // none"): ThemeInfo::animation_shuffler expresses membership as "my indices are at
+  // priority 1, everyone else's are at 0", and Shuffler::next() draws from the highest
+  // OCCUPIED level. A theme with no animations of its own has nothing above 0, so the top
+  // level is the entire session's animation list and every pick is some other theme's --
+  // which do_load_animation then opens straight off disk. Images have a residency check
+  // that mostly absorbs the same fall-through; animations have nothing.
+  //
+  // Two halves, and the second is the one that keeps the fix honest: returning nothing
+  // unconditionally would satisfy the first on its own.
+  //
+  // No statistical band here. This is a hard invariant -- an animation-less theme must
+  // NEVER produce a frame -- so one leak in any number of attempts is a failure.
+  // ------------------------------------------------------------------------------------
+  struct AnimFixture {
+    std::filesystem::path root;
+    trance_pb::Session session;
+    trance_pb::System system;
+    SessionJsonSidecar sidecar;
+    std::unique_ptr<ThemeBank> bank;
+  };
+
+  // <root>/anim/a.gif   -> theme "anim"  (the only animation in the session)
+  // <root>/still/o.png  -> theme "still" (images only)
+  // `enabled` names which of the two the program rotates, so the same tree can be run
+  // both ways -- the leak is a property of which theme is ACTIVE, not of the tree.
+  AnimFixture make_anim_fixture(const std::string& name, const std::string& enabled)
+  {
+    AnimFixture fx;
+    fx.root = scratch_root() / name;
+    std::filesystem::remove_all(fx.root);
+    write_png(fx.root / "still" / "o.png", kPng2x1, sizeof(kPng2x1));
+    write_file(fx.root / "anim" / "a.gif",
+               std::string{reinterpret_cast<const char*>(kGif2Frame), sizeof(kGif2Frame)});
+    write_file(fx.root / "s.session.json", std::string{R"json({
+  "format": "trance-session", "format_version": 1,
+  "first_playlist_item": "main",
+  "playlist": { "main": { "standard": { "program": "p" } } },
+  "program_map": { "p": { "global_fps": 120, "enabled_theme": [ )json"} +
+                   enabled + R"json( ] } },
+  "theme_scan_root": { "dir": ".", "auto_rescan": false },
+  "theme_map": { "anim": { "scan": "anim" }, "still": { "scan": "still" } }
+})json");
+    fx.session =
+        load_session_json((fx.root / "s.session.json").string(), fx.root.string(), fx.sidecar);
+    fx.system = get_default_system();
+    fx.bank = std::make_unique<ThemeBank>(fx.root.string(), fx.session, fx.system,
+                                          fx.session.program_map().at("p"), fx.sidecar.theme_tiers);
+    return fx;
+  }
+
+  void test_animations_stay_in_their_theme()
+  {
+    {
+      auto fx = make_anim_fixture("anim_leak",
+                                  R"({ "theme_name": "still", "random_weight": 1 })");
+      check(fx.session.theme_map().at("anim").animation_path_size() == 1,
+            "the loader put the .gif in the anim theme (otherwise this proves nothing)");
+      check(fx.session.theme_map().at("still").animation_path_size() == 0,
+            "the still theme has no animations of its own");
+      // Asserted by PROVENANCE, not by emptiness: a stills-only theme asked to animate
+      // now legitimately hands back one of its OWN stills (see below), so "returned
+      // something" no longer distinguishes the leak. The fixtures are tagged by width --
+      // the gif is 1x1 and the still theme's only PNG is 2x1 -- so a width-1 frame under
+      // the still theme can only have come from the other theme's folder.
+      //
+      // async_update() is what asks for the next streamer, so it is what drives
+      // do_load_animation. Both lanes, repeatedly: one pass could miss by luck, and a
+      // uniform draw over a one-animation pool cannot miss at all once it is reached.
+      std::size_t leaked = 0;
+      for (int i = 0; i < 50; ++i) {
+        fx.bank->async_update();
+        fx.bank->advance_frames();
+        for (bool alt : {false, true}) {
+          Image frame = fx.bank->get_animation(alt);
+          if (frame && frame.width() == kParentWidth) {
+            ++leaked;
+          }
+        }
+      }
+      check(leaked == 0, "a theme with no animations never draws another theme's gif "
+                         "(leaked on " + std::to_string(leaked) + "/100 attempts)");
+
+      // ...and it must not go BLACK either. Refusing the foreign gif is only half the
+      // rule: an `anim` draw op landing on a theme that owns no animations has to fall
+      // back to that theme's own stills. Removing the leak WITHOUT this is what put black
+      // screens on screen, and most themes in a real corpus are stills-only, so this is
+      // the common path rather than an edge case.
+      std::size_t blank = 0;
+      for (int i = 0; i < 50; ++i) {
+        fx.bank->async_update();
+        fx.bank->advance_frames();
+        Image frame = fx.bank->get_animation(false);
+        if (!frame || !frame.texture()) {
+          ++blank;
+        }
+      }
+      check(blank == 0, "asked to animate, a stills-only theme draws its own stills "
+                        "instead of nothing (blank on " + std::to_string(blank) + "/50)");
+    }
+    {
+      auto fx = make_anim_fixture("anim_own",
+                                  R"({ "theme_name": "anim", "random_weight": 1 })");
+      // The other half: the guard rejects FOREIGN animations, not all of them. The
+      // AsyncStreamer constructor fills its buffer synchronously, so the frame is there
+      // before the first async_update.
+      bool got_frame = static_cast<bool>(fx.bank->get_animation(false));
+      for (int i = 0; !got_frame && i < 50; ++i) {
+        fx.bank->async_update();
+        fx.bank->advance_frames();
+        got_frame = static_cast<bool>(fx.bank->get_animation(false));
+      }
+      check(got_frame, "the theme that owns the gif still draws it");
+
+      // The other half of "never black": this theme has NO stills at all, so every
+      // `image` draw op has to be served from its gifs. (get_image has done this for a
+      // long time; it is asserted here because the fallback chain was rebuilt around it.)
+      std::size_t blank = 0;
+      for (int i = 0; i < 50; ++i) {
+        fx.bank->async_update();
+        fx.bank->advance_frames();
+        Image frame = fx.bank->get_image(false);
+        if (!frame || !frame.texture()) {
+          ++blank;
+        }
+      }
+      check(blank == 0, "asked for an image, an animation-only theme draws its gif "
+                        "instead of nothing (blank on " + std::to_string(blank) + "/50)");
+
+      auto snap = fx.bank->debug_snapshot();
+      check(snap.slots[1].total == 0 && snap.slots[1].animations == 1,
+            "the debug snapshot reports 0 images AND 1 animation, so an all-gif theme "
+            "cannot read as an empty one");
+      check(fx.bank->lane_is_animation_only(false),
+            "the lane reports itself animation-backed, so the renderer knows to re-read "
+            "the live frame instead of holding the captured one");
+
+      // The frames must actually MOVE, at the rate the file asks for. The fixture gif is
+      // two frames at a 10/100s delay each and the program runs at 120 content ticks a
+      // second, so one second of ticks is 120/12 = 10 advances. Asserted as a band, but a
+      // narrow one: this is arithmetic, not sampling -- there is no RNG in the path. It
+      // discriminates against the ways this goes wrong: the old fixed-rate counter ran
+      // every animation at a flat 15fps regardless of the file (15 advances), a broken
+      // delay advances every tick (120), and a frozen lane never advances (0).
+      std::size_t advances = 0;
+      uint32_t previous = 0;
+      for (int i = 0; i < 120; ++i) {
+        fx.bank->advance_frames();
+        Image frame = fx.bank->get_animation(false);
+        const uint32_t texture = frame ? frame.texture() : 0;
+        if (previous && texture && texture != previous) {
+          ++advances;
+        }
+        previous = texture;
+      }
+      check(advances >= 8 && advances <= 12,
+            "a 10-frames-per-second gif advances ~10 frames in a second of content time "
+            "(saw " + std::to_string(advances) + ", want 8-12)");
+    }
+  }
 } // namespace
 
 int main()
@@ -372,6 +552,7 @@ int main()
   test_cache_residency();
   test_tier_mix_with_unequal_sizes();
   test_weight_change_moves_the_mix();
+  test_animations_stay_in_their_theme();
 
   if (g_fail) {
     std::cout << g_fail << " check(s) failed\n";

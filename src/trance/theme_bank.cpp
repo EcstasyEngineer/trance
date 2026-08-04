@@ -166,6 +166,7 @@ ThemeBank::ThemeBank(const std::string& root_path, const trance_pb::Session& ses
       if (images.count(_all_images[i].path)) {
         _themes.back()->load_shuffler.modify(i, last_image_count);
         _themes.back()->image_shuffler.modify(i, last_image_count);
+        theme_info.image_members.insert(i);
       }
     }
 
@@ -224,6 +225,7 @@ ThemeBank::ThemeBank(const std::string& root_path, const trance_pb::Session& ses
     for (std::size_t i = 0; i < _all_animations.size(); ++i) {
       if (animations.count(_all_animations[i])) {
         _themes.back()->animation_shuffler.modify(i, 1);
+        theme_info.animation_members.insert(i);
       }
     }
     for (std::size_t i = 0; i < _themes.back()->text_lines.size(); ++i) {
@@ -275,9 +277,11 @@ ThemeBank::DebugSnapshot ThemeBank::debug_snapshot() const
       slot.name = theme->name;
       slot.loaded = uint32_t(theme->loaded_size.load());
       slot.total = uint32_t(theme->size);
+      slot.animations = uint32_t(theme->animation_members.size());
     } else {
       slot.loaded = 0;
       slot.total = 0;
+      slot.animations = 0;
     }
   }
   for (const auto& pair : _enabled_theme_weights) {
@@ -365,9 +369,75 @@ void ThemeBank::advance_frames()
 
 Image ThemeBank::get_image(bool alternate)
 {
+  auto& last_good = _last_good_image[alternate ? 1 : 0];
+  // Stills first -- this is the `image` draw -- but a theme made entirely of gifs has
+  // none, and get_still_image says so by returning nothing rather than by reaching for
+  // another theme's content.
+  Image image = get_still_image(alternate);
+  if (image) {
+    last_good = image;
+    return image;
+  }
+  // No still: the theme is pure animation, or nothing of its own is resident yet. The
+  // animation lane answers both, and it is the ONLY thing an animation-only theme can
+  // ever draw, so it is not a degraded path for those -- it is the path.
+  Image frame = get_animation_frame(alternate);
+  if (frame) {
+    last_good = frame;
+    return frame;
+  }
+  // Nothing available at all this instant (a theme mid-swap, or one whose every file
+  // failed to load). Repeat the lane's last good frame rather than handing back an empty
+  // image that draws black.
+  return last_good;
+}
+
+Image ThemeBank::get_animation(bool alternate)
+{
+  auto& theme = *_active_themes[alternate ? 2 : 1].load();
+  auto& last_good = _last_good_image[alternate ? 1 : 0];
+  Image frame = get_animation_frame(alternate);
+  if (frame) {
+    last_good = frame;
+    return frame;
+  }
+  // The mirror of get_image's fallback, and the one whose absence was drawing black
+  // screens: MOST themes are a folder of stills with no gif in them at all, so an `anim`
+  // draw op landing on one has nothing to show. It used to have something only because
+  // the animation shuffler silently widened to every other theme's gifs (see
+  // do_load_animation) -- that was the cross-theme leak, and taking it away without
+  // putting this here turned the leak into a black frame. A still from the right theme
+  // is the honest answer to "animate this theme" when the theme does not animate.
+  if (theme.size) {
+    Image image = get_still_image(alternate);
+    if (image) {
+      last_good = image;
+      return image;
+    }
+  }
+  return last_good;
+}
+
+bool ThemeBank::lane_is_animation_only(bool alternate) const
+{
+  // ThemeInfo::size is the image count and is const after construction, so this is safe
+  // to read from the render thread against the async loader.
+  const auto* theme = _active_themes[alternate ? 2 : 1].load();
+  return theme && !theme->size;
+}
+
+Image ThemeBank::get_animation_frame(bool alternate)
+{
+  return (alternate ? _alt_streamer : _streamer)->get_frame([&](const Image& image) {
+    do_video_upload(image);
+  });
+}
+
+Image ThemeBank::get_still_image(bool alternate)
+{
   auto& theme = *_active_themes[alternate ? 2 : 1].load();
   if (!theme.size) {
-    return get_animation(alternate);
+    return {};
   }
   std::size_t index;
   Image image;
@@ -394,22 +464,34 @@ Image ThemeBank::get_image(bool alternate)
     // back a perfectly valid index, so testing for -1 alone never fired: every miss became
     // a repeated frame AND skipped the _last_images bookkeeping below, which left the same
     // tier free to miss again on the very next call.
-    if (index >= _all_images.size() || !_all_images[index].image) {
+    // The `!image_members.count` half is the same shuffler fall-through do_load_animation
+    // guards against: with every member decreased to 0 by the recency bookkeeping
+    // (reachable for a theme small enough that its whole pool fits in the last-8 window),
+    // next() starts drawing from the entire _all_images range. The other live theme's
+    // images ARE resident, so the residency test alone would pass a foreign one through.
+    // Rarer than the animation case only because it needs the fall-through AND the
+    // stranger to be loaded.
+    if (index >= _all_images.size() || !_all_images[index].image ||
+        !theme.image_members.count(index)) {
       index = theme.image_shuffler.next();
+    }
+    // The flat shuffle can fall through the same way; there is nothing left to fall back
+    // to, so reject rather than draw another theme's image (last_good repeats below).
+    if (!theme.image_members.count(index)) {
+      index = static_cast<std::size_t>(-1);
     }
     if (index < _all_images.size() && _all_images[index].image) {
       do_video_upload(*_all_images[index].image);
       image = *_all_images[index].image;
     }
   }
-  auto& last_good = _last_good_image[alternate ? 1 : 0];
   if (!image) {
-    // Nothing drawable right now (e.g. every image in the theme failed to
-    // load, or the shuffler fell through to an unloaded slot). Repeat the last
-    // good image rather than handing back an empty one that draws black.
-    return last_good ? last_good : get_animation(alternate);
+    // Nothing drawable right now (every image in the theme failed to load, or the
+    // shuffler fell through to an unloaded slot). Reported as a miss, NOT patched over
+    // here: the callers own the fallback chain now, and the recency bookkeeping below
+    // must not run for a pick that did not happen.
+    return {};
   }
-  last_good = image;
   _last_images.push_back(index);
   for (auto& other_theme : _themes) {
     std::lock_guard<std::mutex> lock{other_theme->load_mutex};
@@ -431,13 +513,6 @@ Image ThemeBank::get_image(bool alternate)
     _last_images.erase(_last_images.begin());
   }
   return image;
-}
-
-Image ThemeBank::get_animation(bool alternate)
-{
-  return (alternate ? _alt_streamer : _streamer)->get_frame([&](const Image& image) {
-    do_video_upload(image);
-  });
 }
 
 const std::string& ThemeBank::get_text(bool alternate, bool exclusive)
@@ -775,8 +850,24 @@ void ThemeBank::do_unload(ThemeInfo& theme)
 std::unique_ptr<Streamer> ThemeBank::do_load_animation(bool alternate)
 {
   auto& theme = *_active_themes[alternate ? 2 : 1].load();
+  // Membership is checked EXPLICITLY rather than trusted to the shuffler. Shuffler
+  // gives every index priority 0 and next() draws from the highest occupied level, so
+  // "this theme's animations" is expressed only as "its own indices sit at priority 1".
+  // The moment no index is above 0 the top level is the whole world and next() hands
+  // back a uniformly random animation belonging to some OTHER theme -- which it then
+  // loads straight off disk (unlike images, animations have no residency check to fail
+  // on, so nothing downstream catches it). Two ways in, both routine:
+  //   - a theme with no animations at all: nothing was ever raised above 0, so EVERY
+  //     pick is another theme's. This is the common case, and it is why gifs from one
+  //     folder show up under themes whose folders contain none.
+  //   - a theme whose own animations have all been marked dead (the -5 below), which
+  //     drops them under the untouched rest of the pool.
+  if (theme.animation_members.empty()) {
+    return {};
+  }
   auto index = theme.animation_shuffler.next();
-  if (index >= _all_animations.size() || _animation_dead[index]) {
+  if (!theme.animation_members.count(index) || index >= _all_animations.size() ||
+      _animation_dead[index]) {
     return {};
   }
 

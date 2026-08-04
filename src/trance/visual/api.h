@@ -133,6 +133,10 @@ public:
   void stop_theme_audio() override;
   void set_theme_audio_volume(float volume) override;
 
+  // Draws `image` exactly as given, with no animation-lane substitution: the frame is
+  // already the live one (the `anim` path) or there is deliberately nothing to re-read.
+  void render_image_raw(const Image& image, float alpha, float zoom_origin, float zoom,
+                        ThemeSlot slot) const;
   void render_animation_or_image(Anim type, const Image& image, float alpha, float zoom_origin,
                                  float zoom, ThemeSlot slot = ThemeSlot::None) const override;
   void render_image(const Image& image, float alpha, float zoom_origin, float zoom,

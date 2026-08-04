@@ -51,8 +51,26 @@ public:
   //
   // These are called from the main (rendering) thread and can upload
   // images from RAM to video memory on-demand.
+  //
+  // NEVER BLACK. Both fall back to the other kind of content and then to the lane's last
+  // good frame, so a draw op only ever produces nothing when the lane has shown nothing
+  // at all yet. The two are a preference, not a partition: a theme that is nothing but
+  // gifs (a folder of animations, `theme.size == 0`) serves every `image` draw from its
+  // animations, and a theme with no gifs serves every `anim` draw from its stills.
+  // Enforcing that here rather than in the grammar is deliberate -- a pattern asks for
+  // the LOOK it wants, and which of the two a given folder happens to hold is not
+  // something the pattern author can know.
   Image get_image(bool alternate);
   Image get_animation(bool alternate);
+  // True when the theme on this lane has no still images at all, so every get_image on
+  // it is really a frame of one of its animations.
+  //
+  // The draw side needs this, not just the load side. An `image` effect CAPTURES one
+  // Image into a register and the render block redraws that captured value every frame
+  // for the rest of the cut -- which is right for a still and freezes a gif on one frame.
+  // Knowing the lane is animation-backed is what lets the renderer re-read the live frame
+  // instead. See VisualApiImpl::render_image.
+  bool lane_is_animation_only(bool alternate) const;
   const std::string& get_text(bool alternate, bool exclusive);
   const std::string& get_font(bool alternate);
   // Random pick from the active theme's precanned audio pool; empty
@@ -77,8 +95,16 @@ public:
     struct Slot {
       bool valid;
       std::string name;
+      // Images only -- `loaded` is what the cache holds, `total` the theme's whole
+      // image pool.
       uint32_t loaded;
       uint32_t total;
+      // Animations the theme owns. Reported separately because it is NOT part of the
+      // loaded/total ratio: gifs are streamed on demand, never cached like stills. A
+      // theme that is a folder of nothing but gifs therefore reads 0/0 images and is
+      // perfectly healthy -- which is exactly what a reader took for "nothing loaded,
+      // hence the black screen", so the count has to be on screen next to the ratio.
+      uint32_t animations;
     };
     std::array<Slot, 4> slots;
     std::vector<std::pair<std::string, uint32_t>> enabled_weights;
@@ -171,6 +197,17 @@ private:
     // Whether the theme has anything at all to put on screen (images, animations or text).
     // Assigned right after the aggregate construction, like `name`.
     bool drawable = false;
+
+    // Which _all_images / _all_animations indices this theme actually owns (the resolved
+    // pool, inheritance already folded in). Assigned after construction, like `name`.
+    //
+    // Shuffler cannot answer this itself: membership is encoded as "priority above the
+    // 0 everything starts at", so a theme whose members have all been decreased to 0 --
+    // or that never had any -- makes next() draw from the whole pool instead. These sets
+    // are what the selection paths check the answer against, so a theme can never draw
+    // another theme's content. See do_load_animation.
+    std::unordered_set<std::size_t> image_members;
+    std::unordered_set<std::size_t> animation_members;
   };
 
   // Data for each possible image.
@@ -188,6 +225,16 @@ private:
   void advance_theme();
   bool all_loaded() const;
   bool all_unloaded() const;
+
+  // The still half of get_image: the tiered/flat shuffle over this theme's own RESIDENT
+  // images, plus the recency bookkeeping a successful pick owes the other themes. Returns
+  // an empty Image when the theme has no images or none of them are loaded yet. Does NOT
+  // fall back to anything -- that is what lets get_animation use it as its own fallback
+  // without the two calling each other in a circle.
+  Image get_still_image(bool alternate);
+  // The raw current frame of a lane's animation streamer, uploaded. Empty when the lane
+  // has no animation (a theme with no gifs of its own) or is between them.
+  Image get_animation_frame(bool alternate);
 
   // Called from the async_update thread and can load images from files
   // into RAM as necessary.

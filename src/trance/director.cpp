@@ -1025,11 +1025,17 @@ void Director::draw_debug_overlay() const
   // ThemeBank's four queue slots, vertically. '*' means at least one image layer from
   // that concrete slot was drawn this frame (alpha > 0), not merely that a cycler lane
   // could source it.
+  // Images and animations are counted separately and BOTH are shown: stills are cached
+  // (hence loaded/total), gifs are streamed on demand and have no such ratio. A theme
+  // that is all gifs reads "0/0 img" and is fine -- printing only the image ratio made
+  // that look like a theme with nothing in it.
   out << "-- THEMES (*=image drawn this frame) --\n";
   for (int i = 0; i < 4; ++i) {
     const auto& slot = snap.slots[std::size_t(i)];
     out << "  " << (theme_on_screen[i] ? "*" : " ") << debug_theme_slot_name(i) << " : '"
         << (slot.valid ? slot.name : "(empty)") << "'  " << slot.loaded << "/" << slot.total
+        << " img  " << slot.animations << " anim"
+        << (slot.valid && !slot.total && slot.animations ? "  (all-animation theme)" : "")
         << "\n";
   }
 
