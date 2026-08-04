@@ -270,7 +270,7 @@ void AppUi::draw_status_section(Director& director, Audio& audio, const ThemeBan
   const auto& program = director.program();
   ImGui::Text("global fps (config): %u", program.global_fps());
   ImGui::Text("vr enabled: %s", director.vr_enabled() ? "yes" : "no");
-  // TODO: no public Director accessor for the current visual name.
+  ImGui::Text("visual: %s", director.status_visual_name().c_str());
 
   // Same content breakdown as the F1 overlay, and for the same reason: an all-gif theme
   // has 0 images and is perfectly healthy, which reads as broken without the anim count.
@@ -545,6 +545,8 @@ void AppUi::draw_visuals_section(Director& director)
   // so fall back to the read-only force-now list off Director's const view.
   trance_pb::Program* program = _active_program ? _active_program() : nullptr;
   if (!program) {
+    ImGui::Text("Now playing: %s", director.status_visual_name().c_str());
+    ImGui::Separator();
     ImGui::TextUnformatted("Built-ins (click to force now):");
     for (const auto& visual : builtin_visuals()) {
       ImGui::PushID(static_cast<int>(visual.type));
@@ -607,6 +609,15 @@ void AppUi::draw_visuals_section(Director& director)
       "program's custom patterns run one combined lottery. 0 = never picked.\n"
       "A PINNED visual is forced: the lottery is skipped entirely.";
 
+  // The one fact this whole section was missing: which visual is on screen RIGHT NOW.
+  // The lottery rows only say what CAN play; with a 3072-frame visual the current pick
+  // is on for ~25 seconds and there was nowhere to read it. The playing row is also
+  // marked in place below.
+  const uint32_t playing_builtin = director.current_builtin_type();
+  const std::string& playing_custom = director.current_custom_name();
+  ImGui::Text("Now playing: %s", director.status_visual_name().c_str());
+  ImGui::Separator();
+
   ImGui::TextUnformatted("Built-ins:");
   // Two passes over two different lists, so they get two explicitly NAMED ID scopes
   // rather than sharing the outer one and relying on their index spaces not to overlap.
@@ -654,9 +665,16 @@ void AppUi::draw_visuals_section(Director& director)
       pool_changed = true;
     }
     ImGui::SameLine();
-    if (ImGui::TreeNode(label)) {
-      draw_builtin_body(director, type, blurb);
-      ImGui::TreePop();
+    {
+      const bool open = ImGui::TreeNode(label);
+      if (playing_builtin == type) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "(playing)");
+      }
+      if (open) {
+        draw_builtin_body(director, type, blurb);
+        ImGui::TreePop();
+      }
     }
     ImGui::PopID();
   }
@@ -700,10 +718,20 @@ void AppUi::draw_visuals_section(Director& director)
       pool_changed = true;
     }
     ImGui::SameLine();
-    if (ImGui::TreeNode(visual.name)) {
-      ImGui::TextDisabled("(not in this program's pool -- switch the row on to add it)");
-      draw_builtin_body(director, visual.type, visual.blurb);
-      ImGui::TreePop();
+    {
+      // A row-less built-in can still be the one playing (forced via its body button),
+      // so the marker is drawn here too rather than letting the panel contradict the
+      // screen.
+      const bool open = ImGui::TreeNode(visual.name);
+      if (playing_builtin == visual.type) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "(playing)");
+      }
+      if (open) {
+        ImGui::TextDisabled("(not in this program's pool -- switch the row on to add it)");
+        draw_builtin_body(director, visual.type, visual.blurb);
+        ImGui::TreePop();
+      }
     }
     ImGui::PopID();
   }
@@ -852,6 +880,10 @@ void AppUi::draw_visuals_section(Director& director)
       ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "OK");
     } else {
       ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "!");
+    }
+    if (!playing_custom.empty() && playing_custom == pattern->name()) {
+      ImGui::SameLine();
+      ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "(playing)");
     }
     if (open) {
       ImGui::SetNextItemWidth(200.f);

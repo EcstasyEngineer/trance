@@ -973,6 +973,17 @@ bool Director::status_bed_active() const
   return !_program->entrainment().layer().empty();
 }
 
+uint32_t Director::current_builtin_type() const
+{
+  return _last_custom_index >= 0 ? 0 : _last_visual_selection;
+}
+
+const std::string& Director::current_custom_name() const
+{
+  static const std::string none;
+  return _last_custom_index >= 0 ? _custom_visual_name : none;
+}
+
 void Director::draw_debug_overlay() const
 {
   // Lazily load a monospace system font so the theme glyph rows line up. These

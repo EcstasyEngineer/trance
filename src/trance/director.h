@@ -53,6 +53,12 @@ public:
   // entrainment bed layers configured (not muted/playing state; just "is there a bed").
   std::string status_visual_name() const;
   bool status_bed_active() const;
+  // The playing visual's IDENTITY, for the F2 panel's row marking -- status_visual_name
+  // is a display string (built-ins carry their blurb), so matching rows against it would
+  // be string surgery. Built-in type is 0 when a custom pattern (or nothing) is playing;
+  // the custom name is empty otherwise.
+  uint32_t current_builtin_type() const;
+  const std::string& current_custom_name() const;
   // Theme-audio bridge for VisualApiImpl (mirrors set_warp/render_image's
   // director-as-relay shape). Held by reference, not pointer: audio is always live
   // now that the offline video-export path (the one configuration that ran without
