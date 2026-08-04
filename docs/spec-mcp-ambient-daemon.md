@@ -273,15 +273,21 @@ QA'd end-to-end from Python against a live exe (`tests/qa_command_channel.py`, #
 
 ---
 
-## 8. MCP angle (out of scope here)
+## 8. MCP angle
 
-If an MCP client (Claude Desktop, or any other MCP host) should be able to drive trance, that
-is a **separate, external, thin MCP server process** — not built in this repo, not built by
-this spec. It maps MCP tool calls 1:1 onto the verbs in §4 (`pause` tool -> `pause` command,
-`hide` tool -> `hide` command, etc.) and speaks the line protocol
-in §3 to trance over the loopback socket, exactly like the `netcat`/pytest test clients in
-§6. An MCP-driven agent is not a special case inside trance — it is just another client of
-these verbs, indistinguishable on the wire from a shell script.
+> **Superseded 2026-08-04, per owner decision: MCP is served by the trance binary itself,
+> over stdio — no sidecar, no Python.** This section originally scoped MCP out to "a
+> separate, external, thin MCP server process"; the owner's later call was 100% stdio in
+> the binary so there is no second process to install or keep alive. `--mcp`
+> (`src/trance/net/mcp_stdio.{h,cpp}`, docs/mcp-install.md) serves newline-delimited
+> JSON-RPC on the process's own stdin/stdout for launch BY an MCP host, and maps tools 1:1
+> onto the verbs in §4 (`pause` tool -> `pause` line, `hide` tool -> `hide` line, ...).
+>
+> What SURVIVES from the original framing: MCP is not a special case inside trance. The
+> stdio server reuses the mailbox discipline of §2 verbatim (reader thread queues verb
+> lines; the render thread drains, executes, replies) and the verb execution path cannot
+> tell a tool call from a socket line. The TCP channel below is unchanged and remains the
+> scripting surface (`echo status | nc`); `--mcp` and `--command_port` compose.
 
 ---
 
@@ -307,4 +313,5 @@ these verbs, indistinguishable on the wire from a shell script.
 - **Overlay verbs drive issue #27's click-through overlay live**: `overlay on|off` /
   `overlay opacity` apply/clear the hints on the running window at runtime (same seam the
   F2 UI's Overlay section uses).
-- **MCP integration is an external, separate process**, out of this repo's scope (§8).
+- **MCP integration is served by the binary itself over stdio** (`--mcp`, §8 — superseding
+  this list's original "external, separate process" entry, per owner decision 2026-08-04).

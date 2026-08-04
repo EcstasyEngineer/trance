@@ -184,6 +184,7 @@ add_executable(trance
   src/trance/media/font.cpp
   src/trance/net/command_channel.cpp
   src/trance/net/command_protocol.cpp
+  src/trance/net/mcp_stdio.cpp
   src/trance/platform/display_info.cpp
   src/trance/platform/overlay_hints.cpp
   src/trance/playlist_runner.cpp

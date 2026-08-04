@@ -94,3 +94,7 @@ Every way out lives outside the window:
 `--command_port <port>` opens a line-protocol control socket (start/stop, pause,
 overlay on/off/opacity, hide/show, status, screenshot, …). The verb reference is in
 [spec-mcp-ambient-daemon.md](spec-mcp-ambient-daemon.md).
+
+`--mcp` (beta) serves the same verbs as MCP tools on the process's own stdin/stdout,
+for launch by an MCP host such as Claude Desktop or Claude Code — no sidecar process.
+Setup and tool reference: [mcp-install.md](mcp-install.md).

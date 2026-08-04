@@ -8,6 +8,7 @@
 #include <trance/media/audio.h>
 #include <trance/net/command_channel.h>
 #include <trance/net/command_protocol.h>
+#include <trance/net/mcp_stdio.h>
 #include <trance/platform/overlay_hints.h>
 #include <trance/playlist_runner.h>
 #include <trance/platform/system_control.h>
@@ -441,7 +442,8 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
                   const std::map<std::string, std::string> variables,
                   const std::function<void(Director&)>& visual_override = {},
                   const OverlayConfig& overlay = {}, uint16_t command_port = 0,
-                  const trance_pb::System_Renderer* renderer_override = nullptr)
+                  const trance_pb::System_Renderer* renderer_override = nullptr,
+                  bool mcp_stdio = false)
 {
   // Command channel: constructed here, before ThemeBank/renderer/window, so the socket
   // is live and testable (netcat/pytest, spec sec 6) even in configurations where window
@@ -456,6 +458,16 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
     } catch (const std::runtime_error& e) {
       std::cerr << "command channel: " << e.what() << std::endl;
     }
+  }
+  // MCP over stdio (--mcp): same mailbox shape as the socket channel, same drain point,
+  // same verb execution -- the only differences are the transport (our own stdin/stdout,
+  // owned by the MCP host that launched us) and that stdin EOF is a quit request.
+  // main() has already re-pointed std::cout at stderr in this mode, so the prints above
+  // and below cannot pollute the JSON-RPC stream.
+  std::unique_ptr<McpStdio> mcp;
+  if (mcp_stdio) {
+    mcp.reset(new McpStdio());
+    std::cerr << "mcp: serving on stdio (beta)" << std::endl;
   }
   CommandRuntimeState command_state;
   // Seed the live overlay state from the startup flags so `status` reports --overlay
@@ -693,6 +705,23 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
         handle_commands(*command_channel, director, audio, *theme_bank, app_ui.get(),
                         screenshot_supported, command_state, command_start_time,
                         active_program, on_program_change);
+      }
+      // MCP tool calls: identical parse + dispatch, reply routed back as the JSON-RPC
+      // tool result. Drained at the same point for the same reason (spec sec 3).
+      if (mcp) {
+        for (const auto& command : mcp->drain()) {
+          auto parsed = command_protocol::parse_command(command.line);
+          auto reply = execute_command(parsed, director, audio, *theme_bank, app_ui.get(),
+                                       screenshot_supported, command_state,
+                                       command_start_time, active_program,
+                                       on_program_change);
+          mcp->reply(command.key, reply);
+        }
+        // Host closed stdin: the MCP convention for "server should exit" -- treat it as
+        // an orderly quit, exactly like the window close button.
+        if (mcp->eof()) {
+          running = false;
+        }
       }
       // SystemControl requests (tray menu / global Shift+F11): drained on the render
       // thread like the command mailbox above; both funnel into the same
@@ -1133,6 +1162,12 @@ DEFINE_int32(command_port, 0,
             "socket is opened. "
             "Loopback-only, no auth: binding to 127.0.0.1 is the whole trust boundary "
             "(spec sec 2/9), so only enable this on a machine you trust everyone on.");
+DEFINE_bool(mcp, false,
+            "BETA: serve MCP (Model Context Protocol) on this process's own "
+            "stdin/stdout, for launch BY an MCP host (Claude Desktop / Claude Code -- "
+            "see docs/mcp-install.md). Tools map 1:1 onto the command-channel verbs. "
+            "stdout becomes the JSON-RPC transport (all logging moves to stderr), and "
+            "trance exits when the host closes stdin. No socket, no sidecar process.");
 
 namespace
 {
@@ -1302,6 +1337,14 @@ namespace
 int main(int argc, char** argv)
 {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
+  // --mcp: stdout IS the JSON-RPC transport, so it must be claimed before the first
+  // log line anywhere in the program. Re-pointing std::cout at stderr's buffer moves
+  // every existing `std::cout <<` in the codebase to stderr in one stroke; McpStdio
+  // writes its frames through the C `stdout` stream, which this redirect does not
+  // touch. Deliberately first, ahead of every validation print below.
+  if (FLAGS_mcp) {
+    std::cout.rdbuf(std::cerr.rdbuf());
+  }
   if (argc > 3) {
     std::cerr << "usage: " << argv[0] << " [session.json [system.json]]" << std::endl;
     return 1;
@@ -1472,6 +1515,7 @@ int main(int argc, char** argv)
     };
   }
   play_session(root_path, session, session_path, sidecar, system, system_path, variables,
-              visual_override, overlay, uint16_t(FLAGS_command_port), renderer_override);
+              visual_override, overlay, uint16_t(FLAGS_command_port), renderer_override,
+              FLAGS_mcp);
   return 0;
 }
