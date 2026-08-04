@@ -69,6 +69,16 @@ Image VisualApiImpl::get_image(bool alternate) const
   return _themes.get_image(alternate);
 }
 
+Image VisualApiImpl::get_current_theme_image(bool alternate) const
+{
+  return _themes.get_current_theme_image(alternate);
+}
+
+uint32_t VisualApiImpl::lane_generation(bool alternate) const
+{
+  return _themes.lane_generation(alternate);
+}
+
 const std::string& VisualApiImpl::get_theme_audio(bool alternate) const
 {
   return _themes.get_audio(alternate);

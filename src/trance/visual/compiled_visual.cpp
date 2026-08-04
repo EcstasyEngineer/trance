@@ -68,6 +68,11 @@ namespace
       pattern::Slot slot = resolved_slot(e, regs);
       regs.images[e.target] = api.get_image(slot == pattern::Slot::Alternate);
       regs.image_slots[e.target] = slot;
+      // Stamp the lane generation this was pulled at, so a theme swap can be detected
+      // later and the register refreshed rather than left holding a dead theme's frame.
+      // Presence of the entry is also what marks the register as a LIVE pull rather than
+      // a `copy` snapshot (see Registers::image_gens).
+      regs.image_gens[e.target] = api.lane_generation(slot == pattern::Slot::Alternate);
       break;
     }
     case K::Text:
@@ -128,6 +133,13 @@ namespace
       } else {
         regs.image_slots[e.target] = it->second;
       }
+      // A copy is a SNAPSHOT of a past state, not a live alias -- that is the whole of
+      // how crossfade works (`copy cur -> prev`, then draw prev under the fading new
+      // cur). Dropping the generation stamp marks it as such, so the swap refresh leaves
+      // it alone: auto-refreshing it would rewrite the outgoing frame and turn old->new
+      // into new->new. It stays exactly what was copied until another copy or image
+      // effect overwrites it.
+      regs.image_gens.erase(e.target);
       break;
     }
     case K::SpiralSet:
@@ -179,7 +191,53 @@ CompiledVisual::CompiledVisual(VisualControl& api, const pattern::Node& root,
   // registers + named cycler nodes (render_eval.cpp). An empty block falls back to a
   // single-image default so playback never shows a blank frame.
   auto stmts = render_block.empty() ? pattern::default_render_block() : render_block;
-  set_render([this, stmts](VisualRender& render) {
+  set_render([this, stmts, &api](VisualRender& render) {
+    refresh_stale_registers(api);
     pattern::eval_render(stmts, render, _registers, _node_map, cycler());
   });
+}
+
+void CompiledVisual::refresh_stale_registers(VisualControl& api)
+{
+  // An `image` effect captures ONE Image and the render block redraws it until that
+  // effect fires again. Across a theme swap that means a register can sit on screen
+  // holding a frame of a theme that is no longer live -- and because Image is
+  // ref-counted, the frame stays perfectly valid, so it displays cleanly rather than
+  // failing visibly. Re-pull the ones that have fallen behind.
+  //
+  // Done here, once per frame, rather than at the draw site: get_image runs the
+  // selection shuffle on every call, so re-pulling per draw would hand a still register
+  // a different random image every frame (and a different one per eye in stereo). This
+  // is also why it is not hooked to the `themes` EFFECT -- the playlist's own swap
+  // (main.cpp, swaps_to_match_theme) never runs a pattern effect at all, whereas the
+  // lane generation is bumped by advance_theme, which every swap goes through.
+  for (auto& entry : _registers.images) {
+    auto gen = _registers.image_gens.find(entry.first);
+    if (gen == _registers.image_gens.end()) {
+      // A `copy` snapshot: deliberately frozen, never auto-refreshed.
+      continue;
+    }
+    auto slot = _registers.image_slots.find(entry.first);
+    if (slot == _registers.image_slots.end()) {
+      continue;
+    }
+    const bool alternate = slot->second == pattern::Slot::Alternate;
+    const uint32_t generation = api.lane_generation(alternate);
+    if (gen->second == generation) {
+      continue;
+    }
+    // get_current_theme_image, NOT get_image: get_image's never-black fallback returns
+    // the PREVIOUS theme's frame, which is indistinguishable from a real pick by
+    // operator bool. Accepting one of those and stamping it with the new generation
+    // would mark the register current while it still held the dead theme's image, and it
+    // would never be retried -- reinstating the exact bug this fixes. An empty result
+    // means the new theme has nothing yet: keep drawing what is there (never black) and
+    // leave the generation mismatched so the next frame tries again.
+    Image fresh = api.get_current_theme_image(alternate);
+    if (!fresh) {
+      continue;
+    }
+    entry.second = fresh;
+    gen->second = generation;
+  }
 }

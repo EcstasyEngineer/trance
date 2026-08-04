@@ -36,9 +36,25 @@ The engine has a **fixed, small vocabulary of draw operations** (`VisualControl`
     an animation-only theme, the renderer re-reads the lane's live frame at draw time
     rather than the captured one (`VisualApiImpl::render_image`). Without it, one theme
     looked animated under a pattern drawing `anim` and like a stuck photograph under a
-    pattern drawing plain `image`. Known edge: a fade whose `prev` register was captured
-    before a theme swap shows the new lane's live frame for the rest of the fade, since
-    the register records the slot and not which theme filled it.
+    pattern drawing plain `image`.
+  - A captured register whose lane has **changed theme** is refreshed. `ThemeBank` bumps a
+    per-lane generation in `advance_theme` (the only place lane occupancy changes, so every
+    swap path is covered — including the playlist's own, which never runs a pattern
+    effect), and `CompiledVisual::refresh_stale_registers` re-pulls once per generation.
+    Otherwise a frame of an unloaded theme sits on screen until its effect happens to fire
+    again — and since `Image` is ref-counted it stays perfectly valid, so it displays
+    cleanly rather than failing visibly.
+    - Refreshed **once, at the update seam, not per draw**: `get_image` runs the selection
+      shuffle on every call, so re-pulling per draw would hand a still register a different
+      random image every frame (and a different one per eye in stereo).
+    - `copy` snapshots are **never** auto-refreshed. A copy is a picture of a past state —
+      that is the whole of how crossfade works — so refreshing it would rewrite the
+      outgoing frame and turn old→new into new→new.
+    - The refresh uses `get_current_theme_image`, not `get_image`. The never-black fallback
+      returns the *previous* theme's frame and `Image::operator bool()` cannot tell it from
+      a real pick; accepting one and stamping it current would mark the register up to date
+      while it still held the dead theme's image, and it would never retry — reinstating
+      the very bug. An empty answer means "keep drawing, try again next frame".
   - An animation's **own frames run on its own clock**: each frame is shown for the
     duration its file specifies (a GIF's per-frame delay, a WebM's default duration /
     frame rate / block timestamps), independent of `global_fps` and of whatever the

@@ -22,6 +22,12 @@ public:
                  const std::vector<pattern::RenderStmt>& render_block);
 
 private:
+  // Re-pull image registers whose lane has changed theme since they were captured, so a
+  // captured frame of an unloaded theme doesn't sit on screen until its effect happens to
+  // fire again. Skips `copy` snapshots, and only accepts an image the CURRENT theme
+  // actually produced. Run once per frame from the render lambda; see the definition.
+  void refresh_stale_registers(VisualControl& api);
+
   // Named image registers an Image effect writes (e.g. "current"); read by the render
   // preset. Stable for the lifetime of the visual so the cycler's action lambdas can
   // write into it.

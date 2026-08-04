@@ -18,6 +18,17 @@ namespace pattern
   {
     std::unordered_map<std::string, Image> images;
     std::unordered_map<std::string, Slot> image_slots;
+    // Which theme GENERATION each register's image was pulled from (ThemeBank bumps a
+    // lane's generation whenever the theme occupying it changes). A register whose
+    // generation has fallen behind is still holding an image of a theme that is no
+    // longer on that lane -- valid (Image is ref-counted, so an unloaded theme's frame
+    // stays perfectly drawable) but stale, and since a register is only replaced when
+    // its effect fires again, it would otherwise sit on screen indefinitely.
+    //
+    // ABSENCE MEANS "SNAPSHOT": a register filled by `copy` is deliberately a picture of
+    // a past state -- that is the whole of how crossfade works -- so Copy erases the
+    // entry and the refresh leaves it alone. Image sets it.
+    std::unordered_map<std::string, uint32_t> image_gens;
     std::unordered_map<std::string, int32_t> scalars;
     // Which theme the last Anim effect loaded from. The bank keeps a primary AND an
     // alternate animation streamer alive at once, so "which one was loaded" and "which

@@ -418,6 +418,27 @@ Image ThemeBank::get_animation(bool alternate)
   return last_good;
 }
 
+Image ThemeBank::get_current_theme_image(bool alternate)
+{
+  // Deliberately NOT routed through get_image: the whole point is to skip the
+  // last-good fallback so the caller can tell "the new theme gave me this" from "the old
+  // theme's frame is all there is". A valid result is recorded as last good like any
+  // other successful pick, so the never-black backstop stays current.
+  Image image = get_still_image(alternate);
+  if (!image) {
+    image = get_animation_frame(alternate);
+  }
+  if (image) {
+    _last_good_image[alternate ? 1 : 0] = image;
+  }
+  return image;
+}
+
+uint32_t ThemeBank::lane_generation(bool alternate) const
+{
+  return _lane_generation[alternate ? 1 : 0];
+}
+
 bool ThemeBank::lane_is_animation_only(bool alternate) const
 {
   // ThemeInfo::size is the image count and is const after construction, so this is safe
@@ -672,11 +693,17 @@ void ThemeBank::advance_theme()
     _active_themes[i].store(_active_themes[1 + i].load());
   }
   _active_themes.back() = _themes[random_theme_index].get();
+  // After the shift, slot 0 is the OLD primary and slot 1 the new one; slot 1 is the old
+  // alternate and slot 2 the new one. So these two comparisons are exactly "this lane's
+  // theme changed" -- which is what the animation streamers have always used them for,
+  // and what a holder of a captured still needs to know too.
   if (_active_themes[0].load() != _active_themes[1].load()) {
     _animation_theme_changed = true;
+    ++_lane_generation[0];
   }
   if (_active_themes[1].load() != _active_themes[2].load()) {
     _alt_animation_theme_changed = true;
+    ++_lane_generation[1];
   }
 }
 

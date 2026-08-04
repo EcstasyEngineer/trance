@@ -404,6 +404,12 @@ namespace
     write_png(fx.root / "still" / "o.png", kPng2x1, sizeof(kPng2x1));
     write_file(fx.root / "anim" / "a.gif",
                std::string{reinterpret_cast<const char*>(kGif2Frame), sizeof(kGif2Frame)});
+    // A theme whose only file is a .png the decoder cannot read. It therefore has a
+    // non-zero image COUNT (so it is drawable, stays in the rotation, and is not treated
+    // as animation-only) but can never make an image resident -- the one configuration in
+    // which a lane genuinely has nothing to hand back. Case 5 needs it: the never-black
+    // fallback is only distinguishable from a real pick when a real pick is impossible.
+    write_file(fx.root / "broken" / "b.png", "this is not a png");
     write_file(fx.root / "s.session.json", std::string{R"json({
   "format": "trance-session", "format_version": 1,
   "first_playlist_item": "main",
@@ -411,7 +417,8 @@ namespace
   "program_map": { "p": { "global_fps": 120, "enabled_theme": [ )json"} +
                    enabled + R"json( ] } },
   "theme_scan_root": { "dir": ".", "auto_rescan": false },
-  "theme_map": { "anim": { "scan": "anim" }, "still": { "scan": "still" } }
+  "theme_map": { "anim": { "scan": "anim" }, "still": { "scan": "still" },
+                 "broken": { "scan": "broken" } }
 })json");
     fx.session =
         load_session_json((fx.root / "s.session.json").string(), fx.root.string(), fx.sidecar);
@@ -419,6 +426,88 @@ namespace
     fx.bank = std::make_unique<ThemeBank>(fx.root.string(), fx.session, fx.system,
                                           fx.session.program_map().at("p"), fx.sidecar.theme_tiers);
     return fx;
+  }
+
+  // ------------------------------------------------------------------------------------
+  // CASE 5 -- A LANE'S THEME CHANGE IS DETECTABLE, AND THE NO-FALLBACK FETCH IS HONEST.
+  //
+  // Failure mode (reported live: "a single image of the unloaded theme gets stuck on"):
+  // an `image` effect captures ONE Image into a register and the render block redraws it
+  // until that effect fires again. Image is ref-counted, so a frame of a theme that has
+  // since been unloaded stays perfectly valid and keeps displaying. The renderer can only
+  // notice if the bank tells it the lane's theme changed -- hence lane_generation.
+  //
+  // The subtle half, and the reason this case exists rather than just the counter: the
+  // refresh must not accept get_image's never-black fallback as a fresh pick. That
+  // fallback returns the PREVIOUS theme's frame and operator bool cannot tell it from a
+  // real one, so stamping it as current would mark the register up-to-date while it still
+  // held the dead theme's image -- and it would never retry. get_current_theme_image is
+  // the honest fetch: content from the lane's CURRENT theme, or nothing.
+  //
+  // Provenance is checked by fixture WIDTH (gif 1x1, still 2x1), not by emptiness.
+  // ------------------------------------------------------------------------------------
+  void test_theme_change_is_detectable()
+  {
+    auto fx = make_anim_fixture("lane_gen",
+                                R"({ "theme_name": "still", "random_weight": 1 },)"
+                                R"({ "theme_name": "broken", "random_weight": 1 })");
+
+    auto lane_theme = [&](bool alternate) {
+      auto snap = fx.bank->debug_snapshot();
+      return snap.slots[alternate ? 2 : 1].name;
+    };
+
+    const std::string before_theme = lane_theme(false);
+    const uint32_t before_gen = fx.bank->lane_generation(false);
+
+    // A swap is rate-limited (change_themes sets a 500-update cooldown that async_update
+    // drains), so this needs a generous pump rather than a few iterations. Runs the full
+    // count rather than stopping at the first swap, to sample both themes in the lane.
+    std::size_t dishonest = 0;
+    std::size_t broken_samples = 0;
+    bool swapped = false;
+    for (int i = 0; i < 6000; ++i) {
+      fx.bank->async_update();
+      fx.bank->advance_frames();
+      fx.bank->change_themes();
+      swapped = swapped || lane_theme(false) != before_theme;
+
+      // Pull on every iteration, the way the renderer does. This is what LOADS the gun:
+      // it keeps the lane's last-good frame populated with the good theme's image, so
+      // that when the lane later holds "broken" there is something for a dishonest
+      // fallback to hand back. Without it the check below is vacuous -- the fallback
+      // returns an empty image and looks identical to the honest answer.
+      fx.bank->get_image(false);
+
+      // THE assertion. While the lane holds "broken" -- a theme that can never make an
+      // image resident -- an honest fetch has exactly one correct answer: nothing. The
+      // never-black fallback would answer with "still"'s 2x1 PNG instead, and
+      // Image::operator bool() cannot tell those apart, which is precisely why a caller
+      // must not infer freshness from it. Sampled by WIDTH so a wrong answer is
+      // identified, not merely detected.
+      if (lane_theme(false) == "broken") {
+        ++broken_samples;
+        Image honest = fx.bank->get_current_theme_image(false);
+        if (honest) {
+          ++dishonest;
+        }
+      }
+    }
+
+    check(swapped, "the primary lane's theme changes when two themes are enabled "
+                   "(otherwise the rest of this case proves nothing)");
+    check(broken_samples > 0,
+          "the lane actually held the unloadable theme at some point (" +
+              std::to_string(broken_samples) + " samples) -- without this the assertion "
+              "below is vacuous");
+    check(fx.bank->lane_generation(false) != before_gen,
+          "lane_generation moves when the lane's theme changes, so a holder of a captured "
+          "image can tell that what it is holding went stale");
+    check(dishonest == 0,
+          "on a theme that can produce nothing, get_current_theme_image returns nothing "
+          "rather than passing off another theme's last-good frame as a fresh pick "
+          "(violations: " + std::to_string(dishonest) + "/" +
+              std::to_string(broken_samples) + ")");
   }
 
   void test_animations_stay_in_their_theme()
@@ -553,6 +642,7 @@ int main()
   test_tier_mix_with_unequal_sizes();
   test_weight_change_moves_the_mix();
   test_animations_stay_in_their_theme();
+  test_theme_change_is_detectable();
 
   if (g_fail) {
     std::cout << g_fail << " check(s) failed\n";

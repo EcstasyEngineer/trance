@@ -28,6 +28,12 @@ public:
   };
 
   virtual Image get_image(bool alternate = false) const = 0;
+  // ThemeBank::get_current_theme_image / lane_generation -- together, "is this captured
+  // image still from the theme on that lane, and if not, give me one that is (or nothing,
+  // so I know to try again)". Used by CompiledVisual to refresh registers across a theme
+  // swap; see ThemeBank's declarations for why get_image cannot answer this.
+  virtual Image get_current_theme_image(bool alternate) const = 0;
+  virtual uint32_t lane_generation(bool alternate) const = 0;
   // Random pick from the active theme's precanned audio pool (ThemeBank::get_audio),
   // same shape as get_image -- the v3 `audio` effect resolves content
   // (concept/reward/runtime) to a path with this before calling play_theme_audio.
@@ -117,6 +123,8 @@ public:
   void update();
 
   Image get_image(bool alternate = false) const override;
+  Image get_current_theme_image(bool alternate) const override;
+  uint32_t lane_generation(bool alternate) const override;
   const std::string& get_theme_audio(bool alternate = false) const override;
 
   void rotate_spiral(float amount) override;

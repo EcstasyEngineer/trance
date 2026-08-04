@@ -62,6 +62,23 @@ public:
   // something the pattern author can know.
   Image get_image(bool alternate);
   Image get_animation(bool alternate);
+  // A pick from this lane's CURRENT theme only -- a resident still, or the live
+  // animation frame -- with NO last-good fallback. Empty when the theme genuinely has
+  // nothing to give at this instant (nothing resident yet, or a transient selection
+  // miss).
+  //
+  // This exists because get_image cannot answer "did this come from the theme that is on
+  // the lane NOW?". Its never-black fallback returns the PREVIOUS theme's frame, and
+  // Image::operator bool() cannot tell the two apart -- so a caller refreshing stale
+  // content would accept the stale frame as fresh and stop retrying, which is exactly
+  // the bug it set out to fix.
+  Image get_current_theme_image(bool alternate);
+  // Bumped whenever the theme occupying this lane changes. The single question a holder
+  // of a captured Image needs answered: "is what I am holding still from the theme that
+  // is on this lane?" Incremented in advance_theme(), the only place lane occupancy
+  // changes after construction, so it catches every swap path rather than the callers
+  // that happen to exist today.
+  uint32_t lane_generation(bool alternate) const;
   // True when the theme on this lane has no still images at all, so every get_image on
   // it is really a frame of one of its animations.
   //
@@ -266,6 +283,9 @@ private:
   std::unique_ptr<AsyncStreamer> _alt_streamer;
   bool _animation_theme_changed = false;
   bool _alt_animation_theme_changed = false;
+  // [0] primary, [1] alternate. Bumped by advance_theme() on the same condition that
+  // sets the two flags above -- the lane's theme actually changed. See lane_generation().
+  std::array<uint32_t, 2> _lane_generation = {0, 0};
   bool _change_animation = false;
   bool _alt_change_animation = false;
 
