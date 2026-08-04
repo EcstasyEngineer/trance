@@ -71,9 +71,13 @@ Image GifStreamer::next_frame()
   const auto& frame = _gif->SavedImages[_index];
   bool transparency = false;
   uint8_t transparency_byte = 0;
-  // Delay time in hundredths of a second. Ignore it; it messes with the
-  // rhythm.
-  int delay_time = 1;
+  // Delay time in hundredths of a second, from this frame's graphics-control block.
+  // (This used to be parsed and then discarded -- "it messes with the rhythm" -- which
+  // left every animation playing at one fixed rate the player chose: a 50fps GIF ran in
+  // slow motion and a 5fps one raced. A GIF's timing is part of the GIF; the rhythm the
+  // visuals impose is the rate at which whole animations are swapped, not the rate at
+  // which one animation's own frames advance.)
+  int delay_time = 0;
   for (int j = 0; frame.ExtensionBlocks && j < frame.ExtensionBlockCount; ++j) {
     const auto& block = frame.ExtensionBlocks[j];
     if (block.Function != GRAPHICS_EXT_FUNC_CODE || !block.Bytes || block.ByteCount < 4) {
@@ -91,6 +95,11 @@ Image GifStreamer::next_frame()
       }
     }
   }
+  // 0 (and the legacy 1) mean "as fast as possible", which every real decoder renders as
+  // 100ms rather than a busy loop -- browsers have clamped it that way since Netscape,
+  // and a huge number of GIFs in the wild are authored against that behaviour.
+  _frame_delay = delay_time > 1 ? delay_time / 100.f : 0.1f;
+
   auto map = frame.ImageDesc.ColorMap ? frame.ImageDesc.ColorMap : _gif->SColorMap;
 
   auto fw = frame.ImageDesc.Width;
@@ -183,6 +192,23 @@ WebmStreamer::WebmStreamer(const std::string& path) : _path{path}, _codec{}
     return;
   }
 
+  // Playback rate, in preference order. Both of these are constant for the track and
+  // known here, which is worth having over the per-block timestamp fallback in
+  // next_frame(): that one is only correct from the second frame on.
+  if (auto default_duration_ns = _video_track->GetDefaultDuration()) {
+    _frame_delay = static_cast<float>(default_duration_ns) / 1e9f;
+    _fixed_frame_delay = true;
+  } else if (auto rate = _video_track->GetFrameRate(); rate > 0.0) {
+    _frame_delay = static_cast<float>(1.0 / rate);
+    _fixed_frame_delay = true;
+  }
+  // A nonsense declared rate (a muxer writing 0 or a duration of days) is worse than no
+  // rate at all: it would freeze one frame on screen or spin the decoder. Fall back.
+  if (_fixed_frame_delay && (_frame_delay < 1.f / 240.f || _frame_delay > 2.f)) {
+    _frame_delay = kDefaultFrameDelaySeconds;
+    _fixed_frame_delay = false;
+  }
+
   _success = true;
   return;
 }
@@ -203,6 +229,8 @@ void WebmStreamer::reset()
 {
   _cluster = nullptr;
   _cluster_eos = false;
+  // Timestamps restart from the top, so the previous one is not a gap any more.
+  _prev_block_time_ns = -1;
 }
 
 Image WebmStreamer::next_frame()
@@ -279,6 +307,25 @@ Image WebmStreamer::next_frame()
       continue;
     }
 
+    // No declared rate: time the frames off their own block timestamps. The gap is only
+    // knowable once the NEXT block arrives, so what lands here is the previous interval
+    // applied to the current frame -- exact for constant-rate video (which webm-from-a-
+    // -video-file overwhelmingly is) and one frame stale otherwise. The first frame has
+    // no predecessor and keeps the default.
+    if (!_fixed_frame_delay) {
+      const long long time_ns = _block->GetBlock()->GetTime(_cluster);
+      if (_prev_block_time_ns >= 0 && time_ns > _prev_block_time_ns) {
+        const float gap = static_cast<float>(time_ns - _prev_block_time_ns) / 1e9f;
+        // Same sanity window as the declared-rate check: a seek-sized gap between blocks
+        // must not park one frame on screen for a minute.
+        if (gap >= 1.f / 240.f && gap <= 2.f) {
+          _frame_delay = gap;
+        }
+      }
+      if (time_ns >= 0) {
+        _prev_block_time_ns = time_ns;
+      }
+    }
     break;
   }
 
