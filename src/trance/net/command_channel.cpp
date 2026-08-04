@@ -46,11 +46,18 @@ namespace
   bool poll_readable(socket_t fd)
   {
 #if defined(_WIN32)
+    // POLLHUP/POLLERR must count as "readable": when the peer disconnects, WSAPoll
+    // reports POLLHUP on the dead socket WITHOUT POLLRDNORM, so testing POLLRDNORM
+    // alone never fires, recv() never runs to observe the EOF, and the reader thread
+    // ticks on the corpse forever -- serving exactly ONE connection per process
+    // lifetime. (Linux poll() reports EOF as POLLIN, which is why the POSIX path never
+    // showed it; both paths now treat hangup/error as readable so recv() can return
+    // 0/-1 and the loop can move on to the next accept.)
     WSAPOLLFD p{fd, POLLRDNORM, 0};
-    return WSAPoll(&p, 1, 200) > 0 && (p.revents & POLLRDNORM);
+    return WSAPoll(&p, 1, 200) > 0 && (p.revents & (POLLRDNORM | POLLHUP | POLLERR));
 #else
     pollfd p{fd, POLLIN, 0};
-    return ::poll(&p, 1, 200) > 0 && (p.revents & POLLIN);
+    return ::poll(&p, 1, 200) > 0 && (p.revents & (POLLIN | POLLHUP | POLLERR));
 #endif
   }
 
