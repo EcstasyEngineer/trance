@@ -32,6 +32,13 @@ pattern text and the entrainment bed go back to the loaded session file, rendere
 window settings to `system.json`. There is no Save button; **System → Export** writes a
 copy of the session somewhere else and leaves the live file alone.
 
+In **Themes**, hovering a media row shows a thumbnail of that file, so deciding what to
+un-tick doesn't mean alt-tabbing to a file browser to find out what `1364097724285.jpg`
+is. Animations (`webm`/`gif`) are labelled rather than decoded — the streamers that read
+them are busy serving the show. Previews load on hover only, one per frame, and at most a
+couple of dozen are kept in memory at a time, so a theme of several thousand images costs
+nothing until a row is actually pointed at.
+
 The F2 panel is **not built in VR mode** (there is no single flat 2D pass to composite
 it onto). Its **System → Renderer** radios persist to
 `system.json` immediately but only take effect on the next launch;

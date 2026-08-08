@@ -90,6 +90,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -99,6 +100,7 @@ namespace sf
   class RenderWindow;
   class Event;
   class Time;
+  class Texture;
 }
 namespace trance_pb
 {
@@ -135,8 +137,11 @@ public:
   // It is shown as a persistent banner at the top of the panel -- this UI only exists
   // in non-VR mode, which is exactly the fallback case, so it can carry the warning
   // that would otherwise be stderr-only (invisible on a Windows GUI launch).
+  // `root_path` is the session's MEDIA root -- the same string ThemeBank resolves its
+  // root-relative image paths against (root + "/" + path). The Themes section needs it
+  // to turn a listed path into a file it can decode for the hover preview.
   AppUi(trance_pb::Session& session, const std::string& session_path,
-        SessionJsonSidecar& sidecar, trance_pb::System& system,
+        const std::string& root_path, SessionJsonSidecar& sidecar, trance_pb::System& system,
         const std::string& system_path, CommandRuntimeState& command_state,
         std::function<void()> on_program_change,
         std::function<trance_pb::Program*()> active_program,
@@ -276,8 +281,38 @@ private:
   // Persist the System proto back to _system_path, recording a transient status line.
   void save_system_config();
 
+  // Hover preview for a media row in the Themes section (issue #53). Real libraries name
+  // files by hash/timestamp, so the path alone doesn't say what the image IS; hovering a
+  // row decodes it once and shows a thumbnail in a tooltip.
+  //
+  // Deliberately cheap and self-limiting, because this shares a GPU with the running
+  // show: at most ONE decode per frame (the row currently hovered), a hard cap of
+  // kPreviewCacheMax live textures evicted least-recently-used, and a negative entry for
+  // anything that fails to load so a broken path is not retried every frame. Nothing is
+  // preloaded -- a theme with 4000 images costs nothing until a row is actually hovered.
+  //
+  // Animations (webm/gif) are NOT decoded here: the streamers that can read them are
+  // ThemeBank's and are busy serving the show. Such a row reports its kind instead of a
+  // frame, which is the "don't block on video scrubbing" the issue asks for.
+  static constexpr std::size_t kPreviewCacheMax = 24;
+  struct PreviewEntry
+  {
+    std::unique_ptr<sf::Texture> texture;  // null = tried and failed (negative cache)
+    uint64_t used = 0;                     // _preview_clock at last hover, for LRU
+  };
+  // Draws the tooltip for `path` (root-relative), loading/evicting as needed. Called
+  // only when the row it belongs to is hovered.
+  void draw_media_preview(const std::string& path);
+
+  std::map<std::string, PreviewEntry> _preview_cache;
+  uint64_t _preview_clock = 0;
+  // One decode per frame, so dragging the mouse down a long list can never turn into a
+  // burst of file reads on the render thread.
+  bool _preview_loaded_this_frame = false;
+
   trance_pb::Session& _session;
   const std::string _session_path;
+  const std::string _root_path;
   SessionJsonSidecar& _sidecar;
   trance_pb::System& _system;
   const std::string _system_path;

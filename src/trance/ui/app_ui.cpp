@@ -10,6 +10,7 @@
 #include <trance/visual/builtin_visuals.h>
 #include <trance/visual/pattern_parser_v3.h>
 #include <algorithm>
+#include <cctype>
 #include <cfloat>
 #include <cstdio>
 #include <string>
@@ -40,15 +41,37 @@ namespace
   const ImVec4 kActiveGreenDim{0.20f, 0.45f, 0.25f, 1.f};
   const ImVec4 kWarnAmber{1.f, 0.75f, 0.3f, 1.f};
   const ImVec4 kPinGold{0.95f, 0.8f, 0.3f, 1.f};
+
+  // Longest edge of a hover thumbnail, in ImGui points. Big enough to recognize a
+  // picture at a glance, small enough that the tooltip never covers the list it
+  // annotates.
+  const float kPreviewMaxEdge = 220.f;
+
+  // Animation extensions, matching session.cpp's is_animation (the classifier that put
+  // these files in the pool). Kept as a local copy rather than exported: this one is a
+  // "can the tooltip decode it?" test, and the answer would stay no even if the
+  // classifier grew a format the UI still can't scrub.
+  bool preview_is_animation(const std::string& path)
+  {
+    const auto dot = path.find_last_of('.');
+    if (dot == std::string::npos) {
+      return false;
+    }
+    std::string ext = path.substr(dot + 1);
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return ext == "webm" || ext == "gif";
+  }
 }
 
 AppUi::AppUi(trance_pb::Session& session, const std::string& session_path,
-             SessionJsonSidecar& sidecar, trance_pb::System& system,
-             const std::string& system_path, CommandRuntimeState& command_state,
-             std::function<void()> on_program_change,
+             const std::string& root_path, SessionJsonSidecar& sidecar,
+             trance_pb::System& system, const std::string& system_path,
+             CommandRuntimeState& command_state, std::function<void()> on_program_change,
              std::function<trance_pb::Program*()> active_program, std::string vr_failure)
 : _session{session}
 , _session_path{session_path}
+, _root_path{root_path}
 , _sidecar{sidecar}
 , _system{system}
 , _system_path{system_path}
@@ -106,6 +129,8 @@ void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Au
   }
   ImGui::SFML::Update(window, dt);
   _frame_started = true;
+  // One media decode per frame (see kPreviewCacheMax); the budget refills here.
+  _preview_loaded_this_frame = false;
   if (_export_status_ttl > 0.f) {
     _export_status_ttl -= dt.asSeconds();
   }
@@ -1120,6 +1145,84 @@ uint32_t AppUi::predicted_pool_size(const std::string& name) const
   return total;
 }
 
+void AppUi::draw_media_preview(const std::string& path)
+{
+  ++_preview_clock;
+
+  // An animation is named, not decoded -- see kPreviewCacheMax's note. Cheap and
+  // honest: the row still stops being an opaque hash.
+  if (preview_is_animation(path)) {
+    ImGui::BeginTooltip();
+    ImGui::TextUnformatted(path.c_str());
+    ImGui::TextDisabled("(animation -- no preview)");
+    ImGui::EndTooltip();
+    return;
+  }
+
+  auto it = _preview_cache.find(path);
+  if (it == _preview_cache.end()) {
+    // Budget spent already this frame: say so rather than showing nothing, so a fast
+    // drag down the list reads as "loading", not as "these rows are broken".
+    if (_preview_loaded_this_frame) {
+      ImGui::BeginTooltip();
+      ImGui::TextUnformatted(path.c_str());
+      ImGui::TextDisabled("(loading...)");
+      ImGui::EndTooltip();
+      return;
+    }
+    _preview_loaded_this_frame = true;
+
+    // Evict before inserting so the cap is a real ceiling on live textures.
+    //
+    // Eviction is safe only because it happens at most once per frame, and strictly
+    // BEFORE this frame's single BeginTooltip/Image pair: ImGui::Image records the
+    // texture's native GL handle rather than retaining the sf::Texture, so destroying a
+    // texture that an already-submitted Image still references would queue a stale
+    // handle for end-of-frame render. `_preview_loaded_this_frame` is what enforces the
+    // "at most once" -- keep it if this ever grows a second preview call site.
+    while (_preview_cache.size() >= kPreviewCacheMax) {
+      auto oldest = _preview_cache.begin();
+      for (auto e = _preview_cache.begin(); e != _preview_cache.end(); ++e) {
+        if (e->second.used < oldest->second.used) {
+          oldest = e;
+        }
+      }
+      _preview_cache.erase(oldest);
+    }
+
+    PreviewEntry entry;
+    // Load through sf::Image first, then upload: a failed decode leaves the texture
+    // null (the negative-cache state) instead of throwing out of the render loop.
+    // SFML 3's texture constructor throws on failure, loadFromImage returns false.
+    sf::Image decoded;
+    if (decoded.loadFromFile(_root_path + "/" + path)) {
+      auto texture = std::make_unique<sf::Texture>();
+      if (texture->loadFromImage(decoded)) {
+        texture->setSmooth(true);
+        entry.texture = std::move(texture);
+      }
+    }
+    it = _preview_cache.emplace(path, std::move(entry)).first;
+  }
+  it->second.used = _preview_clock;
+
+  ImGui::BeginTooltip();
+  ImGui::TextUnformatted(path.c_str());
+  if (!it->second.texture) {
+    ImGui::TextDisabled("(no preview -- unreadable or unsupported)");
+    ImGui::EndTooltip();
+    return;
+  }
+  const sf::Vector2u size = it->second.texture->getSize();
+  // Fit the longest edge to kPreviewMaxEdge, preserving aspect. Never upscale: a tiny
+  // source blown up to 220px says nothing a 32px thumbnail didn't.
+  const float longest = float(std::max(size.x, size.y));
+  const float scale = longest > kPreviewMaxEdge ? kPreviewMaxEdge / longest : 1.f;
+  ImGui::Image(*it->second.texture, ImVec2{float(size.x) * scale, float(size.y) * scale});
+  ImGui::TextDisabled("%ux%u", size.x, size.y);
+  ImGui::EndTooltip();
+}
+
 void AppUi::draw_themes_section()
 {
   // ThemeBank is built once at startup and has no live-rebuild path; image_path edits
@@ -1424,6 +1527,11 @@ void AppUi::draw_themes_section()
           }
           mark_session_dirty();
         }
+        // Hover the row to see what the file actually IS (#53) -- these names are
+        // hashes and timestamps on any real library, so keep/drop is otherwise a guess.
+        if (ImGui::IsItemHovered()) {
+          draw_media_preview(path);
+        }
       }
       if (!excludes.empty()) {
         ImGui::TextDisabled("(%zu excluded -- takes effect on reload)", excludes.size());
@@ -1436,6 +1544,11 @@ void AppUi::draw_themes_section()
                             inherited.size());
         for (const auto& entry : inherited) {
           ImGui::BulletText("%s  [%s]", entry.first.c_str(), entry.second.c_str());
+          // Previewable too: deciding to go and exclude one on its owning theme needs
+          // the same "what is this?" answer the checkboxes above give.
+          if (ImGui::IsItemHovered()) {
+            draw_media_preview(entry.first);
+          }
         }
       }
       ImGui::TreePop();

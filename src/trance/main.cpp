@@ -601,7 +601,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
 
   std::unique_ptr<AppUi> app_ui;
   if (!director.vr_enabled()) {
-    app_ui.reset(new AppUi(session, session_path, sidecar, system, system_path,
+    app_ui.reset(new AppUi(session, session_path, root_path, sidecar, system, system_path,
                            command_state, on_program_change, active_program, vr_failure));
     if (!app_ui->init(renderer->window())) {
       std::cerr << "warning: ImGui-SFML init failed; F2 UI unavailable this run" << std::endl;
