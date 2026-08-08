@@ -12,6 +12,8 @@ randomly-generated patterns designed to aid induction and deepening.
 - Click-through always-on-top overlay mode (`--overlay`)
 - System tray icon (Windows) + global **Shift+F11** hide-everything hotkey — see [docs/controls.md](docs/controls.md)
 - Line-protocol control channel (`--command_port`) for external automation
+- Built-in MCP server (`--mcp`, beta) — an MCP host launches `trance --mcp` and drives
+  playback through tool calls; see [docs/mcp-install.md](docs/mcp-install.md)
 - Hardware-accelerated rendering via OpenGL
 - Audio support with multiple independent channels, plus binaural/isochronic entrainment beds
 - Programmable playlist with conditionals and subroutines
@@ -59,6 +61,10 @@ trance.exe --overlay some.session.json
 # pick the renderer for this run only (system.json is not modified):
 trance.exe --renderer=openxr some.session.json
 # valid names: monitor, openvr, openxr. An unknown name is a fatal error at startup.
+
+# serve MCP on stdin/stdout so an MCP host (e.g. Claude Desktop) can drive playback --
+# the binary itself is the server, no sidecar process (see docs/mcp-install.md):
+trance.exe --mcp some.session.json
 
 # bundle a session and every asset it references into a portable zip, then exit:
 trance.exe --export_archive out.trance some.session.json
@@ -141,6 +147,25 @@ truncate a session.
 | Text | `.txt` (for auto-generated sessions) |
 | Audio | `.wav` `.flac` `.ogg` `.aiff` |
 
+## Documentation
+
+For players and session authors:
+
+- [docs/controls.md](docs/controls.md) — every runtime control: keys, tray icon, global hotkeys, overlay escape routes
+- [docs/sessions-and-playlists.md](docs/sessions-and-playlists.md) — authoring sessions and playlists
+- [docs/session-json-format.md](docs/session-json-format.md) — the normative `*.session.json` spec
+- [docs/visuals.md](docs/visuals.md) — the visual system and built-in visuals, as built
+- [docs/audio.md](docs/audio.md) — music channels and the entrainment bed
+- [docs/authoring-v3-patterns.md](docs/authoring-v3-patterns.md) — writing your own visual patterns
+- [docs/mcp-install.md](docs/mcp-install.md) — registering `trance --mcp` with an MCP host
+
+For developers:
+
+- [docs/architecture.md](docs/architecture.md) — a navigable map of the codebase
+- [docs/engine-today.md](docs/engine-today.md) — plain-English ground truth of the visual engine; the contract the grammar compiles down to
+- [docs/spec-grammar-v3.md](docs/spec-grammar-v3.md) — the v3 pattern grammar design spec
+- [docs/spec-mcp-ambient-daemon.md](docs/spec-mcp-ambient-daemon.md) — command channel / MCP verb spec
+
 ## Building from source
 
 Dependencies are resolved by [vcpkg](https://github.com/microsoft/vcpkg) in manifest
@@ -203,3 +228,7 @@ translated OpenGL — fine for development, slower than a native GPU path.
 
 Bug reports and pull requests are welcome. See the
 [open issues](../../issues) for current work items.
+
+## License
+
+[WTFPL](LICENSE).
