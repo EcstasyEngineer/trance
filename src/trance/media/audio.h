@@ -38,6 +38,9 @@ public:
   // (playlist + theme audio) and the entrainment bed, and resume exactly the ones
   // this pause suspended. Distinct from ToggleMute: sf::Music::pause() stops the
   // playback cursor, mute just silences it.
+  // Pausing also FREEZES the fade clocks: an in-flight AudioEvent fade rides wall time,
+  // so without this a pause held for longer than the fade resumed at a volume that had
+  // jumped -- or completed -- while nothing was audible (spec trap 16).
   void PauseAll();
   void ResumeAll();
 
@@ -74,6 +77,11 @@ private:
 
   std::string _root_path;
   bool _muted = false;
+  // Whether PauseAll() is in effect, and when it started -- ResumeAll() slides every
+  // live fade's start point forward by that span so the fade continues from exactly
+  // where it stopped being audible.
+  bool _paused = false;
+  std::chrono::steady_clock::time_point _pause_start;
   std::chrono::steady_clock _clock;
   std::vector<channel> _channels;
   // Dedicated single slot for grammar-driven theme audio -- see play_theme_audio.

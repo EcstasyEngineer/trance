@@ -123,6 +123,12 @@ void Audio::PauseAll()
   if (_entrainment->getStatus() == sf::SoundSource::Status::Playing) {
     _entrainment->pause();
   }
+  // Freeze the fade clocks with the audio (trap 16). Idempotent: the hide seam pauses on
+  // top of an already-paused session, and only the FIRST pause may start the clock.
+  if (!_paused) {
+    _paused = true;
+    _pause_start = _clock.now();
+  }
 }
 
 void Audio::ResumeAll()
@@ -139,6 +145,17 @@ void Audio::ResumeAll()
   if (_entrainment->getStatus() == sf::SoundSource::Status::Paused) {
     _entrainment->play();
   }
+  // Hand the paused span back to every live fade, so a fade that was 2 seconds in when
+  // the pause landed is still 2 seconds in when it resumes, however long the pause was.
+  if (_paused) {
+    const auto paused_for = _clock.now() - _pause_start;
+    for (auto& c : _channels) {
+      if (c.current_fade) {
+        c.fade_start += paused_for;
+      }
+    }
+    _paused = false;
+  }
 }
 
 bool Audio::Muted() const
@@ -148,6 +165,12 @@ bool Audio::Muted() const
 
 void Audio::Update()
 {
+  if (_paused) {
+    // Fades are frozen while paused: the main loop keeps calling Update() (it drives the
+    // whole audio side), and advancing a fade whose sound is not playing would land the
+    // resume on a volume the listener never heard arrive.
+    return;
+  }
   for (auto& channel : _channels) {
     if (!channel.current_fade) {
       continue;
