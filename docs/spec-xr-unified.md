@@ -246,6 +246,12 @@ model against the code and the OpenXR loader source; each must land with its pha
    *pass* — left unfixed, the two eyes can draw **different images** in the same
    frame — and the debug/F1 counters (director.cpp:192, :1053) would triple-count
    with three passes. Both key off the same pre-pass epoch.
+   A third sub-case, found reviewing phase 2: the draw-side `ThemeBank::get_animation`
+   in `visual/api.cpp` runs per PASS and is not a pure read — on a theme with no gifs
+   (most themes) it falls through to the random still shuffle, so the two eyes and the
+   desktop mirror would each draw a different still and the recency bookkeeping would
+   advance three times per frame. Same rule: the frame's first pass resolves, the later
+   passes replay what it resolved, in call order.
 2. **Per-pass dimensions** — Director reads one global `view_width()/width()/height()`
    and scales images `/2.5` when `vr_enabled()`. With both outputs live these become
    per-pass (eye w×h vs window w×h; `/2.5` keys on the pass, not the renderer). Full
@@ -253,6 +259,13 @@ model against the code and the OpenXR loader source; each must land with its pha
    startup font-atlas sizing (director.cpp:82), aspect (director.cpp:293), the `/2.5`
    image scale (director.cpp:339), text vertex normalization (director.cpp:449, :468),
    and the text sizing in visual/api.cpp (:270, :288, :341). Phase 2.
+   **Font-atlas site, decided (phase 2):** the atlas cannot be per-pass — it is
+   rasterized once, at fixed pixel sizes, before any pass exists. It is sized from
+   `Renderer::max_height()` (window height, or max(window, eye) when a headset is already
+   attached) instead of the per-pass `height()`, which at construction time can only
+   report the window. Phase 4 owes it the other half: with a hot background probe the
+   attach can land after startup, and a headset plugged in later still gets the
+   window-sized atlas unless the FontCache is rebuilt on attach.
 3. **GL state between passes** — eye swapchains stay `GL_SRGB8_ALPHA8` written with
    `GL_FRAMEBUFFER_SRGB` disabled (gamma passthrough; RGBA8 washes out under Quest
    Link); the window's NONE pass writes the same gamma bytes to the non-sRGB default

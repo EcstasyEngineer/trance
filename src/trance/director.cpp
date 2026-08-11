@@ -89,7 +89,11 @@ Director::Director(const trance_pb::Session& session, const trance_pb::System& s
   glBufferData(GL_ARRAY_BUFFER, sizeof(float) * 12, quad_data, GL_STATIC_DRAW);
   glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-  _visual_api.reset(new VisualApiImpl{*this, _themes, session, system, _renderer.height()});
+  // max_height(), not height(): the font atlas is rasterized ONCE here, at a fixed pixel
+  // size, and no pass is running yet -- so height() can only report the window and would
+  // hand a headset an atlas sized for the desktop (trap 2's first site; see
+  // Renderer::max_height for the full rationale and the phase 4 caveat).
+  _visual_api.reset(new VisualApiImpl{*this, _themes, session, system, _renderer.max_height()});
   build_builtin_patterns();
   rebuild_custom_patterns();
   change_visual(0);
@@ -209,6 +213,10 @@ void Director::render(double elapsed_seconds, bool blank) const
   _renderer.render(
       [&](Renderer::State state) {
         _render_state = state;
+        // Per-PASS epoch, the counterpart of the per-frame one above: rewinds the replay
+        // of anything the first pass resolved for the whole frame (the animation-lane
+        // pulls). Must run before the render block is evaluated, not after.
+        _visual_api->begin_pass();
         _visual->render(*_visual_api);
         // Only draw the HUD on the flat screen pass (not per-eye VR targets).
         if (_debug_overlay && state == Renderer::State::NONE) {

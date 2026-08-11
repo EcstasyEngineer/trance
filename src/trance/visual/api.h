@@ -1,11 +1,14 @@
 #ifndef TRANCE_SRC_TRANCE_VISUAL_API_H
 #define TRANCE_SRC_TRANCE_VISUAL_API_H
+// Image by value, not by forward declaration: VisualApiImpl holds a vector of them (the
+// per-frame animation-lane replay recording), which needs the complete type here.
+#include <common/media/image.h>
 #include <trance/media/font.h>
+#include <cstddef>
 #include <string>
 #include <vector>
 
 class Director;
-class Image;
 class ThemeBank;
 namespace trance_pb
 {
@@ -164,6 +167,11 @@ public:
   bool render_mutations_enabled() const override;
   double render_mutation_frames() const override;
 
+  // Start of one PASS of the current frame (Director::render's per-pass callback). Rewinds
+  // the replay cursor for the animation-lane pulls below; the frame's first pass also
+  // discards the previous frame's recording.
+  void begin_pass() const;
+
   // Debug overlay accessors. Reset the per-frame layer capture at the start of
   // a rendered frame; render_image() then records the alpha of each image layer
   // it draws, which reveals how many images the current visual overlays (e.g.
@@ -176,6 +184,12 @@ public:
 
 private:
   float zoom_intensity(float zoom_origin, float zoom) const;
+  // ThemeBank::get_animation for a draw, resolved ONCE per frame and replayed on the
+  // frame's later passes. See the definition: get_animation is not a pure read -- on a
+  // theme with no gifs (most themes) it falls through to the random still shuffle -- so
+  // calling it per pass draws a different image in each eye and a third on the desktop
+  // mirror (spec trap 1, D4).
+  Image pass_animation(bool alternate) const;
 
   Director& _director;
   ThemeBank& _themes;
@@ -196,6 +210,11 @@ private:
 
   // Image layers drawn during the current frame (debug overlay): alpha + concrete theme slot.
   mutable std::vector<VisualRender::DebugLayer> _debug_layers;
+
+  // The animation-lane pulls the frame's FIRST pass resolved, in call order, and how far
+  // the pass currently being drawn has replayed through them. See pass_animation().
+  mutable std::vector<Image> _pass_animations;
+  mutable std::size_t _pass_animation_cursor = 0;
 };
 
 #endif

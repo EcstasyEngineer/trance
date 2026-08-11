@@ -60,6 +60,21 @@ public:
   virtual uint32_t view_width() const = 0;
   virtual uint32_t width() const = 0;
   virtual uint32_t height() const = 0;
+  // The largest height any pass of a frame can have. For the one resource that must be
+  // sized ONCE, before any pass exists, and therefore cannot follow the per-pass
+  // dimensions above: the font atlas (trap 2's first enumerated site). height() answers
+  // for the CURRENT pass, so at Director-construction time -- no pass running -- it can
+  // only report the window, which is right for the desktop and wrong for the headset: an
+  // atlas rasterized for a 1080p window is drawn ~2x upscaled on a 2208px Quest 3 eye and
+  // reads soft, where the old VR mode sized it from the eye. Taking the max costs nothing
+  // detached and only glyph memory attached, since render_text scales the string to a
+  // fraction of the view either way.
+  //
+  // PHASE 4 NOTE: read once, at startup, because that is when the only attach happens
+  // today. Once attach becomes a hot background probe, a headset plugged in later still
+  // gets the window-sized atlas -- fixing that means rebuilding the FontCache on attach,
+  // which belongs with the phase that introduces the late attach.
+  virtual uint32_t max_height() const = 0;
   virtual float eye_spacing_multiplier() const = 0;
 
   virtual void init() = 0;
@@ -132,6 +147,7 @@ public:
   uint32_t view_width() const override;
   uint32_t width() const override;
   uint32_t height() const override;
+  uint32_t max_height() const override;
   float eye_spacing_multiplier() const override;
 
   void init() override;

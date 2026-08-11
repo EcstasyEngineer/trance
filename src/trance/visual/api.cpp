@@ -198,13 +198,55 @@ bool VisualApiImpl::change_themes()
   return false;
 }
 
+void VisualApiImpl::begin_pass() const
+{
+  // A frame is up to three passes (left eye, right eye, desktop) and the render block is
+  // evaluated once per pass. The first pass RECORDS its animation-lane pulls; the rest
+  // replay them from the start of that recording.
+  _pass_animation_cursor = 0;
+  if (_director.render_mutations_enabled()) {
+    _pass_animations.clear();
+  }
+}
+
+Image VisualApiImpl::pass_animation(bool alternate) const
+{
+  // ThemeBank::get_animation is NOT a pure read. When the lane's theme has no gif of its
+  // own -- which theme_bank.cpp notes is MOST themes -- it falls through to
+  // get_still_image, a weighted/shuffled random pick that also advances the anti-repeat
+  // recency bookkeeping. Called once per pass, that draws a different still in the left
+  // eye, the right eye and the desktop mirror of the SAME frame (and burns three recency
+  // slots for one on-screen image). `anim` appears in nearly every built-in, so this is
+  // the ordinary case with a headset attached, and a mirror that disagrees with the
+  // headset is exactly what D4 says must not happen.
+  //
+  // So: resolve on the frame's first pass, replay on the others -- the same
+  // once-per-frame-before-all-passes rule as the stale-register refresh in
+  // compiled_visual.cpp and the spiral/warp advances in render_eval.cpp (spec trap 1).
+  // Replay by ORDER rather than by lane so a block with two `anim` draws still gets two
+  // independent picks, exactly as a desktop-only run does today; eval_render is
+  // deterministic given the registers and the cycler, neither of which moves between the
+  // passes of one frame, so every pass makes the identical sequence of calls.
+  if (_director.render_mutations_enabled()) {
+    Image resolved = _themes.get_animation(alternate);
+    _pass_animations.push_back(resolved);
+    return resolved;
+  }
+  if (_pass_animation_cursor < _pass_animations.size()) {
+    return _pass_animations[_pass_animation_cursor++];
+  }
+  // Unreachable while the call sequence matches the recording; pulling live is a strictly
+  // better failure than drawing nothing if it ever stops matching.
+  return _themes.get_animation(alternate);
+}
+
 void VisualApiImpl::render_animation_or_image(Anim type, const Image& image, float alpha,
                                               float zoom_origin, float zoom,
                                               ThemeSlot slot) const
 {
   Image anim;
   if (type != Anim::NONE) {
-    anim = _themes.get_animation(type == Anim::ANIM_ALTERNATE);
+    anim = pass_animation(type == Anim::ANIM_ALTERNATE);
   }
 
   if (anim) {
@@ -238,7 +280,12 @@ void VisualApiImpl::render_image(const Image& image, float alpha, float zoom_ori
   // fades that straddle a swap, and the alternative is a gif that never moves.
   if ((slot == ThemeSlot::Primary || slot == ThemeSlot::Alternate) &&
       _themes.lane_is_animation_only(slot == ThemeSlot::Alternate)) {
-    Image live = _themes.get_animation(slot == ThemeSlot::Alternate);
+    // Through the per-frame latch like every other get_animation call. On this path the
+    // lane has no stills by definition, so the random fallback inside get_animation is out
+    // of reach and the live frame is already pass-stable -- but routing it here keeps
+    // "one get_animation per frame, whatever the caller" a property of the class rather
+    // than of a case analysis that a later theme-lane change could quietly invalidate.
+    Image live = pass_animation(slot == ThemeSlot::Alternate);
     if (live) {
       render_image_raw(live, alpha, zoom_origin, zoom, slot);
       return;

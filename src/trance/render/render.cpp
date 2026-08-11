@@ -247,6 +247,16 @@ uint32_t ScreenRenderer::height() const
   return _pass == State::NONE ? _window->getSize().y : _xr->height();
 }
 
+uint32_t ScreenRenderer::max_height() const
+{
+  // Deliberately NOT _pass-dependent: this is the "size something once for every pass
+  // that could ever run" question (see the declaration). With a headset attached the eye
+  // is normally the taller of the two; the max keeps the desktop honest on the (real, e.g.
+  // 4K desktop + older headset) case where it is not.
+  const uint32_t window_height = _window->getSize().y;
+  return _xr ? std::max(window_height, _xr->height()) : window_height;
+}
+
 float ScreenRenderer::eye_spacing_multiplier() const
 {
   // Only ever consumed on an eye pass (Director::eye_offset zeroes the shear on NONE),
