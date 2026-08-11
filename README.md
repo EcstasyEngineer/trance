@@ -23,9 +23,10 @@ configuration — things just work, and say so loudly on the console when they c
 - Programmable playlist with conditionals and subroutines
 - Session bundling: `--export_archive out.trance` writes a plain zip of the session file
   plus every asset it references
-- VR output: a head-locked OpenXR quad that stays straight ahead and survives window
-  occlusion, attempted automatically at startup with no configuration — **not yet
-  verified against a physical headset**; see [VR setup](#vr-setup)
+- VR output: a head-locked OpenXR quad in the headset *alongside* the desktop window —
+  no mode to pick and nothing to configure, a headset attaches whenever it appears and
+  detaches without ever interrupting the session — **not yet verified against a physical
+  headset**; see [VR setup](#vr-setup)
 
 ## Quick start
 
@@ -75,19 +76,30 @@ trance.exe --export_archive out.trance some.session.json
 
 ## VR setup
 
-> **Status: unverified on hardware.** The OpenXR backend compiles and has been reviewed
-> and corrected against the OpenXR spec, but it **has never run against a physical
-> headset** — the development machine has none. Treat everything in this section as the
-> intended behaviour rather than observed behaviour, and expect to debug. If you do run it
-> on a headset, the failure banner described at the end of this section is the first thing
-> to read.
+> **Status: unverified on hardware.** The OpenXR output compiles, has been reviewed and
+> corrected against the OpenXR spec, and its failure paths have been exercised on a
+> machine with no VR software at all — but it **has never run against a physical
+> headset**, because the development machine has none. Treat everything in this section as
+> the intended behaviour rather than observed behaviour, and expect to debug. If you do
+> run it on a headset, the console lines described at the end of this section are the
+> first thing to read. The hardware acceptance matrix that would change this status is
+> §5 of [docs/spec-xr-unified.md](docs/spec-xr-unified.md).
 
-**There is nothing to configure.** VR is not a mode you select: every launch tries the
-OpenXR backend and falls back to the desktop window if there is no runtime, no headset,
-or no VR software at all. There is no `renderer` setting, no F2 radios and no
-`--renderer` flag — they were deleted along with the SteamVR-specific OpenVR backend
-(SteamVR is itself an OpenXR runtime, so nothing is lost by going through OpenXR).
-The full plan and its rationale: [docs/spec-xr-unified.md](docs/spec-xr-unified.md).
+**There is nothing to configure.** VR is not a mode you select and not a renderer you
+pick: there is one renderer, it owns the window, and a headset is an extra *output* of
+it. There is no `renderer` setting, no F2 radios and no `--renderer` flag — they were
+deleted along with the SteamVR-specific OpenVR backend (SteamVR is itself an OpenXR
+runtime, so nothing is lost by going through OpenXR). The full plan and its rationale:
+[docs/spec-xr-unified.md](docs/spec-xr-unified.md).
+
+**Attaching is automatic and continuous.** For the whole run, trance looks for a headset
+every 5 seconds in the background, and one that appears — Link started, headset donned,
+runtime switched — simply joins as a second output, without a restart and without
+interrupting what is already playing. The reverse is just as undramatic: any XR failure
+(Link killed, runtime quit, session lost, headset doffed) detaches the headset, the
+desktop plays straight through it without so much as a dropped audio sample, and probing
+resumes for the next one. The look-ahead costs nothing on a machine with no VR software:
+it is one registry read, and nothing is loaded into the process at all.
 
 **What the headset shows.** A head-locked quad one metre ahead of the view — the image
 stays centred wherever you look, and nothing on the desktop can occlude it. It is
@@ -95,28 +107,35 @@ stereo: the scene renders once per eye and each eye gets its own eye-restricted 
 so the parallax lives in the rendered content while the quads share a single head-locked
 pose. Windows-only (the `XR_KHR_opengl_enable` binding it uses is the Win32 one).
 
+**The desktop keeps playing the same session at the same time.** The window is not a
+blit of an eye texture — it is a third render pass of the same frame, so it shows the
+scene without the per-eye shear and at its own aspect ratio. That also means the **F2
+panel works normally while the headset plays**: the panel and the F1 debug overlay are
+drawn in the desktop pass only, never in the headset, and every edit applies live to both
+outputs.
+
+**A minimized window does not slow the headset down** (the VRChat property). While the
+headset is attached it paces the loop itself, and the desktop present is taken out of
+the way entirely while the window is minimized — so you can minimize trance, use the
+machine, and the headset keeps running at its native rate. Restoring the window brings it
+back to the current frame. Content advances on playback time, not on presentation rate,
+so a visual runs at the same speed whether a 90 Hz headset is attached or not.
+
 **Which OpenXR runtime is used is not ours to pick.** We create a plain OpenXR
 instance, so whichever runtime is registered **active** on the machine wins — Oculus /
 Quest Link if that is set, SteamVR's OpenXR runtime if that is. trance has no runtime
 selection logic. Set the active runtime in the Oculus or SteamVR desktop app before
-launching.
-
-**Attaching is automatic and continuous.** There is no VR mode, no setting and no
-restart: for the whole run, trance looks for a headset every 5 seconds in the
-background, and one that appears — Link started, headset donned, runtime switched —
-simply joins as a second output while the desktop window keeps playing. The reverse is
-just as undramatic: any XR failure (Link killed, runtime quit, session lost) detaches
-the headset and the desktop plays straight through it, with probing resuming for the
-next one. The look-ahead costs nothing on a machine with no VR software: it is one
-registry read, and nothing is loaded into the process at all.
+launching. Switching it while nothing is attached is enough; the next probe lands on the
+new one.
 
 **If a headset can't be attached**, trance says so once — a single line on stderr, plus
 a persistent red line at the top of the F2 panel — and repeats it only when the answer
 changes, so a console left running overnight stays readable. It distinguishes the cases
 that matter: no OpenXR runtime registered on the machine, a runtime registered but
 unreachable, a runtime that is up but has no HMD attached, and a session that could not
-be created. `status` over the command channel reports the same thing as
-`xr=off|unattached|attached|attached-idle`.
+be created. An attach prints its own line, naming the runtime and the per-eye resolution;
+so does a detach, naming what failed. `status` over the command channel reports the same
+thing as `xr=off|unattached|attached|attached-idle`.
 
 ## Data model
 

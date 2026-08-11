@@ -942,7 +942,6 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       }
 
       bool update = false;
-      bool continue_playing = true;
       // `pause`/`stop`: freeze the current frame -- program state retained (spec sec 4)
       // -- by simply not draining frames_this_loop while paused. The window still repaints
       // the last frame every iteration below (event-driven), so a paused process stays
@@ -950,7 +949,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       while (!playback_paused && frames_this_loop > 0) {
         update = true;
         --frames_this_loop;
-        continue_playing &= director.update();
+        director.update();
         theme_bank->advance_frames();
       }
       // The renderer's event pump must keep running even when no visual frame is
@@ -958,11 +957,10 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       // spec-mandatory, so stalling it while paused leaves the runtime waiting
       // forever on doff / Link close. director.update() already pumps it once
       // per frame drained above, so only pump here when it didn't run.
+      // (Nothing the pump finds can end the run: since phase 4 every XR failure
+      // detaches the headset and the desktop plays straight on -- D7.)
       if (!update) {
-        continue_playing &= renderer->update();
-      }
-      if (!continue_playing) {
-        break;
+        renderer->update();
       }
       // With a live UI the window redraws every loop iteration (the panels must stay
       // responsive even when no visual frame elapsed / playback is paused); otherwise

@@ -1,8 +1,10 @@
 # XR unified runtime — plan and rationale
 
-Status: committed plan. OpenVR is deleted; OpenXR becomes an automatic, hot-attachable
-output of the one desktop renderer; a later milestone replaces SFML with SDL3 + direct
-libraries. Every decision below carries its rationale **and a test for that rationale**,
+Status: phases 1-5 implemented; QA matrix pending hardware. OpenVR is deleted; OpenXR is
+an automatic, hot-attachable output of the one desktop renderer; a later milestone (phases
+6-8, still a plan) replaces SFML with SDL3 + direct libraries. Nothing in phases 1-5 has
+been run against a physical headset — §5 is the release gate and every one of its rows is
+still owed. Every decision below carries its rationale **and a test for that rationale**,
 so we can check after the fact whether the reasoning held — not just whether the code
 shipped.
 
@@ -300,7 +302,11 @@ model against the code and the OpenXR loader source; each must land with its pha
 5. **Teardown ordering** — XR teardown needs the GL context current. Unified, XrOutput
    is a member of ScreenRenderer while `_window` lives in the base, so derived-before-
    base destruction makes the ordering automatic; the same ordering must hold at
-   *detach time*, not just process exit.
+   *detach time*, not just process exit. **Landed:** phase 5's collapse removed the
+   base, so the ordering is now member order within one class (`_window` declared
+   first, destroyed last) — same guarantee, one less inheritance fact to know. The
+   explicit `detach_xr()` in the destructor remains, because "context current" is the
+   half no destruction order supplies.
 6. **Probe thread + no instance retention** — D7's loader-verified design.
 7. **Modal move/size loops** — dragging the window blocks the Win32 message pump and
    thus XR submission for the drag duration (not SFML-specific; SDL3 has the same
@@ -425,6 +431,20 @@ configs, full ctest green **with test targets rebuilt**, independently shippable
 - **Phase 5 — Collapse + docs.** Renderer base merges into ScreenRenderer; docs
   (README, CLAUDE.md architecture notes, this spec's status line) updated; final
   strings/OPSEC scan; release zip.
+  *Landed*, with three notes:
+  (a) the collapse took `update()`'s bool with it -- the base declared it and the comment
+  there promised phase 5 would remove it, since phase 4 made it unconditionally true. That
+  ripples out one level: `Director::update()` returns void too and main.cpp's
+  `continue_playing` accumulator is gone, because nothing can end a run from the render
+  side any more.
+  (b) trap 5's ordering is now purely a member-order fact (`_window` is declared before
+  `_xr`, so it outlives it); the explicit `detach_xr()` in the destructor stays for the
+  half the compiler cannot supply -- making the context CURRENT.
+  (c) `Renderer::State` is `ScreenRenderer::State`; no other rename. The docs sweep also
+  corrected two stale VR-mode claims found on the way past: "the F2 panel is not built in
+  VR mode" (controls.md -- untrue since phase 2) and "Linux VR" as a hotkey-only
+  configuration (system_control.h -- there has been no VR-only configuration since
+  phase 2, and the XR output is Windows-only regardless).
 - **Phase 6 — SDL3 platform swap** (window/context/events + ImGui backends + FreeType
   fonts + stb images together — the share-group landmine dictates this bundle; F1 HUD
   becomes an ImGui overlay; `sf::Vector2f/Color/Clock` → tiny local structs +

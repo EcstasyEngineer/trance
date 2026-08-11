@@ -875,7 +875,7 @@ XrOutput::Update XrOutput::update()
   return _session_running ? Update::Running : Update::Idle;
 }
 
-void XrOutput::render(const std::function<void(Renderer::State)>& render_fn)
+void XrOutput::render(const std::function<void(ScreenRenderer::State)>& render_fn)
 {
   // Only called while update() last reported Running, which is exactly the state where
   // xrWaitFrame is the loop's SOLE pacer: phase 3 forces the window's vsync and framerate
@@ -974,7 +974,7 @@ void XrOutput::render(const std::function<void(Renderer::State)>& render_fn)
     // the VR quads. Accumulating render-time state advances on the frame's FIRST pass
     // only and by playback elapsed time (Director's mutation epoch, trap 1), so both
     // eyes -- and the desktop pass after them -- draw identical content.
-    render_fn(eye ? Renderer::State::VR_RIGHT : Renderer::State::VR_LEFT);
+    render_fn(eye ? ScreenRenderer::State::VR_RIGHT : ScreenRenderer::State::VR_LEFT);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
   }
 

@@ -37,12 +37,12 @@ class Director
 {
 public:
   Director(const trance_pb::Session& session, const trance_pb::System& system, ThemeBank& themes,
-           const trance_pb::Program& program, Renderer& renderer, Audio& audio);
+           const trance_pb::Program& program, ScreenRenderer& renderer, Audio& audio);
   ~Director();
 
   // Called from play_session() in main.cpp.
   void set_program(const trance_pb::Program& program);
-  bool update();
+  void update();
   // One presented frame: the render-mutation epoch, then every pass of it (headset eyes
   // when attached, then always the desktop).
   // `elapsed_seconds` is the PLAYBACK time this frame covers -- wall-clock excluding
@@ -151,12 +151,12 @@ private:
   float _warp_speed = 0.f;
   float _warp_time = 0.f;
 
-  mutable Renderer::State _render_state;
+  mutable ScreenRenderer::State _render_state;
   // Render-mutation epoch, set once per frame by render() before any pass runs:
   // the frame's playback-elapsed seconds, and how many passes have started so far.
   mutable double _mutation_seconds;
   mutable uint32_t _pass_index;
-  Renderer& _renderer;
+  ScreenRenderer& _renderer;
   std::unique_ptr<VisualApiImpl> _visual_api;
 
   std::uint32_t _last_visual_selection;

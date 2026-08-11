@@ -13,6 +13,14 @@ ImGui F2 in-app UI, a system tray icon (Windows) + global Shift+F11 hide-everyth
 `--command_port` line-protocol control channel. (The legacy wxWidgets **creator** editor has
 been deleted; the F2 panel plus hand-edited JSON is the editing story.)
 
+There is **one renderer** (`ScreenRenderer`), and it owns the single visible window and its
+GL context. A VR headset is an optional OpenXR **output** of that renderer, not an
+alternative to it: a background probe attaches one whenever it appears and any XR failure
+detaches without ending the run, so a frame is up to three passes (left eye, right eye,
+then always the desktop). There is no VR mode, no renderer selection, and no configuration
+item for either — plan and rationale in `docs/spec-xr-unified.md`. Unverified on real
+hardware until that spec's §5 QA matrix runs.
+
 The loaded session file is **live state, not a document**: the F2 panel autosaves every
 committed edit back to it (no Save button), and `System > Export` is the only way to write
 a session somewhere else. Both savers write through a temp file + rename. Consequence to
@@ -109,10 +117,14 @@ v3 intent grammar  ──parse──▶  pattern::Node AST  ──compile──�
   entrainment beat period into the grammar, surfaces parse warnings.
 - **ThemeBank** (`src/trance/theme_bank.{h,cpp}`): the async image/theme loader. **Bi-thematic
   by design** (see invariants).
+- **Renderer** (`src/trance/render/`): `render.{h,cpp}` is `ScreenRenderer` (window, GL
+  context, desktop pass, pacing); `openxr.{h,cpp}` is `XrOutput` (per-eye swapchains,
+  head-locked quads) plus `XrProbe` (the background hot-attach probe).
 - **main loop** (`src/trance/main.cpp`): events → update → render, per frame.
 
 Layout: `src/trance/visual` (grammar, cyclers, render), `src/trance` (director, theme_bank,
-render, media, main), `src/common` (proto `trance.proto`, session), `docs/`, `tests/`.
+media, main), `src/trance/render` (ScreenRenderer + the OpenXR output), `src/common` (proto
+`trance.proto`, session), `docs/`, `tests/`.
 
 ## Key invariants & principles
 

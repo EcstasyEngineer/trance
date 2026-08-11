@@ -53,7 +53,7 @@ uint32_t locked_period_frames(const trance_pb::Program& program)
 #include "shaders.h"
 
 Director::Director(const trance_pb::Session& session, const trance_pb::System& system,
-                   ThemeBank& themes, const trance_pb::Program& program, Renderer& renderer,
+                   ThemeBank& themes, const trance_pb::Program& program, ScreenRenderer& renderer,
                    Audio& audio)
 : _session{session}
 , _system{system}
@@ -62,7 +62,7 @@ Director::Director(const trance_pb::Session& session, const trance_pb::System& s
 , _new_program{0}
 , _spiral_program{0}
 , _quad_buffer{0}
-, _render_state{Renderer::State::NONE}
+, _render_state{ScreenRenderer::State::NONE}
 , _mutation_seconds{0.}
 , _pass_index{0}
 , _renderer{renderer}
@@ -92,7 +92,7 @@ Director::Director(const trance_pb::Session& session, const trance_pb::System& s
   // max_height(), not height(): the font atlas is rasterized ONCE here, at a fixed pixel
   // size, and no pass is running yet -- so height() can only report the window and would
   // hand a headset an atlas sized for the desktop (trap 2's first site; see
-  // Renderer::max_height for the full rationale and the phase 4 caveat).
+  // ScreenRenderer::max_height for the full rationale and the phase 4 caveat).
   _visual_api.reset(new VisualApiImpl{*this, _themes, session, system, _renderer.max_height()});
   build_builtin_patterns();
   rebuild_custom_patterns();
@@ -190,14 +190,14 @@ void Director::rebuild_custom_patterns()
   }
 }
 
-bool Director::update()
+void Director::update()
 {
   _visual_api->update();
   _visual->cycler()->advance();
   if (_visual->cycler()->complete()) {
     change_visual(_visual->cycler()->length());
   }
-  return _renderer.update();
+  _renderer.update();
 }
 
 void Director::render(double elapsed_seconds, bool blank) const
@@ -211,7 +211,7 @@ void Director::render(double elapsed_seconds, bool blank) const
   _mutation_seconds = elapsed_seconds;
   _pass_index = 0;
   _renderer.render(
-      [&](Renderer::State state) {
+      [&](ScreenRenderer::State state) {
         _render_state = state;
         // Per-PASS epoch, the counterpart of the per-frame one above: rewinds the replay
         // of anything the first pass resolved for the whole frame (the animation-lane
@@ -219,7 +219,7 @@ void Director::render(double elapsed_seconds, bool blank) const
         _visual_api->begin_pass();
         _visual->render(*_visual_api);
         // Only draw the HUD on the flat screen pass (not per-eye VR targets).
-        if (_debug_overlay && state == Renderer::State::NONE) {
+        if (_debug_overlay && state == ScreenRenderer::State::NONE) {
           draw_debug_overlay();
         }
         ++_pass_index;
@@ -272,7 +272,7 @@ bool Director::vr_enabled() const
 
 bool Director::vr_pass() const
 {
-  return _render_state != Renderer::State::NONE;
+  return _render_state != ScreenRenderer::State::NONE;
 }
 
 void Director::force_builtin_visual(uint32_t visual_type)
@@ -744,9 +744,9 @@ float Director::far_plane_distance() const
 float Director::eye_offset() const
 {
   auto offset = _renderer.eye_spacing_multiplier() * _system.eye_spacing().eye_spacing();
-  return _render_state == Renderer::State::VR_LEFT
+  return _render_state == ScreenRenderer::State::VR_LEFT
       ? -offset
-      : _render_state == Renderer::State::VR_RIGHT ? offset : 0;
+      : _render_state == ScreenRenderer::State::VR_RIGHT ? offset : 0;
 }
 
 namespace

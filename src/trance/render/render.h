@@ -34,115 +34,33 @@ void init_glew();
 // grab from. Logs and returns false on write failure.
 bool save_window_screenshot(sf::RenderWindow& window, const std::string& path);
 
-class Renderer
+// The renderer: it owns the one visible window and its GL context, and optionally an
+// XrOutput fed from that same context (docs/spec-xr-unified.md sec 1). There is no
+// renderer selection and no VR mode -- attaching a headset adds two passes to the frame,
+// it does not replace the window. There is likewise no renderer INTERFACE any more: this
+// class used to derive from an abstract `Renderer` that existed to let a VR mode swap
+// itself in for the window, and phase 5 collapsed the two now that the headset is an
+// output of this one class rather than an alternative to it.
+class ScreenRenderer
 {
 public:
   // TODO: could factor out actual rendering to intermediate texture(s) and add multisampling?
-  // NONE is the flat single-pass case; VR_LEFT/VR_RIGHT are the two passes of a stereo
-  // frame, drawn into the OpenXR backend's two per-eye swapchains -- there is no mono VR
-  // pass. (There was a VR_MONO state for the OpenXR path's original single-quad
-  // implementation; b86c476 gave it per-eye quads and nothing has emitted VR_MONO since.)
+  // NONE is the flat desktop pass, run on every frame the window is presented at all (see
+  // desktop_pass_due for the one thing that skips it); VR_LEFT/VR_RIGHT are the two eye
+  // passes that precede it while a headset is attached, drawn into the OpenXR output's two
+  // per-eye swapchains. There is no mono VR pass.
   enum class State {
     NONE = 0,
     VR_LEFT = 1,
     VR_RIGHT = 2,
   };
 
-  virtual ~Renderer() = default;
+  ScreenRenderer(const trance_pb::System& system, const OverlayConfig& overlay = {});
+  ~ScreenRenderer();
+  ScreenRenderer(const ScreenRenderer&) = delete;
+  ScreenRenderer& operator=(const ScreenRenderer&) = delete;
 
   sf::RenderWindow& window();
-  // An XR output is attached, i.e. a headset is being fed alongside the window. NOT a
-  // mode: the desktop pass runs either way, and every per-pass question (image scale,
-  // text targets, eye shear) asks Director::vr_pass() about the CURRENT pass instead.
-  virtual bool vr_enabled() const = 0;
-  // Dimensions of the pass currently being rendered -- the eye swapchain's during
-  // VR_LEFT/VR_RIGHT, the window's during NONE (and whenever no pass is running, which
-  // is what startup sizing reads). With both outputs live these genuinely differ per
-  // pass, so nothing may cache them across a frame (trap 2).
-  virtual uint32_t view_width() const = 0;
-  virtual uint32_t width() const = 0;
-  virtual uint32_t height() const = 0;
-  // The largest height any pass of a frame can have. For the one resource that must be
-  // sized ONCE, before any pass exists, and therefore cannot follow the per-pass
-  // dimensions above: the font atlas (trap 2's first enumerated site). height() answers
-  // for the CURRENT pass, so at Director-construction time -- no pass running -- it can
-  // only report the window, which is right for the desktop and wrong for the headset: an
-  // atlas rasterized for a 1080p window is drawn ~2x upscaled on a 2208px Quest 3 eye and
-  // reads soft, where the old VR mode sized it from the eye. Taking the max costs nothing
-  // detached and only glyph memory attached, since render_text scales the string to a
-  // fraction of the view either way.
-  //
-  // KNOWN GAP, unpaid by phase 4 (which introduced the late attach and therefore owed
-  // this): this is read ONCE, at Director construction. With hot-attach the headset can
-  // arrive minutes later, and it then draws text from an atlas rasterized for the window
-  // -- soft, exactly the way the pre-max_height code was on every VR run. Paying it means
-  // rebuilding the FontCache on attach, which needs VisualApiImpl to retain the session +
-  // cache-size it was built with and adds a synchronous font preload to the attach hitch
-  // budget (D7); both belong with a phase that is allowed to touch the visual pipeline.
-  // A run that starts with the headset already attached is unaffected.
-  virtual uint32_t max_height() const = 0;
-  virtual float eye_spacing_multiplier() const = 0;
-
-  virtual void init() = 0;
-  // Per-iteration event pump: the XR event queue while a headset is attached, the
-  // hot-attach probe while one is not. The bool is a vestige of the deleted VR mode, whose
-  // update() returning false ended the run; since phase 4 no XR failure can end a run
-  // (D7's detach-never-exit), so this is now always true and phase 5's collapse removes
-  // it. Kept for now rather than rippling a signature change through Director for one
-  // phase.
-  virtual bool update() = 0;
-  // Renders one frame: the eye passes (when a headset is attached and its session is
-  // running) followed ALWAYS by the desktop pass -- no XR failure or early-out may skip
-  // the latter (trap 10). `blank` means the content must not be VISIBLE in the headset
-  // this frame (paused/hidden): the eye submission goes layerless so the headset empties
-  // instead of freezing, while the desktop pass repaints as usual so the F2 panel stays
-  // live (D8, trap 9).
-  virtual void render(const std::function<void(State)>& render_fn, bool blank) = 0;
-
-  // Frame-loop keep-alive for any iteration where the main loop drew nothing -- paused,
-  // hidden, or simply between visual frames. Returns true if the renderer performed its
-  // own frame pacing (so the caller must not add an anti-spin sleep); with no headset
-  // attached there is nothing to keep alive and it returns false.
-  //
-  // WHY it must run even when not paused: a VR frame loop is a handshake with the
-  // runtime, not a consequence of having something new to draw. A running OpenXR session
-  // REQUIRES continuous xrWaitFrame/xrBeginFrame/xrEndFrame (the spec asks applications
-  // to keep the loop running "to maintain synchronisation", calling xrEndFrame with no
-  // layers if need be). Stalling it -- which is what happens if this is gated on a visual
-  // frame being due at global_fps -- makes the runtime flag the app unresponsive and
-  // drops the headset to the grey void.
-  //
-  // `blank` carries the same meaning as render()'s: paused/hidden submits layerlessly,
-  // merely-between-visual-frames re-presents the last quads (see XrOutput::render_idle).
-  virtual bool render_idle(bool blank)
-  {
-    (void) blank;
-    return false;
-  }
-
-  // Pre-display UI hook: runs after the scene is drawn but BEFORE the buffer swap, so a
-  // 2D UI (the F2 ImGui panels) composites onto the same frame it belongs to. Calling
-  // display() again outside render() instead double-swaps: the UI lands on the previous
-  // frame's back buffer, strobing the UI at half rate and ping-ponging the scene one
-  // frame back every other swap. It runs in the desktop (NONE) pass only -- the eye
-  // passes are per-eye targets with no flat 2D surface to composite onto, which is also
-  // why the F2 panel and the F1 HUD never appear in the headset.
-  void set_ui_hook(std::function<void()> hook) { _ui_hook = std::move(hook); }
-
-protected:
-  std::unique_ptr<sf::RenderWindow> _window;
-  std::function<void()> _ui_hook;
-};
-
-// The only renderer: it owns the one visible window and its GL context, and optionally an
-// XrOutput fed from that same context (docs/spec-xr-unified.md sec 1). There is no
-// renderer selection and no VR mode -- attaching a headset adds two passes to the frame,
-// it does not replace the window.
-class ScreenRenderer : public Renderer
-{
-public:
-  ScreenRenderer(const trance_pb::System& system, const OverlayConfig& overlay = {});
-  ~ScreenRenderer() override;
 
   // Where the XR side is right now, for the `status` verb (the QA observability hook,
   // spec phase 4) -- one of:
@@ -176,17 +94,76 @@ public:
   // ImGui's NewFrame/Render pairing broken. One answer, one iteration, both users.
   bool desktop_pass_due(bool force);
 
-  bool vr_enabled() const override;
-  uint32_t view_width() const override;
-  uint32_t width() const override;
-  uint32_t height() const override;
-  uint32_t max_height() const override;
-  float eye_spacing_multiplier() const override;
+  // An XR output is attached, i.e. a headset is being fed alongside the window. NOT a
+  // mode: the desktop pass runs either way, and every per-pass question (image scale,
+  // text targets, eye shear) asks Director::vr_pass() about the CURRENT pass instead.
+  bool vr_enabled() const;
+  // Dimensions of the pass currently being rendered -- the eye swapchain's during
+  // VR_LEFT/VR_RIGHT, the window's during NONE (and whenever no pass is running, which
+  // is what startup sizing reads). With both outputs live these genuinely differ per
+  // pass, so nothing may cache them across a frame (trap 2).
+  uint32_t view_width() const;
+  uint32_t width() const;
+  uint32_t height() const;
+  // The largest height any pass of a frame can have. For the one resource that must be
+  // sized ONCE, before any pass exists, and therefore cannot follow the per-pass
+  // dimensions above: the font atlas (trap 2's first enumerated site). height() answers
+  // for the CURRENT pass, so at Director-construction time -- no pass running -- it can
+  // only report the window, which is right for the desktop and wrong for the headset: an
+  // atlas rasterized for a 1080p window is drawn ~2x upscaled on a 2208px Quest 3 eye and
+  // reads soft. Taking the max costs nothing detached and only glyph memory attached,
+  // since render_text scales the string to a fraction of the view either way.
+  //
+  // KNOWN GAP, unpaid by phase 4 (which introduced the late attach and therefore owed
+  // this): this is read ONCE, at Director construction. With hot-attach the headset can
+  // arrive minutes later, and it then draws text from an atlas rasterized for the window
+  // -- soft, exactly the way the pre-max_height code was on every VR run. Paying it means
+  // rebuilding the FontCache on attach, which needs VisualApiImpl to retain the session +
+  // cache-size it was built with and adds a synchronous font preload to the attach hitch
+  // budget (D7); both belong with a phase that is allowed to touch the visual pipeline.
+  // A run that starts with the headset already attached is unaffected.
+  uint32_t max_height() const;
+  float eye_spacing_multiplier() const;
 
-  void init() override;
-  bool update() override;
-  void render(const std::function<void(State)>& render_fn, bool blank) override;
-  bool render_idle(bool blank) override;
+  void init();
+  // Per-iteration event pump: the XR event queue while a headset is attached, the
+  // hot-attach probe while one is not. Nothing it can find ends the run -- every XR
+  // failure detaches and keeps playing on the desktop (D7) -- which is why it returns
+  // nothing to check.
+  void update();
+  // Renders one frame: the eye passes (when a headset is attached and its session is
+  // running) followed ALWAYS by the desktop pass -- no XR failure or early-out may skip
+  // the latter (trap 10). `blank` means the content must not be VISIBLE in the headset
+  // this frame (paused/hidden): the eye submission goes layerless so the headset empties
+  // instead of freezing, while the desktop pass repaints as usual so the F2 panel stays
+  // live (D8, trap 9).
+  void render(const std::function<void(State)>& render_fn, bool blank);
+
+  // Frame-loop keep-alive for any iteration where the main loop drew nothing -- paused,
+  // hidden, or simply between visual frames. Returns true if the renderer performed its
+  // own frame pacing (so the caller must not add an anti-spin sleep); with no headset
+  // attached there is nothing to keep alive and it returns false.
+  //
+  // WHY it must run even when not paused: a VR frame loop is a handshake with the
+  // runtime, not a consequence of having something new to draw. A running OpenXR session
+  // REQUIRES continuous xrWaitFrame/xrBeginFrame/xrEndFrame (the spec asks applications
+  // to keep the loop running "to maintain synchronisation", calling xrEndFrame with no
+  // layers if need be). Stalling it -- which is what happens if this is gated on a visual
+  // frame being due at global_fps -- makes the runtime flag the app unresponsive and
+  // drops the headset to the grey void.
+  //
+  // `blank` carries the same meaning as render()'s: paused/hidden submits layerlessly,
+  // merely-between-visual-frames re-presents the last quads (see XrOutput::render_idle).
+  bool render_idle(bool blank);
+
+  // Pre-display UI hook: runs after the scene is drawn but BEFORE the buffer swap, so a
+  // 2D UI (the F2 ImGui panels) composites onto the same frame it belongs to. Calling
+  // display() again outside render() instead double-swaps: the UI lands on the previous
+  // frame's back buffer, strobing the UI at half rate and ping-ponging the scene one
+  // frame back every other swap. It runs in the desktop (NONE) pass only -- the eye
+  // passes are per-eye targets with no flat 2D surface to composite onto, which is also
+  // why the F2 panel and the F1 HUD never appear in the headset.
+  void set_ui_hook(std::function<void()> hook) { _ui_hook = std::move(hook); }
 
 private:
   // Take over a probe's instance + system and stand the headset output up on this
@@ -214,10 +191,17 @@ private:
   // each update() (which is where running<->idle flips).
   void sync_pacing();
 
-  // Held by pointer through an incomplete type on purpose: openxr.h needs Renderer::State
-  // for its per-eye render callback, so it includes this header -- and a member of a
-  // forward-declared class is what keeps that from becoming a cycle. The destructor,
-  // attach and detach all live in render.cpp, which has the full definition.
+  // DECLARED FIRST so it is destroyed LAST: the XR teardown below is GL-bound, and the
+  // context it needs is this window's (trap 5). Member order is the half of that ordering
+  // the compiler enforces; the destructor supplies the other half by making the context
+  // current before it lets go of _xr.
+  std::unique_ptr<sf::RenderWindow> _window;
+  std::function<void()> _ui_hook;
+
+  // Held by pointer through an incomplete type on purpose: openxr.h needs
+  // ScreenRenderer::State for its per-eye render callback, so it includes this header --
+  // and a member of a forward-declared class is what keeps that from becoming a cycle. The
+  // destructor, attach and detach all live in render.cpp, which has the full definition.
   std::unique_ptr<XrOutput> _xr;
   // The hot-attach probe (D7), polled from update() whenever _xr is null: a registry read
   // inline every 5 s, and one detached worker thread at a time when a runtime is actually

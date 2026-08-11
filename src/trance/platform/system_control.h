@@ -30,7 +30,7 @@ enum class ControlRequest {
   // pause/mute state existed before hiding. Never quits where a real quit surface
   // exists (tray Quit, window close, or the F2 panel's Quit button -- all kQuit's
   // job); the ONE exception is hotkey-only configurations (kHasTrayQuit false AND no
-  // F2 panel, i.e. Linux VR or a failed ImGui init on Linux), where nothing else can
+  // F2 panel, i.e. a failed ImGui init on Linux), where nothing else can
   // ever quit the process -- there the drain point in main.cpp lets a press while
   // already hidden quit, preserving Shift+F11's old second-press-quits escape hatch.
   kSafety,

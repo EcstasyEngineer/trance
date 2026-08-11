@@ -110,8 +110,8 @@ private:
   State _state;
 };
 
-// The headset OUTPUT of the one desktop renderer -- deliberately NOT a Renderer
-// (docs/spec-xr-unified.md phase 2). There is no VR "mode" any more: ScreenRenderer owns
+// The headset OUTPUT of the one desktop renderer -- deliberately not a renderer of its
+// own (docs/spec-xr-unified.md phase 2). There is no VR "mode" any more: ScreenRenderer owns
 // the single visible window and its GL context, and holds one of these when a headset is
 // attached. Everything here is the eye half of a frame -- the two per-eye swapchains, the
 // head-locked quad layers, and the xrWaitFrame/xrBeginFrame/xrEndFrame handshake; the
@@ -188,7 +188,7 @@ public:
 
   // The two eye passes of one frame: acquire/wait/render/release both swapchains, then
   // submit the pair of head-locked quads. Only legal while update() last said Running.
-  void render(const std::function<void(Renderer::State)>& render_fn);
+  void render(const std::function<void(ScreenRenderer::State)>& render_fn);
   // Keep-alive frame submission for an iteration that rendered no eye content.
   //
   // WHY it must run even when not paused: a VR frame loop is a handshake with the

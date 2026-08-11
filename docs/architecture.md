@@ -8,7 +8,8 @@ subsystem. For the feature list and build instructions, see the
 ## Two executables, one session model
 
 `trance` ships as ONE binary: the realtime player. It loads a session, runs the
-frame loop, and renders to a window (or VR headset). Entry point:
+frame loop, and renders to a window (plus a VR headset, whenever one is
+attached — the two run together, not instead of each other). Entry point:
 `src/trance/main.cpp`. (`--lint` is the same binary run headlessly: it proves the
 built-in and custom patterns parse/lower/compile without opening a window.)
 
@@ -40,11 +41,15 @@ The player's lifecycle lives in `play_session()` (`src/trance/main.cpp`):
    for the active program. It keeps two themes active in video memory and
    asynchronously loads a third on a background thread (`run_async_thread` in
    `main.cpp`) so themes can swap without a load stall.
-3. **Renderer.** Startup tries `OpenXrRenderer` (OpenXR quad layer) unconditionally
-   and falls back to `ScreenRenderer` (the desktop window) when there is no runtime
-   or no headset — there is no renderer setting. Both are `Renderer` subclasses in
-   `src/trance/render/`. (Interim shape: `docs/spec-xr-unified.md` folds XR into
-   `ScreenRenderer` as a hot-attachable output.)
+3. **Renderer.** One class, `ScreenRenderer` (`src/trance/render/render.{h,cpp}`):
+   it owns the single visible window and its GL context. A headset is an optional
+   **output** of it, not an alternative to it — an `XrOutput` (`openxr.{h,cpp}`)
+   built on that same context by a background probe that runs for the whole run, so
+   a headset plugged in later attaches without a restart and any XR failure detaches
+   without ending the run. A presented frame is up to three passes: `VR_LEFT`,
+   `VR_RIGHT`, then always the desktop `NONE` pass. There is no renderer setting and
+   no VR mode; the design and its rationale are in
+   [spec-xr-unified.md](spec-xr-unified.md).
 4. **Director.** The `Director` (`src/trance/director.{h,cpp}`) owns the visual
    engine and the GL programs. It holds a `Visual` (the current pattern), the
    `VisualApiImpl` bridge to the theme bank and renderer, and the compiled
@@ -74,7 +79,7 @@ play_session frame loop ──► Director ──► Visual (cycler tree + effec
    │                             │            ▼
    ├──► Audio (channels + entrainment bed)  VisualApiImpl (VisualControl + VisualRender)
    │                                          │
-   └──────────────────────────────────────► Renderer ──► screen / VR headset
+   └──────────────────────────────────► ScreenRenderer ──► screen (+ VR headset)
 ```
 
 ## `src/` directory tour
@@ -85,11 +90,11 @@ play_session frame loop ──► Director ──► Visual (cycler tree + effec
 | `src/common/media/` | Decoders: `Image`, the `Streamer` animation interface (`streamer.{h,cpp}`). |
 | `src/trance/` | The realtime player: `main.cpp`, `director.{h,cpp}`, `theme_bank.{h,cpp}`, `playlist_runner.{h,cpp}` (the playlist stack machine), GLSL `shaders.h`. |
 | `src/trance/media/` | Player-side media: `audio.{h,cpp}`, `entrainment.{h,cpp}` (the synthesised bed), `font.{h,cpp}`, `async_streamer.{h,cpp}`. |
-| `src/trance/render/` | The `Renderer` interface and its subclasses: `render.{h,cpp}` (screen — also home of the click-through overlay window hints, `apply_overlay_hints` / `clear_overlay_hints`), `openxr.{h,cpp}` (OpenXR head-locked quad-layer backend — Quest Link, SteamVR, any conformant runtime). |
+| `src/trance/render/` | `render.{h,cpp}` — `ScreenRenderer`, the one renderer (window + GL context, the desktop pass, pacing, the minimize skip); `openxr.{h,cpp}` — `XrOutput`, the optional headset output (head-locked quad layers, per-eye swapchains, the frame handshake) and `XrProbe`, the background hot-attach probe. Works with Quest Link, SteamVR, or any conformant OpenXR runtime. |
 | `src/trance/visual/` | The visual engine: the cycler/pattern system. The v3 pattern DSL parser/compiler, the `Cycler` tree, compiled visuals, and the data-driven render blocks (`render_eval`). |
 | `src/trance/ui/` | The ImGui in-app control panel (`app_ui.{h,cpp}`), toggled with F2. |
 | `src/trance/net/` | The `--command_port` control channel: line→verb protocol (`command_protocol.{h,cpp}`) and the socket/mailbox (`command_channel.{h,cpp}`). |
-| `src/trance/platform/` | Out-of-window controls (`system_control.{h,cpp}`): the system tray icon (Windows) and the global Shift+F11 hide-everything hotkey (Win32/X11) — the control surface that keeps working while the overlay is click-through. |
+| `src/trance/platform/` | Native window/OS bits: `system_control.{h,cpp}` (the system tray icon on Windows and the global Shift+F11 hide-everything hotkey on Win32/X11 — the control surface that keeps working while the overlay is click-through), `overlay_hints.{h,cpp}` (the click-through always-on-top window hints), `display_info.{h,cpp}` (the display refresh rate the desktop pacing falls back to). |
 
 ## Where to start reading, per subsystem
 
@@ -106,13 +111,14 @@ play_session frame loop ──► Director ──► Visual (cycler tree + effec
   `src/common/trance.proto`.
 - **Audio + entrainment** → [audio.md](audio.md);
   `src/trance/media/audio.{h,cpp}` and `entrainment.{h,cpp}`.
-- **Rendering** → `src/trance/render/render.h` (the `Renderer` interface and
-  `Renderer::State` per-eye enum). `Director::render_image` / `render_spiral` /
-  `render_text` (`src/trance/director.cpp`) hold the actual GL draw calls.
+- **Rendering** → `src/trance/render/render.h` (`ScreenRenderer` and its
+  `State` per-pass enum); the headset half is `src/trance/render/openxr.h`.
+  `Director::render_image` / `render_spiral` / `render_text`
+  (`src/trance/director.cpp`) hold the actual GL draw calls.
 - **Theme supply** → `src/trance/theme_bank.h` (the class comment explains the
   two-active-plus-one-loading scheme).
 - **Overlay mode / out-of-window controls** → `apply_overlay_hints`
-  (`src/trance/render/render.h`) for the click-through window itself;
+  (`src/trance/platform/overlay_hints.h`) for the click-through window itself;
   `src/trance/platform/system_control.h` for the tray icon + global Shift+F11
   hide-everything hotkey that control it.
 - **Command channel** → `src/trance/net/command_protocol.h`; verb reference in

@@ -182,7 +182,7 @@ public:
              const ThemeBank& themes);
 
   // Issues ImGui's GL draw calls into `window`'s currently-bound buffer. Runs via
-  // Renderer::set_ui_hook, after the frame's scene draw and before its display().
+  // ScreenRenderer::set_ui_hook, after the frame's scene draw and before its display().
   // No-op unless a matching update() started an ImGui frame this iteration (ImGui
   // asserts on Render without a prior NewFrame).
   void render(sf::RenderWindow& window);

@@ -148,7 +148,7 @@ bool save_window_screenshot(sf::RenderWindow& window, const std::string& path)
   return true;
 }
 
-sf::RenderWindow& Renderer::window()
+sf::RenderWindow& ScreenRenderer::window()
 {
   return *_window;
 }
@@ -224,10 +224,10 @@ ScreenRenderer::ScreenRenderer(const trance_pb::System& system, const OverlayCon
 
 ScreenRenderer::~ScreenRenderer()
 {
-  // Explicit, and BEFORE ~Renderer takes the window (and its GL context) away: the XR
-  // teardown is GL-bound, so it has to happen while this object's own window is still
-  // alive and current (trap 5). Member destruction alone would get the order right --
-  // _xr is a derived member, _window a base one -- but not the "context current" half.
+  // Explicit, rather than left to ~unique_ptr: the XR teardown is GL-bound, so it has to
+  // happen while this object's own window is still alive AND ITS CONTEXT CURRENT (trap 5).
+  // Member order gets the first half for free (_window is declared before _xr, so it
+  // outlives it); only detach_xr() supplies the second.
   detach_xr();
 }
 
@@ -387,7 +387,7 @@ void ScreenRenderer::init()
   _window->display();
 }
 
-bool ScreenRenderer::update()
+void ScreenRenderer::update()
 {
   if (_xr) {
     if (_xr->update() == XrOutput::Update::DetachRequested) {
@@ -410,8 +410,6 @@ bool ScreenRenderer::update()
   // the seam that catches BOTH halves of D5's restore: the running->idle direction (doff,
   // Link close, pre-READY startup -- trap 11's hot-spin) and idle->running.
   sync_pacing();
-  // Always true since phase 4: an XR failure detaches, it does not end the run.
-  return true;
 }
 
 void ScreenRenderer::render(const std::function<void(State)>& render_fn, bool blank)

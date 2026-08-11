@@ -18,7 +18,7 @@ drifted — trust the function and file names, not the numbers.
 | Visual pipeline (grammar v3 → cyclers → render eval) | **Solid** | Recently rewritten, real behavioral tests; expr-eval crash hole and untested effect runtime keep it from Production. |
 | App shell & control surfaces (main loop, #21 channel, F2 UI) | **Solid** | Disciplined threading + single reconcile seam; the playlist machine has since been extracted and tested, but `play_session` is still a large lambda-web. |
 | ThemeBank + media loading | **Functional** | Architecture sound and repeatedly hardened, but carries verified cross-thread data races and zero tests. |
-| Renderer layer (screen/overlay, VR) | **Functional** | Clean strategy split and careful X11 overlay; both VR backends corrected against spec but **never run on a headset**; unvalidated Win32 branch. |
+| Renderer layer (screen/overlay, VR) | **Functional** | Careful X11 overlay; the VR side has since been unified into one renderer (§4's note) and is still **never run on a headset**; unvalidated Win32 branch. |
 | Data model (proto+JSON, sidecar, convert) | **Solid** | Spec-driven strict loader with real tests; exception-type gap and non-atomic saves. |
 | Build system (CMake presets + vcpkg manifest) | **Solid** (near Production) | Hygienic, documented workarounds, warnings-as-errors on MSVC, CI green and running ctest. |
 | Docs | **Functional** | Normative specs current and rigorous; the stale layer and the frozen archive have since been deleted. |
@@ -138,6 +138,13 @@ locking view (small, mechanical); (2) add a TSan/ASan-able smoke run + check in 
 corrupt-media fixture session (medium, mechanical).
 
 ### 4. Renderer layer — **Functional**
+
+**Superseded by the XR unification** (`spec-xr-unified.md`, phases 1–5): OpenVR and the
+whole renderer-selection idea are deleted, and there is now ONE renderer —
+`ScreenRenderer`, owning the window, with the OpenXR side as a hot-attachable output of
+it. Everything below is the July 2026 shape and is kept as the audit record; the caveat
+that survives all of it verbatim is that **no VR code here has ever run against a
+physical headset**.
 
 Three-implementation strategy: `ScreenRenderer` (windowed/fullscreen/overlay),
 `OpenVrRenderer`, `OpenXrRenderer`. SFML creates contexts; drawing is raw GL 2.1-era

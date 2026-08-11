@@ -39,11 +39,13 @@ them are busy serving the show. Previews load on hover only, one per frame, and 
 couple of dozen are kept in memory at a time, so a theme of several thousand images costs
 nothing until a row is actually pointed at.
 
-The F2 panel is **not built in VR mode** (there is no single flat 2D pass to composite
-it onto). There is no renderer setting to find in it: VR output is automatic and
-unconfigurable — see the README's [VR setup](../README.md#vr-setup) section. **System →
-windowed** persists to `system.json` immediately but only takes effect on the next
-launch.
+The panel is available on **every** run, including while a headset is playing: it is
+drawn in the desktop pass only (as is the F1 overlay), so it never appears in the
+headset, and its edits apply live to both outputs. There is no renderer setting to find
+in it — VR output is automatic and unconfigurable; see the README's
+[VR setup](../README.md#vr-setup) section. The **eye spacing** slider is the one
+VR-related control, and it is always live. **System → windowed** persists to
+`system.json` immediately but only takes effect on the next launch.
 
 ## Global hide-everything hotkey — Shift+F11
 
@@ -57,9 +59,9 @@ click-through overlay that can't receive input at all.
   before the hide brought back (a pause/resume explicitly commanded *while* hidden —
   tray or command channel — updates what gets restored; playback itself stays idle
   until the window is shown again). It never quits — with one exception: in hotkey-only
-  configurations with no other quit surface (Linux VR, or Linux fullscreen when the
-  ImGui panel failed to initialise — no tray, no panel), a press while already hidden
-  quits instead of restoring, so an orderly exit always exists.
+  configurations with no other quit surface (Linux fullscreen when the ImGui panel failed
+  to initialise — no tray, no panel), a press while already hidden quits instead of
+  restoring, so an orderly exit always exists.
 
 Holding the key fires once, not an autorepeat stream. If registration fails (another
 app owns the combination), a warning is printed at startup and the tray menu is the
