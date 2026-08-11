@@ -43,7 +43,15 @@ public:
   // Called from play_session() in main.cpp.
   void set_program(const trance_pb::Program& program);
   bool update();
-  void render() const;
+  // One presented frame: the render-mutation epoch, then every pass of it (headset eyes
+  // when attached, then always the desktop).
+  // `elapsed_seconds` is the PLAYBACK time this frame covers -- wall-clock excluding
+  // pause and hide -- and is what render-time accumulating state advances on (trap 1).
+  // Not the presentation rate: that changes the moment a 90Hz headset attaches to a 60Hz
+  // desktop, which would speed accelerating visuals up by half.
+  // `blank` (paused/hidden) reaches the renderer as "no content in the headset this
+  // frame" while the desktop pass repaints normally for the F2 panel (D8, trap 9).
+  void render(double elapsed_seconds, bool blank) const;
 
   // Toggle the on-screen debug overlay (bound to F1 in main.cpp).
   void toggle_debug_overlay();
@@ -68,7 +76,15 @@ public:
   void set_theme_audio_volume(float volume);
 
   const trance_pb::Program& program() const;
+  // A headset output is attached. Reported by the F2 status section; NOT a question any
+  // render code should ask -- what a draw wants to know is whether the CURRENT pass is an
+  // eye pass, which is vr_pass().
   bool vr_enabled() const;
+  // The pass being rendered targets a headset eye (VR_LEFT/VR_RIGHT) rather than the
+  // desktop window. Everything that used to key on "is this a VR renderer" keys on this
+  // instead, because with both outputs live a single frame is both: the /2.5 image scale
+  // and the text size targets differ per pass, not per run (trap 2).
+  bool vr_pass() const;
 
   // Testing/authoring overrides (--visual / --pattern in main.cpp): pin every visual
   // selection to a single built-in type or a single externally-supplied pattern, instead
@@ -89,13 +105,20 @@ public:
   // v3 wave warp: set the per-frame sinusoidal image-displacement state (amp 0 = no warp).
   void set_warp(float amp, float wavelength, float speed);
 
-  // False during the SECOND of the two render passes a stereo frame makes (VR_RIGHT).
-  // In stereo the whole render block is evaluated once per eye, so any render-time state
-  // that ACCUMULATES per call (the spiral angle, the warp time base) would advance twice
-  // per frame -- spinning/waving at double speed, and differently between the eyes.
-  // Mutating render ops consult this and skip the advance on the second pass; every other
-  // state (NONE / VR_LEFT) is the frame's one-and-only pass and ticks.
+  // True only on the FIRST pass of the frame currently being rendered.
+  // A frame is now up to three passes (left eye, right eye, desktop) and the whole render
+  // block is evaluated once per pass, so any render-time state that ACCUMULATES per call
+  // -- the spiral angle, the warp time base, the stale-image refresh, the F1 layer
+  // counters -- would advance two or three times per presented frame, and the eyes would
+  // draw different content. Every such op runs on the first pass only; the later passes
+  // redraw exactly what it produced.
   bool render_mutations_enabled() const;
+  // How much playback time the frame covers, in 60Hz reference frames -- the multiplier
+  // for a per-frame accumulation rate. 0 while paused/hidden (state freezes) and on every
+  // pass after the first. This is what decouples accumulating visuals from the
+  // presentation rate: attaching a 90Hz headset to a 60Hz desktop must not make them run
+  // 1.5x faster (trap 1).
+  double render_mutation_frames() const;
 
   sf::Vector2f text_size(const Font& font, const std::string& text, bool large) const;
   void render_text(const Font& font, const std::string& text, bool large, const sf::Color& colour,
@@ -129,6 +152,10 @@ private:
   float _warp_time = 0.f;
 
   mutable Renderer::State _render_state;
+  // Render-mutation epoch, set once per frame by render() before any pass runs:
+  // the frame's playback-elapsed seconds, and how many passes have started so far.
+  mutable double _mutation_seconds;
+  mutable uint32_t _pass_index;
   Renderer& _renderer;
   std::unique_ptr<VisualApiImpl> _visual_api;
 

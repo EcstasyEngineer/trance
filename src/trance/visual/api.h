@@ -104,15 +104,21 @@ public:
   // VisualApiImpl's single override satisfies both.
   virtual void set_theme_audio_volume(float volume) = 0;
 
-  // False during the SECOND of the two render passes a stereo frame makes (VR_RIGHT).
-  // The render block is evaluated once per eye in stereo, so any render op that
-  // ACCUMULATES state -- rotate_spiral's angle, set_warp's time base -- would advance
-  // twice per frame, running at double speed and desyncing the two eyes. eval_render
-  // consults this and skips those advances on the second pass. Every other state
-  // (NONE / VR_LEFT) is the frame's only pass and ticks normally.
+  // True on the FIRST pass of the frame only. The render block is evaluated once per
+  // pass, and a frame is up to three passes (left eye, right eye, desktop), so any
+  // render op that ACCUMULATES state -- rotate_spiral's angle, set_warp's time base, the
+  // stale-image refresh -- would advance two or three times per frame and leave the eyes
+  // showing different content. eval_render consults this and skips those advances on
+  // every later pass, which redraw what the first one produced.
   // Note this gates only the RENDER-path callers: the same rotate_spiral reached from a
   // cycler action already runs once per frame and must keep ticking.
   virtual bool render_mutations_enabled() const = 0;
+  // Playback time this frame covers, expressed in 60Hz reference frames, so a per-frame
+  // accumulation rate can simply be multiplied by it. 0 while paused/hidden and on every
+  // pass after the first. Keeps accumulating visuals running at the same speed whatever
+  // rate the frame was presented at -- notably, at the same speed attached to a 90Hz
+  // headset as detached on a 60Hz desktop (docs/spec-xr-unified.md trap 1).
+  virtual double render_mutation_frames() const = 0;
 };
 
 class VisualApiImpl : public VisualControl, public VisualRender
@@ -156,6 +162,7 @@ public:
   void render_spiral() const override;
   void set_warp(float amp, float wavelength, float speed) override;
   bool render_mutations_enabled() const override;
+  double render_mutation_frames() const override;
 
   // Debug overlay accessors. Reset the per-frame layer capture at the start of
   // a rendered frame; render_image() then records the alpha of each image layer

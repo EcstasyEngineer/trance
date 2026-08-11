@@ -28,6 +28,13 @@ extern "C" {
 namespace
 {
   const uint32_t spiral_type_max = 7;
+
+  // Reference presentation rate for render-time accumulation. A pattern's per-frame
+  // rates (spiral speed, the warp time base) were authored against a 60Hz present, so
+  // playback-elapsed time is converted back into 60Hz frames rather than the numbers
+  // being rescaled: at 60Hz nothing changes, and every other rate -- 90Hz headset,
+  // 144Hz monitor, a stuttering frame -- now advances by the time it actually took.
+  const double kRenderMutationFps = 60.0;
 }
 
 // Declared in director.h; also used by main.cpp's --lint.
@@ -55,6 +62,9 @@ Director::Director(const trance_pb::Session& session, const trance_pb::System& s
 , _new_program{0}
 , _spiral_program{0}
 , _quad_buffer{0}
+, _render_state{Renderer::State::NONE}
+, _mutation_seconds{0.}
+, _pass_index{0}
 , _renderer{renderer}
 , _last_visual_selection{0}
 , _last_custom_index{-1}
@@ -186,27 +196,40 @@ bool Director::update()
   return _renderer.update();
 }
 
-void Director::render() const
+void Director::render(double elapsed_seconds, bool blank) const
 {
   Image::delete_textures();
   _visual_api->debug_begin_frame();
-  _renderer.render([&](Renderer::State state) {
-    _render_state = state;
-    _visual->render(*_visual_api);
-    // Only draw the HUD on the flat screen pass (not per-eye VR targets).
-    if (_debug_overlay && state == Renderer::State::NONE) {
-      draw_debug_overlay();
-    }
-  });
+  // The render-mutation epoch (trap 1), established ONCE here, before any pass: how much
+  // playback time this frame covers, and a pass counter so every accumulating render op
+  // fires on the first pass only. Never per pass -- the two eyes have to draw identical
+  // content, and the desktop pass after them has to show the same frame again.
+  _mutation_seconds = elapsed_seconds;
+  _pass_index = 0;
+  _renderer.render(
+      [&](Renderer::State state) {
+        _render_state = state;
+        _visual->render(*_visual_api);
+        // Only draw the HUD on the flat screen pass (not per-eye VR targets).
+        if (_debug_overlay && state == Renderer::State::NONE) {
+          draw_debug_overlay();
+        }
+        ++_pass_index;
+      },
+      blank);
 }
 
 bool Director::render_mutations_enabled() const
 {
-  // See the declaration: VR_RIGHT is the second of a stereo frame's two passes, so the
-  // accumulating render-time state must not advance again on it. (This assumes a frame
-  // is exactly two passes -- docs/spec-xr-unified.md trap 1 replaces it in Phase 2, when
-  // a frame becomes eyes + desktop and mutation moves onto playback elapsed time.)
-  return _render_state != Renderer::State::VR_RIGHT;
+  // See the declaration: the frame's first pass owns every accumulating render-time
+  // mutation, whether the frame is one pass (desktop only) or three (both eyes, then the
+  // desktop).
+  return _pass_index == 0;
+}
+
+double Director::render_mutation_frames() const
+{
+  return _pass_index == 0 ? _mutation_seconds * kRenderMutationFps : 0.;
 }
 
 void Director::toggle_debug_overlay()
@@ -237,6 +260,11 @@ const trance_pb::Program& Director::program() const
 bool Director::vr_enabled() const
 {
   return _renderer.vr_enabled();
+}
+
+bool Director::vr_pass() const
+{
+  return _render_state != Renderer::State::NONE;
 }
 
 void Director::force_builtin_visual(uint32_t visual_type)
@@ -276,11 +304,13 @@ void Director::set_warp(float amp, float wavelength, float speed)
   _warp_amp = amp;
   _warp_wavelength = wavelength;
   _warp_speed = speed;
-  // The time base is the accumulating part: it advances once per FRAME, not once per
-  // render pass. eval_render suppresses this call entirely on a stereo frame's second
-  // pass (VisualRender::render_mutations_enabled), which is what keeps the wave from
-  // animating at double speed in VR.
-  _warp_time += 1.f / 60.f;
+  // The time base is the accumulating part: it advances once per FRAME (eval_render
+  // suppresses this call on every pass after the first -- VisualRender::
+  // render_mutations_enabled), and by the PLAYBACK time that frame covers rather than a
+  // hardcoded 1/60th. Same wave speed at 60Hz as it always had, and now the same speed
+  // whatever rate the frame was actually presented at -- including the moment a 90Hz
+  // headset attaches (trap 1). Frozen while paused, where the elapsed time is 0.
+  _warp_time += float(render_mutation_frames() / kRenderMutationFps);
 }
 
 void Director::render_spiral(float spiral, uint32_t spiral_width, uint32_t spiral_type) const
@@ -337,7 +367,10 @@ void Director::render_image(const Image& image, float alpha, float zoom_origin, 
   auto y_scale = float(image.height()) / _renderer.height();
   auto x_size = std::min(1.f, x_scale / y_scale);
   auto y_size = std::min(1.f, y_scale / x_scale);
-  if (vr_enabled()) {
+  // Per PASS, not per run (trap 2): the headset's quad subtends a much wider field than
+  // the desktop window does, so the image is drawn smaller in the eye passes and at full
+  // size in the desktop pass of the very same frame.
+  if (vr_pass()) {
     x_size /= 2.5;
     y_size /= 2.5;
   }

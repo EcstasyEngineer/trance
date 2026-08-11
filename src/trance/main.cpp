@@ -116,9 +116,9 @@ void handle_events(std::atomic<bool>& running, sf::RenderWindow& window, Directo
 {
   while (const std::optional event = window.pollEvent()) {
     // ImGui gets first look at input so clicks/typing inside its panels don't also
-    // fall through to the F-key/Escape handling below. Null in VR mode; in
-    // overlay mode the click-through window simply never delivers events to this
-    // loop while the overlay is engaged.
+    // fall through to the F-key/Escape handling below. Null only when the ImGui backend
+    // failed to initialise; in overlay mode the click-through window simply never
+    // delivers events to this loop while the overlay is engaged.
     if (app_ui) {
       app_ui->process_event(window, *event);
     }
@@ -133,7 +133,7 @@ void handle_events(std::atomic<bool>& running, sf::RenderWindow& window, Directo
     // input: Escape's standard meaning inside an active InputText (e.g. the Session
     // section's Save As field) is "cancel the edit" -- ImGui already consumed it via
     // process_event above, and it must not ALSO tear down the app. With no panel at
-    // all (VR) there is no edit to cancel, so Escape still quits.
+    // all (failed ImGui init) there is no edit to cancel, so Escape still quits.
     if (key_pressed && key_pressed->code == sf::Keyboard::Key::Escape &&
         !(app_ui && app_ui->wants_text_input())) {
       running = false;
@@ -212,7 +212,7 @@ void set_paused(CommandRuntimeState& state, Audio& audio, bool paused)
 
 std::string execute_command(const command_protocol::ParsedCommand& cmd, Director& director,
                             Audio& audio, const ThemeBank& themes, AppUi* app_ui,
-                            bool screenshot_supported, CommandRuntimeState& state,
+                            CommandRuntimeState& state,
                             const std::chrono::steady_clock::time_point& start_time,
                             const std::function<trance_pb::Program*()>& active_program,
                             const std::function<void()>& apply_program_change)
@@ -241,9 +241,8 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
   case Verb::kShow:
     // Silent-running primitive (spec sec 4): idempotent -- both verbs just write the
     // hidden intent; the apply seam in the main loop hides/shows the window, stashes/
-    // restores mute, and no-ops when the state already matches. Unconditionally
-    // available -- unlike `ui`/`screenshot` below, the seam serves VR too (it pauses
-    // and mutes without touching the headset's helper window).
+    // restores mute, and no-ops when the state already matches. Hiding blanks the
+    // headset too, via the layerless frames the paused/hidden render path submits.
     state.hidden = cmd.verb == Verb::kHide;
     return command_protocol::format_ok();
   case Verb::kLoadPattern: {
@@ -279,8 +278,12 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
   }
   case Verb::kUiOn:
   case Verb::kUiOff:
+    // The panel exists on every run now that there is no VR mode to lack one; the only
+    // way to get here without it is an ImGui backend that failed to initialise, which
+    // main.cpp already warned about on stderr.
     if (!app_ui) {
-      return command_protocol::format_err("ui: unavailable in this mode (VR)");
+      return command_protocol::format_err("ui: unavailable (the F2 panel failed to "
+                                          "initialize this run)");
     }
     if (cmd.verb == Verb::kUiOn) {
       show_control_panel(state, app_ui);
@@ -289,11 +292,8 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
     }
     return command_protocol::format_ok();
   case Verb::kScreenshot:
-    // Only ack when a hook that will actually consume the request is installed
-    // (realtime screen renderer) -- an `ok` that never writes a file is a lie.
-    if (!screenshot_supported) {
-      return command_protocol::format_err("screenshot: unavailable in this mode (VR)");
-    }
+    // Consumed by the pre-display hook during the desktop pass, which every frame ends
+    // with -- there is no configuration left in which the request is never served.
     state.screenshot_path = cmd.value;
     return command_protocol::format_ok("writing " + cmd.value + " after the next frame");
   case Verb::kMuteOn:
@@ -406,7 +406,7 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
 // each one, and replies exactly once per command -- spec sec 3 ("always exactly one line
 // back per command line in"). Render-thread only (see CommandRuntimeState comment above).
 void handle_commands(CommandChannel& channel, Director& director, Audio& audio,
-                     const ThemeBank& themes, AppUi* app_ui, bool screenshot_supported,
+                     const ThemeBank& themes, AppUi* app_ui,
                      CommandRuntimeState& state,
                      const std::chrono::steady_clock::time_point& start_time,
                      const std::function<trance_pb::Program*()>& active_program,
@@ -415,7 +415,7 @@ void handle_commands(CommandChannel& channel, Director& director, Audio& audio,
   for (const auto& command : channel.drain()) {
     auto parsed = command_protocol::parse_command(command.line);
     auto reply = execute_command(parsed, director, audio, themes, app_ui,
-                                 screenshot_supported, state, start_time,
+                                 state, start_time,
                                  active_program, apply_program_change);
     channel.reply(command.conn_id, reply);
   }
@@ -490,55 +490,36 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   auto theme_bank =
       std::make_unique<ThemeBank>(root_path, session, system, program(), sidecar.theme_tiers);
 
-  // XR is not a configuration choice any more (docs/spec-xr-unified.md D2): every launch
-  // simply tries the OpenXR backend, and a machine with no runtime, no headset or no VR
-  // software at all falls through to the desktop window. Which of those it was comes from
-  // the constructor's own three-way diagnosis on stderr (no runtime registered / runtime
-  // registered but unreachable / no HMD), which is why nothing here tries to restate it.
-  //
-  // INTERIM SHAPE (Phase 1 of the spec): the attempt is still startup-only, and success
-  // still means today's hidden-window VR mode with no desktop output. Phase 2 turns
-  // OpenXrRenderer into an optional output of ScreenRenderer so both run at once; Phase 4
-  // turns this one-shot attempt into a repeating background probe.
-  //
-  // Two gates on the attempt, both consequences of that interim shape -- XR success here
-  // REPLACES the desktop window rather than adding an output, and both disappear once
-  // Phase 2 makes it additive:
-  //  * OpenXrRenderer::available(): where the backend is compiled out (everything that
-  //    isn't Win32) construction can only ever fail, so attempting it would put a VR
-  //    UNAVAILABLE banner on stdout/stderr and a permanent red line in the F2 panel on
-  //    every single launch, for a feature the build does not contain.
-  //  * !overlay.enabled: an --overlay run is by definition a desktop-window run (the
-  //    click-through window IS the product). Attempting XR would mean that on any
-  //    machine with a live runtime and a headset the overlay silently never exists,
-  //    while the process still prints the overlay banner and runs the overlay apply
-  //    seam against the hidden XR helper window.
-  std::unique_ptr<Renderer> renderer;
-  // Non-empty once the XR attempt failed and we fell back to the desktop window (#41).
-  // The fallback stays -- a session should still play -- but the failure was previously
-  // visible only on stderr, which a Windows GUI launch never shows: hence the banner
-  // below plus the persistent line in the F2 panel.
+  // One renderer, always: the window and its GL context exist on every run
+  // (docs/spec-xr-unified.md sec 1). A headset is an OUTPUT attached to that same
+  // context, never a replacement for it -- there is no VR mode, no renderer selection and
+  // no configuration item (D2).
+  std::unique_ptr<ScreenRenderer> renderer{new ScreenRenderer{system, overlay}};
+  // Non-empty when a headset could not be attached (#41). The desktop plays regardless --
+  // that is the whole point of the unification -- but the reason was previously visible
+  // only on stderr, which a Windows GUI launch never shows: hence the banner below plus
+  // the persistent line in the F2 panel.
   std::string vr_failure;
-  if (OpenXrRenderer::available() && !overlay.enabled) {
-    auto openxr = new OpenXrRenderer(system);
-    renderer.reset(openxr);
-    if (!openxr->success()) {
-      renderer.reset();
-      vr_failure = "OpenXR initialization failed; playing on the desktop window instead";
-    }
+  // XrOutput::available() gates the attempt because where the backend is compiled out
+  // (everything that isn't Win32) it can only ever fail, and a permanent red banner for a
+  // feature the build does not contain is noise, not diagnosis. Nothing else gates it:
+  // an --overlay run gets a headset too now that attaching adds a pass instead of
+  // swapping the window out from under the overlay.
+  //
+  // STARTUP-ONLY, still (phase 4 makes it a repeating background probe): plug a headset
+  // in after this point and it is not noticed until the next launch. Which failure it was
+  // comes from XrOutput's own three-way diagnosis on stderr (no runtime registered /
+  // runtime registered but unreachable / no HMD), which is why nothing here restates it.
+  if (XrOutput::available() && !renderer->attach_xr()) {
+    vr_failure = "no headset output this run; the desktop window is playing";
   }
-  // Printed BEFORE the fallback window is constructed: ScreenRenderer can itself die
-  // (no DISPLAY, no GL), and the reason VR was skipped must survive that.
   if (!vr_failure.empty()) {
     // Both streams: stdout is what a console launch scrolls past, stderr is where the
-    // renderer's own diagnostics (the actual reason) already went.
+    // XR diagnostics (the actual reason) already went.
     const std::string banner{"*** VR UNAVAILABLE: " + vr_failure + " ***"};
     std::cout << banner << std::endl;
     std::cerr << banner << std::endl;
     std::cerr << "see the OpenXR diagnostics above for the specific cause" << std::endl;
-  }
-  if (!renderer) {
-    renderer.reset(new ScreenRenderer(system, overlay));
   }
 
   // Constructed before Director because Director holds it by reference (the grammar's
@@ -563,13 +544,14 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
               << std::endl;
   }
 
-  // ImGui in-app UI, F2-toggled. Stood up for every realtime screen window,
-  // INCLUDING --overlay startup mode: while the overlay is engaged the click-through
-  // window never delivers input (the panel is unreachable, and the apply seam below
-  // collapses it on engage), but SystemControl's tray (Show control panel) or the
-  // command channel can disengage the overlay at runtime, and the panel must exist
-  // to serve as the control surface afterwards. Still not wired for VR (per-eye
-  // render path, no single flat 2D pass to composite onto).
+  // ImGui in-app UI, F2-toggled. Stood up UNCONDITIONALLY -- including --overlay startup
+  // mode, where the engaged click-through window never delivers input (the panel is
+  // unreachable and the apply seam below collapses it on engage) but SystemControl's tray
+  // (Show control panel) or the command channel can disengage the overlay at runtime and
+  // the panel must exist to serve as the control surface afterwards; and including runs
+  // with a headset attached, which is the headline capability of the unification: the F2
+  // panel lives on the desktop window's own pass and its edits apply live to both outputs
+  // while the session plays in the headset.
   // Mutable mirror of the program() lambda above, for the UI's Program/Themes
   // sections AND the command channel's `bed ...` verbs: resolves the ACTIVE program
   // in the session's program_map, or nullptr when the built-in default fallback is
@@ -596,17 +578,17 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   };
 
   std::unique_ptr<AppUi> app_ui;
-  if (!director.vr_enabled()) {
-    app_ui.reset(new AppUi(session, session_path, root_path, sidecar, system, system_path,
-                           command_state, on_program_change, active_program, vr_failure));
-    if (!app_ui->init(renderer->window())) {
-      std::cerr << "warning: ImGui-SFML init failed; F2 UI unavailable this run" << std::endl;
-      app_ui.reset();
-    }
+  app_ui.reset(new AppUi(session, session_path, root_path, sidecar, system, system_path,
+                         command_state, on_program_change, active_program, vr_failure));
+  if (!app_ui->init(renderer->window())) {
+    std::cerr << "warning: ImGui-SFML init failed; F2 UI unavailable this run" << std::endl;
+    app_ui.reset();
   }
   // The hook also serves the `screenshot` verb: it runs after the scene (and ImGui) draw
   // but before the buffer swap, so glReadPixels sees the exact composited frame -- works
-  // even when the physical display is locked or there's no compositor to grab from.
+  // even when the physical display is locked or there's no compositor to grab from. It
+  // runs in the desktop pass, which every frame ends with whether or not a headset is
+  // attached, so both the panel and the screenshot are unconditional now.
   auto save_pending_screenshot = [&] {
     if (command_state.screenshot_path.empty()) {
       return;
@@ -614,15 +596,12 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
     save_window_screenshot(renderer->window(), command_state.screenshot_path);
     command_state.screenshot_path.clear();
   };
-  const bool screenshot_supported = !director.vr_enabled();
-  if (screenshot_supported) {
-    renderer->set_ui_hook([&] {
-      if (app_ui) {
-        app_ui->render(renderer->window());
-      }
-      save_pending_screenshot();
-    });
-  }
+  renderer->set_ui_hook([&] {
+    if (app_ui) {
+      app_ui->render(renderer->window());
+    }
+    save_pending_screenshot();
+  });
   sf::Clock ui_clock;
 
   // System tray icon (Windows) + global Shift+F11 hide-everything toggle (Win32/X11):
@@ -666,6 +645,9 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
 
   try {
     double elapsed_frames_residual = 0;
+    // Playback seconds elapsed since the last presented frame -- the render-mutation
+    // epoch's input (trap 1). Reset every time a frame is rendered.
+    double pending_render_seconds = 0.;
     std::chrono::high_resolution_clock clock;
     // One clock: wall time. (There used to be a second, synthetic one that derived the
     // time from the encoded frame count so a video export could run faster or slower
@@ -699,7 +681,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       // main.cpp's per-frame loop, right after handle_events").
       if (command_channel) {
         handle_commands(*command_channel, director, audio, *theme_bank, app_ui.get(),
-                        screenshot_supported, command_state, command_start_time,
+                        command_state, command_start_time,
                         active_program, on_program_change);
       }
       // MCP tool calls: identical parse + dispatch, reply routed back as the JSON-RPC
@@ -708,7 +690,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
         for (const auto& command : mcp->drain()) {
           auto parsed = command_protocol::parse_command(command.line);
           auto reply = execute_command(parsed, director, audio, *theme_bank, app_ui.get(),
-                                       screenshot_supported, command_state,
+                                       command_state,
                                        command_start_time, active_program,
                                        on_program_change);
           mcp->reply(command.key, reply);
@@ -728,8 +710,8 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
           // Global hide-everything toggle (Shift+F11): only flips the intent; the
           // hidden apply seam below does the actual hide/restore work. Never
           // quits -- that's kQuit's job -- EXCEPT on hotkey-only configurations
-          // (no tray Quit item and no F2 panel: Linux VR, or Linux fullscreen
-          // after a failed ImGui init), where nothing else can ever push kQuit;
+          // (no tray Quit item and no F2 panel: Linux fullscreen after a failed
+          // ImGui init), where nothing else can ever push kQuit;
           // there a press while already hidden quits instead of restoring,
           // preserving the hotkey's old second-press-quits escape hatch as the
           // one orderly exit.
@@ -810,17 +792,12 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
           if (app_ui) {
             app_ui->set_visible(false);
           }
-          // VR: the renderer's sf::Window is a hidden GL-context helper, not the
-          // visible surface -- don't touch it (a setVisible(true) on restore would
-          // pop up a blank window that was never meant to be seen). Content leaves
-          // the headset via the blank render_idle() frames below.
-          if (!director.vr_enabled()) {
-            renderer->window().setVisible(false);
-          }
+          // The window is the visible surface on every run now -- there is no hidden
+          // GL-context helper to spare. Content leaves the HEADSET separately, via the
+          // blank frames the paused/hidden render path submits below.
+          renderer->window().setVisible(false);
         } else {
-          if (!director.vr_enabled()) {
-            renderer->window().setVisible(true);
-          }
+          renderer->window().setVisible(true);
           if (audio.Muted() != pre_hide_muted) {
             audio.ToggleMute();
           }
@@ -896,17 +873,14 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       // window) holds the foreground.
       //
       // The hidden/overlay_on guards are TRANSIENT -- the request legitimately stays
-      // pending across them and fires once the window becomes interactive. Everything
-      // else here is INAPPLICABLE for the whole run (VR has no visible sf::Window to
-      // focus at all), so the request can never be satisfied and must be dropped rather
-      // than left pending forever (#39). Same one-shot semantics either way: the flag
-      // never survives a frame in which it was actionable-or-moot.
+      // pending across them and fires once the window becomes interactive (#39). One-shot:
+      // the flag never survives a frame in which it was actionable. (There is no longer a
+      // whole-run inapplicable case to drop the request for: every run has a real visible
+      // window to focus, headset attached or not.)
       if (command_state.focus_requested && !command_state.hidden &&
           !command_state.overlay_on) {
-        if (!director.vr_enabled()) {
-          renderer->window().requestFocus();
-          focus_window(renderer->window().getNativeHandle());
-        }
+        renderer->window().requestFocus();
+        focus_window(renderer->window().getNativeHandle());
         command_state.focus_requested = false;
       }
       // Mirror live state back to the tray AFTER the apply seams, so the menu's
@@ -943,6 +917,16 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       const bool playback_paused = command_state.paused || command_state.hidden;
       if (playback_paused) {
         playlist.freeze(elapsed_ms);
+      }
+      // The same freeze, for the render-time accumulating state (spiral phase, warp time
+      // base): the render-mutation epoch advances by PLAYBACK elapsed time
+      // (docs/spec-xr-unified.md trap 1), so bank this iteration's wall-clock delta --
+      // nothing at all while paused or hidden -- and hand the whole bank to the next
+      // frame that actually renders. Banked rather than taken straight from elapsed_ms
+      // because iterations that render nothing still consume time: dropping theirs would
+      // slow the spiral down in exactly the configurations that repaint least often.
+      if (!playback_paused) {
+        pending_render_seconds += double(elapsed_ms) / 1000.;
       }
 
       playlist.advance(clock_time(), on_playlist_enter);
@@ -998,14 +982,21 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
         app_ui->update(renderer->window(), ui_clock.restart(), director, audio, *theme_bank);
       }
       if (do_render) {
-        director.render();
+        // playback_paused is the `blank` flag: with the F2 panel existing on every run,
+        // a paused iteration still takes the full render path (do_render stays true so
+        // the panel keeps repainting), and without this it would keep submitting CONTENT
+        // to the headset while paused. The layer decision keys off paused-or-hidden, not
+        // off whether a render happened (trap 9).
+        director.render(pending_render_seconds, playback_paused);
+        pending_render_seconds = 0.;
         show_fresh_frame = false;
       } else if (!renderer->render_idle(playback_paused)) {
-        // Nothing was drawn this iteration. render_idle() runs on EVERY such iteration,
-        // not just the paused ones: the VR frame loop is a handshake with the runtime,
-        // and it must not be coupled to the visual tick rate. do_render only goes true
-        // when a visual frame is due at global_fps (in VR there is no F2 panel to force
-        // a repaint), so gating the runtime handshake on it starves the compositor
+        // Nothing was drawn this iteration -- hidden, or a run whose ImGui init failed
+        // and whose visual frame isn't due yet. render_idle() runs on EVERY such
+        // iteration, not just the paused ones: the VR frame loop is a handshake with the
+        // runtime, and it must not be coupled to the visual tick rate. do_render only
+        // goes true when a visual frame is due at global_fps (or the panel forces a
+        // repaint), so gating the runtime handshake on it starves the compositor
         // outright at a low global_fps -- exactly the case the OpenXR spec's "applications
         // SHOULD keep the frame loop running to maintain synchronisation, even if that
         // means xrEndFrame with no layers" is about. It also matters before the session
@@ -1021,11 +1012,11 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
         // visual frames and strobe the headset.
         //
         // The sleep stays paused-only, exactly as before. render_idle() returning true
-        // means the renderer did its own frame pacing (xrWaitFrame / WaitGetPoses block
-        // to the runtime's cadence), so adding a sleep on top would fight it. Where it
-        // returns false -- the screen window and the no-UI fallback -- only the paused/
-        // hidden case sleeps; unpaused between-frames timing is the longstanding TODO
-        // above, and 10ms granularity would jitter it.
+        // means the XR output did its own frame pacing (xrWaitFrame blocks to the
+        // runtime's cadence), so adding a sleep on top would fight it. Where it returns
+        // false -- no headset attached, or attached with the session not running -- only
+        // the paused/hidden case sleeps; unpaused between-frames timing is the
+        // longstanding TODO above, and 10ms granularity would jitter it.
         if (playback_paused) {
           std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
@@ -1042,11 +1033,11 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   // and the join below cannot hang.
   running = false;
   async_thread.join();
-  // No explicit window().close() here: ~OpenXrRenderer must run while the hidden
-  // window's GL context is still alive -- the runtime holds the hDC/hGLRC handed
-  // over in the graphics binding, and the FBO / xrDestroySwapchain / session
-  // teardown needs that context current. The renderer's destructor (at scope
-  // exit just below, before ~ThemeBank) closes its own window.
+  // No explicit window().close() here: the XR teardown must run while the window's GL
+  // context is still alive -- the runtime holds the hDC/hGLRC handed over in the graphics
+  // binding, and the FBO / xrDestroySwapchain / session teardown needs that context
+  // current. ~ScreenRenderer (at scope exit just below, before ~ThemeBank) detaches the
+  // headset output first and closes the window after.
 }
 
 std::map<std::string, std::string> parse_variables(const std::string& variables)

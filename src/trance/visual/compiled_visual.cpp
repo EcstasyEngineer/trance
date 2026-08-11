@@ -192,7 +192,11 @@ CompiledVisual::CompiledVisual(VisualControl& api, const pattern::Node& root,
   // single-image default so playback never shows a blank frame.
   auto stmts = render_block.empty() ? pattern::default_render_block() : render_block;
   set_render([this, stmts, &api](VisualRender& render) {
-    refresh_stale_registers(api);
+    // Once per FRAME, on its first pass -- never per pass. A refresh mid-frame would let
+    // the two eyes draw DIFFERENT images from the same registers (spec trap 1).
+    if (render.render_mutations_enabled()) {
+      refresh_stale_registers(api);
+    }
     pattern::eval_render(stmts, render, _registers, _node_map, cycler());
   });
 }
@@ -205,9 +209,10 @@ void CompiledVisual::refresh_stale_registers(VisualControl& api)
   // ref-counted, the frame stays perfectly valid, so it displays cleanly rather than
   // failing visibly. Re-pull the ones that have fallen behind.
   //
-  // Done here, once per frame, rather than at the draw site: get_image runs the
-  // selection shuffle on every call, so re-pulling per draw would hand a still register
-  // a different random image every frame (and a different one per eye in stereo). This
+  // Done here, once per frame (on the frame's first pass -- see the call site), rather
+  // than at the draw site: get_image runs the selection shuffle on every call, so
+  // re-pulling per draw would hand a still register a different random image every frame
+  // (and a different one per eye in stereo). This
   // is also why it is not hooked to the `themes` EFFECT -- the playlist's own swap
   // (main.cpp, swaps_to_match_theme) never runs a pattern effect at all, whereas the
   // lane generation is bumped by advance_theme, which every swap goes through.

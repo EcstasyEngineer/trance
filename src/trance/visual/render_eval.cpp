@@ -74,11 +74,16 @@ namespace pattern
       case RenderStmt::Op::Spiral:
         // Spiral speed is a curve-drivable render param (v3): advance the spiral phase by the
         // per-frame speed before drawing, so `spiral speed (curve ...)` reads exactly like zoom.
-        // ... but only once per FRAME: in stereo this whole block is evaluated again for
-        // the second eye, and advancing there too would spin at double speed and leave
-        // the eyes on different angles (VisualRender::render_mutations_enabled).
+        // ... but only once per FRAME, and by the playback time that frame covers: this
+        // whole block is evaluated again for the second eye and again for the desktop
+        // pass, and advancing there too would spin two or three times too fast and leave
+        // the passes on different angles. render_mutation_frames() is the elapsed
+        // playback time in 60Hz reference frames -- the authored rate is per such frame --
+        // so the spiral turns at the same speed whatever rate the frame was presented at,
+        // and freezes (0) while paused (VisualRender::render_mutations_enabled).
         if (!st.speed.empty() && api.render_mutations_enabled()) {
-          api.rotate_spiral(eval_num(st.speed, 0.0, regs, nodes, root));
+          api.rotate_spiral(float(api.render_mutation_frames()) *
+                            eval_num(st.speed, 0.0, regs, nodes, root));
         }
         api.render_spiral();
         break;
@@ -93,10 +98,10 @@ namespace pattern
       case RenderStmt::Op::Warp:
         // v3 wave warp: amp in zoom, wavelength in origin, speed in speed. Set once per frame;
         // image draws later in the block read it. amp 0 => no displacement.
-        // Skipped outright on a stereo frame's second pass: set_warp advances the wave's
-        // time base, so calling it per-eye would animate at double speed. The warp params
-        // it also latches are unchanged between the two passes, so the first pass's values
-        // are still the right ones for both eyes' image draws.
+        // Skipped outright on every pass after the frame's first: set_warp advances the
+        // wave's time base, so calling it per pass would animate two or three times too
+        // fast. The warp params it also latches are unchanged between the passes, so the
+        // first pass's values are still the right ones for the other passes' image draws.
         if (api.render_mutations_enabled()) {
           api.set_warp(eval_num(st.zoom, 0.0, regs, nodes, root),
                        eval_num(st.origin, 0.2, regs, nodes, root),

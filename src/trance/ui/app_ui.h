@@ -132,11 +132,10 @@ public:
   // (the Program section disables itself in that case). `system`/`system_path` are
   // main()'s live System config + where it was loaded from: the System section edits
   // the proto in place and persists straight back to `system_path` via save_system.
-  // `vr_failure` (#41) is empty in the normal case; non-empty when a VR renderer was
-  // REQUESTED but failed to initialize and main.cpp fell back to the desktop window.
-  // It is shown as a persistent banner at the top of the panel -- this UI only exists
-  // in non-VR mode, which is exactly the fallback case, so it can carry the warning
-  // that would otherwise be stderr-only (invisible on a Windows GUI launch).
+  // `vr_failure` (#41) is empty in the normal case; non-empty when no headset output
+  // could be attached at startup (the session still plays on this window -- that is the
+  // unified runtime, not a fallback). It is shown as a persistent banner at the top of
+  // the panel, so the warning is not stderr-only (invisible on a Windows GUI launch).
   // `root_path` is the session's MEDIA root -- the same string ThemeBank resolves its
   // root-relative image paths against (root + "/" + path). The Themes section needs it
   // to turn a listed path into a file it can decode for the hover preview.

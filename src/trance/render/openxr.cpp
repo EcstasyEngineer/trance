@@ -1,16 +1,13 @@
 #include <trance/render/openxr.h>
-#include <common/util.h>
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <string>
 #include <thread>
 
 #pragma warning(push, 0)
-#include <common/trance.pb.h>
-#include <SFML/Graphics.hpp>
-#include <SFML/OpenGL.hpp>
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -99,7 +96,7 @@ namespace
 #endif
 }
 
-OpenXrRenderer::OpenXrRenderer(const trance_pb::System& system)
+XrOutput::XrOutput()
 : _success{false}
 , _width{0}
 , _height{0}
@@ -116,7 +113,6 @@ OpenXrRenderer::OpenXrRenderer(const trance_pb::System& system)
 , _has_content{false}
 {
 #ifdef _WIN32
-  (void) system;
   // Require XR_KHR_opengl_enable before creating anything.
   uint32_t extension_count = 0;
   if (!xr_check(XR_NULL_HANDLE,
@@ -203,35 +199,10 @@ OpenXrRenderer::OpenXrRenderer(const trance_pb::System& system)
     std::cerr << "OpenXR system: " << system_properties.systemName << std::endl;
   }
 
-  // Hidden window owns the OpenGL context. (Phase 2 of docs/spec-xr-unified.md deletes
-  // this window and binds from the visible one instead.)
-  // Vsync stays off unconditionally: xrWaitFrame is the frame pacing authority.
-  //
-  // The context version is REQUESTED explicitly rather than left to SFML's default,
-  // which is 1.1: WglContext only appends WGL_CONTEXT_MAJOR/MINOR_VERSION_ARB when the
-  // request exceeds 1.1, so with the default we never ask for a version at all and
-  // simply accept whatever compatibility context the driver hands out. Under
-  // XR_KHR_opengl_enable that is a correctness problem rather than a performance one:
-  // the runtime publishes a [minApiVersionSupported, maxApiVersionSupported] range
-  // (checked below) and a context outside it is grounds to reject the session. 4.5 sits
-  // inside every desktop runtime's range and is universally available on hardware that
-  // can drive a headset, and the request is safe on anything older -- SFML retries with
-  // successively lower versions, then plain wglCreateContext, if the driver refuses.
-  // Attribute flags stay Default (compatibility) deliberately: SFML's graphics module,
-  // which this pipeline draws through, does not work on a Core profile context.
-  sf::ContextSettings context_settings;
-  context_settings.majorVersion = 4;
-  context_settings.minorVersion = 5;
-  _window.reset(new sf::RenderWindow);
-  _window->create({}, "trance", sf::Style::None, sf::State::Windowed, context_settings);
-  _window->setVerticalSyncEnabled(false);
-  _window->setFramerateLimit(0);
-  _window->setVisible(false);
-  if (!_window->setActive(true)) {
-    std::cerr << "couldn't activate hidden OpenXR OpenGL context" << std::endl;
-  }
-
-  init_glew();
+  // Everything below runs against the GL context that is already current on this thread
+  // -- the visible window's (render.cpp, which requests 4.5-compat explicitly for the
+  // version-range check just below). There is no hidden helper window any more: one
+  // window, one context, two outputs.
 
   // Extension functions aren't loader exports; resolve via xrGetInstanceProcAddr.
   // Calling this before xrCreateSession is mandatory (conformant runtimes return
@@ -461,18 +432,16 @@ OpenXrRenderer::OpenXrRenderer(const trance_pb::System& system)
   }
   _success = true;
 #else
-  (void) system;
-  std::cerr << "OpenXR renderer is currently Windows-only (XR_KHR_opengl_enable Win32 binding)"
+  std::cerr << "OpenXR output is currently Windows-only (XR_KHR_opengl_enable Win32 binding)"
             << std::endl;
 #endif
 }
 
-OpenXrRenderer::~OpenXrRenderer()
+XrOutput::~XrOutput()
 {
-  // GL deletes need a current context; guarded so partial construction is safe.
-  if (_window && !_window->setActive(true)) {
-    std::cerr << "couldn't activate hidden OpenXR OpenGL context" << std::endl;
-  }
+  // The GL deletes below need the window's context current; the caller
+  // (ScreenRenderer::detach_xr) guarantees it. Each handle is guarded so partial
+  // construction -- every one of the early returns above -- tears down safely.
   for (int eye = 0; eye < 2; ++eye) {
     for (auto fbo : _fbo[eye]) {
       glDeleteFramebuffers(1, &fbo);
@@ -494,32 +463,27 @@ OpenXrRenderer::~OpenXrRenderer()
   }
 }
 
-bool OpenXrRenderer::success() const
+bool XrOutput::success() const
 {
   return _success;
 }
 
-bool OpenXrRenderer::vr_enabled() const
+bool XrOutput::session_running() const
 {
-  return true;
+  return _session_running;
 }
 
-uint32_t OpenXrRenderer::view_width() const
-{
-  return _width;
-}
-
-uint32_t OpenXrRenderer::width() const
+uint32_t XrOutput::width() const
 {
   return _width;
 }
 
-uint32_t OpenXrRenderer::height() const
+uint32_t XrOutput::height() const
 {
   return _height;
 }
 
-float OpenXrRenderer::eye_spacing_multiplier() const
+float XrOutput::eye_spacing_multiplier() const
 {
   // The "camera" here is the quad, not a runtime projection: the content spans
   // kQuadWidthMetres at kQuadDistanceMetres,
@@ -539,20 +503,16 @@ float OpenXrRenderer::eye_spacing_multiplier() const
   return 16.f * nominal_far_plane * half_ipd / half_fov_tangent;
 }
 
-void OpenXrRenderer::init()
-{
-}
-
-bool OpenXrRenderer::update()
+XrOutput::Update XrOutput::update()
 {
   if (_instance == XR_NULL_HANDLE) {
-    return true;
+    return Update::Idle;
   }
   if (_lost) {
     // render() hit an unrecoverable swapchain wait failure (see _lost's comment);
-    // exit cleanly like instance loss rather than retrying into a wedged swapchain.
-    std::cerr << "OpenXR swapchain lost; exiting" << std::endl;
-    return false;
+    // detach rather than retrying into a wedged swapchain.
+    std::cerr << "OpenXR swapchain lost; detaching the headset output" << std::endl;
+    return Update::DetachRequested;
   }
   for (;;) {
     XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
@@ -564,12 +524,12 @@ bool OpenXrRenderer::update()
     if (!xr_check(_instance, result, "xrPollEvent")) {
       // A hard event-pump failure means we can no longer see session state
       // changes (STOPPING/EXITING/LOSS_PENDING); treat it like instance loss.
-      std::cerr << "OpenXR event polling failed; exiting" << std::endl;
-      return false;
+      std::cerr << "OpenXR event polling failed; detaching the headset output" << std::endl;
+      return Update::DetachRequested;
     }
     if (event.type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING) {
-      std::cerr << "OpenXR instance loss pending; exiting" << std::endl;
-      return false;
+      std::cerr << "OpenXR instance loss pending; detaching the headset output" << std::endl;
+      return Update::DetachRequested;
     }
     if (event.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
       auto& change = *reinterpret_cast<XrEventDataSessionStateChanged*>(&event);
@@ -581,9 +541,10 @@ bool OpenXrRenderer::update()
             xr_check(_instance, xrBeginSession(_session, &begin_info), "xrBeginSession");
         if (!_session_running) {
           // Runtime says READY but refuses to begin: the HMD would stay black
-          // forever. Terminate cleanly, same as the EXITING path.
-          std::cerr << "OpenXR session failed to begin; exiting" << std::endl;
-          return false;
+          // forever. Detach, same as the EXITING path.
+          std::cerr << "OpenXR session failed to begin; detaching the headset output"
+                    << std::endl;
+          return Update::DetachRequested;
         }
       } else if (change.state == XR_SESSION_STATE_STOPPING) {
         // Mandatory acknowledgement; Quest Link sends STOPPING on doff / Link
@@ -592,28 +553,23 @@ bool OpenXrRenderer::update()
         _session_running = false;
       } else if (change.state == XR_SESSION_STATE_EXITING ||
                  change.state == XR_SESSION_STATE_LOSS_PENDING) {
-        // User quit from the runtime UI / runtime dying; exit cleanly.
-        return false;
+        // User quit from the runtime UI / runtime dying.
+        return Update::DetachRequested;
       }
       // IDLE / SYNCHRONIZED / VISIBLE / FOCUSED: no action.
     }
   }
-  return true;
+  return _session_running ? Update::Running : Update::Idle;
 }
 
-void OpenXrRenderer::render(const std::function<void(State)>& render_fn)
+void XrOutput::render(const std::function<void(Renderer::State)>& render_fn)
 {
-  if (!_session_running) {
-    // No xrWaitFrame throttle available and the hidden window never swaps --
-    // sleep instead of spinning while the runtime gets the session ready.
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    return;
-  }
+  // Only called while update() last reported Running, so there is no not-running case to
+  // anti-spin against here: the desktop pass that follows this one presents, and that
+  // present is what paces the loop when xrWaitFrame doesn't.
   XrFrameState frame_state{XR_TYPE_FRAME_STATE};
   XrFrameWaitInfo wait_info{XR_TYPE_FRAME_WAIT_INFO};
   if (!xr_check(_instance, xrWaitFrame(_session, &wait_info, &frame_state), "xrWaitFrame")) {
-    // Anti-spin if the session breaks under us.
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
     return;
   }
   // xrWaitFrame blocks to the runtime's pacing point -- it replaces WaitGetPoses
@@ -678,8 +634,10 @@ void OpenXrRenderer::render(const std::function<void(State)>& render_fn)
     // Render the app content once per eye; the opposite eye_offset shear between
     // the two passes is the entire stereo effect (the quads themselves are posed
     // identically). The debug HUD only draws for State::NONE, so it never lands in
-    // the VR quads.
-    render_fn(eye ? State::VR_RIGHT : State::VR_LEFT);
+    // the VR quads. Accumulating render-time state advances on the frame's FIRST pass
+    // only and by playback elapsed time (Director's mutation epoch, trap 1), so both
+    // eyes -- and the desktop pass after them -- draw identical content.
+    render_fn(eye ? Renderer::State::VR_RIGHT : Renderer::State::VR_LEFT);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
   }
 
@@ -716,7 +674,7 @@ void OpenXrRenderer::render(const std::function<void(State)>& render_fn)
   _has_content = true;
 }
 
-void OpenXrRenderer::fill_quads(XrCompositionLayerQuad (&quads)[2]) const
+void XrOutput::fill_quads(XrCompositionLayerQuad (&quads)[2]) const
 {
   // Head-locked stereo quads: identical identity-orientation pose and size in VIEW
   // space, one per eye, differing only in eyeVisibility and source swapchain. The
@@ -743,7 +701,7 @@ void OpenXrRenderer::fill_quads(XrCompositionLayerQuad (&quads)[2]) const
   }
 }
 
-bool OpenXrRenderer::render_idle(bool blank)
+bool XrOutput::render_idle(bool blank)
 {
   // Keep-alive for any iteration that drew nothing: a running session must keep the
   // xrWaitFrame/xrBeginFrame/xrEndFrame loop going regardless of whether the app has
@@ -762,8 +720,9 @@ bool OpenXrRenderer::render_idle(bool blank)
     return false;
   }
   if (!_session_running) {
-    // Same anti-spin as render(): no xrWaitFrame pacing available while the
-    // runtime holds the session out of the running state.
+    // Attached-idle: no xrWaitFrame to block on while the runtime holds the session out
+    // of the running state, and this path presents nothing either -- so sleep rather
+    // than spin. (Phase 3 restores the desktop's own pacing for this sub-state, trap 11.)
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
     return true;
   }

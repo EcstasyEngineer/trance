@@ -294,7 +294,9 @@ void AppUi::draw_status_section(Director& director, Audio& audio, const ThemeBan
   // new Director accessor for it.
   const auto& program = director.program();
   ImGui::Text("global fps (config): %u", program.global_fps());
-  ImGui::Text("vr enabled: %s", director.vr_enabled() ? "yes" : "no");
+  // "is a headset being fed alongside this window", not a mode: the panel, and the
+  // desktop pass it draws on, exist either way.
+  ImGui::Text("headset attached: %s", director.vr_enabled() ? "yes" : "no");
   ImGui::Text("visual: %s", director.status_visual_name().c_str());
 
   // Same content breakdown as the F1 overlay, and for the same reason: an all-gif theme

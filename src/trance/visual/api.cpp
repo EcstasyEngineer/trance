@@ -250,7 +250,12 @@ void VisualApiImpl::render_image(const Image& image, float alpha, float zoom_ori
 void VisualApiImpl::render_image_raw(const Image& image, float alpha, float zoom_origin,
                                      float zoom, ThemeSlot slot) const
 {
-  _debug_layers.push_back({alpha, slot});
+  // Debug capture is a per-FRAME tally, so it records on the frame's first pass only:
+  // pushing per pass would triple the F1 overlay's layer count the moment a headset
+  // attached (trap 1). The later passes redraw the identical layers.
+  if (_director.render_mutations_enabled()) {
+    _debug_layers.push_back({alpha, slot});
+  }
   _director.render_image(image, alpha, zoom_origin, zoom_intensity(zoom_origin, zoom));
 }
 
@@ -267,7 +272,9 @@ void VisualApiImpl::render_text(float zoom_origin, float zoom, float shadow_zoom
   if (!size.x || !size.y) {
     return;
   }
-  auto target_x = _director.vr_enabled() ? 3.f / 8.f : 5.f / 8.f;
+  // Per PASS, not per run (trap 2): the same frame's eye passes and desktop pass want
+  // different text targets, since the headset quad subtends a far wider field.
+  auto target_x = _director.vr_pass() ? 3.f / 8.f : 5.f / 8.f;
   auto target_y = 1.f / 3.f;
   auto scale = std::min(target_x / size.x, target_y / size.y);
 
@@ -285,7 +292,7 @@ void VisualApiImpl::render_subtext(float alpha, float zoom_origin) const
     return;
   }
   const auto& font = _font_cache.get_font(_current_subfont);
-  auto target_y = _director.vr_enabled() ? 1.f / 32.f : 1.f / 16.f;
+  auto target_y = _director.vr_pass() ? 1.f / 32.f : 1.f / 16.f;
 
   sf::Vector2f size;
   std::string text;
@@ -338,7 +345,7 @@ void VisualApiImpl::render_small_subtext(float alpha, float zoom_origin) const
   if (!size.x || !size.y) {
     return;
   }
-  auto target_y = _director.vr_enabled() ? 1.f / 24.f : 1.f / 8.f;
+  auto target_y = _director.vr_pass() ? 1.f / 24.f : 1.f / 8.f;
   auto scale = target_y / size.y;
 
   auto colour = colour2sf(_director.program().shadow_text_colour());
@@ -366,6 +373,11 @@ void VisualApiImpl::set_theme_audio_volume(float volume)
 bool VisualApiImpl::render_mutations_enabled() const
 {
   return _director.render_mutations_enabled();
+}
+
+double VisualApiImpl::render_mutation_frames() const
+{
+  return _director.render_mutation_frames();
 }
 
 void VisualApiImpl::set_warp(float amp, float wavelength, float speed)

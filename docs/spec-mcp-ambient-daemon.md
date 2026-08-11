@@ -222,9 +222,10 @@ Status:
 Debug/validation (same line protocol, not part of the settings surface proper):
 - **`ui on|off`** — show/hide the F2 ImGui panels remotely (same state the F2 key
   toggles; `ui on` also un-hides and disengages the overlay, since a panel on an invisible
-  or click-through window is unreachable); `err ... unavailable in this mode (VR)` in
-  modes with no UI (VR only — the panel exists in `--overlay` runs, where `ui on`
-  disengages the overlay to reach it).
+  or click-through window is unreachable); `err ... unavailable` only when the ImGui
+  backend failed to initialize, which is the one way a run has no panel at all (the panel
+  exists in `--overlay` runs, where `ui on` disengages the overlay to reach it, and in
+  runs with a headset attached, where it lives on the desktop window's own pass).
 - **`screenshot FILE.png`** — dump the next fully-composited rendered frame (scene + UI,
   pre-swap glReadPixels) to a PNG. Works when the physical display is locked/headless —
   this is what makes remote visual validation possible without keyboard access.

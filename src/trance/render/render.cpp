@@ -1,5 +1,6 @@
 #include <trance/render/render.h>
 #include <trance/platform/display_info.h>
+#include <trance/render/openxr.h>
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
@@ -131,7 +132,23 @@ ScreenRenderer::ScreenRenderer(const trance_pb::System& system, const OverlayCon
   // system.windowed() -- an overlay that isn't fullscreen-borderless can't sit over
   // the whole desktop.
   auto style = (overlay.enabled || !system.windowed()) ? sf::Style::None : sf::Style::Default;
-  _window->create(video_mode, "trance", style);
+  // The context version is REQUESTED explicitly rather than left to SFML's default,
+  // which is 1.1: WglContext only appends WGL_CONTEXT_MAJOR/MINOR_VERSION_ARB when the
+  // request exceeds 1.1, so with the default we never ask for a version at all and
+  // simply accept whatever compatibility context the driver hands out. That is a
+  // correctness problem for the XR output this window's context also feeds (trap 4):
+  // XR_KHR_opengl_enable runtimes publish a [minApiVersionSupported,
+  // maxApiVersionSupported] range (XrOutput checks it) and a context outside it is
+  // grounds to reject the session. 4.5 sits inside every desktop runtime's range and is
+  // universally available on hardware that can drive a headset, and the request is safe
+  // on anything older -- SFML retries with successively lower versions, then plain
+  // wglCreateContext, if the driver refuses. Attribute flags stay Default
+  // (compatibility) deliberately: SFML's graphics module, which this pipeline draws
+  // through, does not work on a Core profile context.
+  sf::ContextSettings context_settings;
+  context_settings.majorVersion = 4;
+  context_settings.minorVersion = 5;
+  _window->create(video_mode, "trance", style, sf::State::Windowed, context_settings);
   // Overlay mode: input passes through to whatever's beneath (platform/overlay_hints),
   // so there's nothing for this window to usefully grab the cursor for.
   _window->setMouseCursorGrabbed(!overlay.enabled);
@@ -165,9 +182,54 @@ ScreenRenderer::ScreenRenderer(const trance_pb::System& system, const OverlayCon
   init_glew();
 }
 
+ScreenRenderer::~ScreenRenderer()
+{
+  // Explicit, and BEFORE ~Renderer takes the window (and its GL context) away: the XR
+  // teardown is GL-bound, so it has to happen while this object's own window is still
+  // alive and current (trap 5). Member destruction alone would get the order right --
+  // _xr is a derived member, _window a base one -- but not the "context current" half.
+  detach_xr();
+}
+
+bool ScreenRenderer::attach_xr()
+{
+  if (_xr) {
+    return true;
+  }
+  // XrOutput binds to whatever GL context is current on this thread, so make sure it is
+  // ours before it looks (wglGetCurrentDC/Context). Nothing else in the process owns a
+  // context any more -- the hidden helper window is gone.
+  if (!_window->setActive(true)) {
+    std::cerr << "couldn't activate window OpenGL context for OpenXR" << std::endl;
+    return false;
+  }
+  std::unique_ptr<XrOutput> xr{new XrOutput};
+  if (!xr->success()) {
+    // Every failure leaf has already printed its specific diagnosis (no runtime
+    // registered / registered but unreachable / no HMD). Destroying it here, with the
+    // context still current, is also what releases the loader's instance.
+    return false;
+  }
+  std::cerr << "OpenXR attached: " << xr->width() << "x" << xr->height() << " per eye"
+            << std::endl;
+  _xr = std::move(xr);
+  return true;
+}
+
+void ScreenRenderer::detach_xr()
+{
+  if (!_xr) {
+    return;
+  }
+  if (!_window->setActive(true)) {
+    std::cerr << "couldn't activate window OpenGL context for OpenXR teardown" << std::endl;
+  }
+  _xr.reset();
+}
+
 bool ScreenRenderer::vr_enabled() const
 {
-  return false;
+  return _xr != nullptr;
 }
 
 uint32_t ScreenRenderer::view_width() const
@@ -177,17 +239,19 @@ uint32_t ScreenRenderer::view_width() const
 
 uint32_t ScreenRenderer::width() const
 {
-  return _window->getSize().x;
+  return _pass == State::NONE ? _window->getSize().x : _xr->width();
 }
 
 uint32_t ScreenRenderer::height() const
 {
-  return _window->getSize().y;
+  return _pass == State::NONE ? _window->getSize().y : _xr->height();
 }
 
 float ScreenRenderer::eye_spacing_multiplier() const
 {
-  return 1.f;
+  // Only ever consumed on an eye pass (Director::eye_offset zeroes the shear on NONE),
+  // but answer for the pass anyway rather than for the attachment.
+  return _pass == State::NONE ? 1.f : _xr->eye_spacing_multiplier();
 }
 
 void ScreenRenderer::init()
@@ -201,16 +265,62 @@ void ScreenRenderer::init()
 
 bool ScreenRenderer::update()
 {
+  if (_xr && _xr->update() == XrOutput::Update::DetachRequested) {
+    // The seam phase 4 completes: the XR side comes down here, with the context current,
+    // and the desktop is meant to keep playing while a background probe re-attaches.
+    // Until that lands, a detach request still ends the run -- exactly what the VR-mode
+    // renderer's `update() == false` did, minus taking the window with it.
+    detach_xr();
+    return false;
+  }
   return true;
 }
 
-void ScreenRenderer::render(const std::function<void(State)>& render_fn)
+void ScreenRenderer::render(const std::function<void(State)>& render_fn, bool blank)
 {
+  // 1. The eye passes, when a headset is attached and its session is actually running.
+  //    `blank` (paused/hidden) submits a layerless frame instead of drawing: the
+  //    handshake stays alive so the runtime never flags us unresponsive, and the content
+  //    genuinely vanishes from the headset rather than freezing head-locked in front of
+  //    the user's eyes (D8, trap 9). Note this keys off paused/hidden, NOT off whether a
+  //    render happened -- the F2 panel keeps the desktop repainting while paused, and
+  //    that must not put content back in the headset.
+  if (_xr && _xr->session_running()) {
+    if (blank) {
+      _xr->render_idle(true);
+    } else {
+      _xr->render([&](State state) {
+        _pass = state;
+        render_fn(state);
+      });
+    }
+  }
+  // 2. The desktop pass, ALWAYS -- no XR early-out above may skip it (trap 10), which is
+  //    why it sits outside every branch rather than in an else. It re-establishes its own
+  //    GL state instead of inheriting it: the eye passes leave an eye-sized viewport and
+  //    a swapchain FBO bound, and FRAMEBUFFER_SRGB stays disabled here for the same
+  //    reason it is disabled there -- the pipeline writes gamma-encoded bytes and the
+  //    default framebuffer is not sRGB-typed, so this is a straight passthrough (trap 3).
+  //    The desktop is a third render pass, never a blit from an eye texture (D4).
+  _pass = State::NONE;
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  glDisable(GL_FRAMEBUFFER_SRGB);
+  glViewport(0, 0, GLsizei(_window->getSize().x), GLsizei(_window->getSize().y));
   glClear(GL_COLOR_BUFFER_BIT);
   render_fn(State::NONE);
   if (_ui_hook) {
     _ui_hook();
   }
   _window->display();
+}
+
+bool ScreenRenderer::render_idle(bool blank)
+{
+  // Nothing was drawn this iteration (hidden, or between visual frames with no UI to
+  // repaint). The window has nothing to present, but a running XR session still owes the
+  // runtime its frame.
+  if (_xr && _xr->session_running()) {
+    return _xr->render_idle(blank);
+  }
+  return false;
 }

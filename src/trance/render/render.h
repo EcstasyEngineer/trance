@@ -21,6 +21,7 @@ namespace trance_pb
 {
   class System;
 }
+class XrOutput;
 
 GLuint compile(const std::string& vertex_text, const std::string& fragment_text);
 void init_glew();
@@ -48,7 +49,14 @@ public:
   virtual ~Renderer() = default;
 
   sf::RenderWindow& window();
+  // An XR output is attached, i.e. a headset is being fed alongside the window. NOT a
+  // mode: the desktop pass runs either way, and every per-pass question (image scale,
+  // text targets, eye shear) asks Director::vr_pass() about the CURRENT pass instead.
   virtual bool vr_enabled() const = 0;
+  // Dimensions of the pass currently being rendered -- the eye swapchain's during
+  // VR_LEFT/VR_RIGHT, the window's during NONE (and whenever no pass is running, which
+  // is what startup sizing reads). With both outputs live these genuinely differ per
+  // pass, so nothing may cache them across a frame (trap 2).
   virtual uint32_t view_width() const = 0;
   virtual uint32_t width() const = 0;
   virtual uint32_t height() const = 0;
@@ -56,12 +64,18 @@ public:
 
   virtual void init() = 0;
   virtual bool update() = 0;
-  virtual void render(const std::function<void(State)>& render_fn) = 0;
+  // Renders one frame: the eye passes (when a headset is attached and its session is
+  // running) followed ALWAYS by the desktop pass -- no XR failure or early-out may skip
+  // the latter (trap 10). `blank` means the content must not be VISIBLE in the headset
+  // this frame (paused/hidden): the eye submission goes layerless so the headset empties
+  // instead of freezing, while the desktop pass repaints as usual so the F2 panel stays
+  // live (D8, trap 9).
+  virtual void render(const std::function<void(State)>& render_fn, bool blank) = 0;
 
   // Frame-loop keep-alive for any iteration where the main loop drew nothing -- paused,
   // hidden, or simply between visual frames. Returns true if the renderer performed its
-  // own frame pacing (so the caller must not add an anti-spin sleep); the default no-op
-  // returns false. Only the XR backend overrides it.
+  // own frame pacing (so the caller must not add an anti-spin sleep); with no headset
+  // attached there is nothing to keep alive and it returns false.
   //
   // WHY it must run even when not paused: a VR frame loop is a handshake with the
   // runtime, not a consequence of having something new to draw. A running OpenXR session
@@ -71,14 +85,8 @@ public:
   // frame being due at global_fps -- makes the runtime flag the app unresponsive and
   // drops the headset to the grey void.
   //
-  // `blank` distinguishes the two reasons for having nothing to draw, and the distinction
-  // is load-bearing:
-  //   true  (paused/hidden) -- the content should stop being visible. The submission
-  //         becomes layerCount=0: the handshake stays alive AND the content goes away, so
-  //         `hide` genuinely vanishes in the headset instead of freezing there.
-  //   false (merely between visual frames) -- the content must stay exactly as it is.
-  //         Submitting layerless frames here would blank the view on every gap between
-  //         visual frames, strobing the headset at (runtime rate - global_fps).
+  // `blank` carries the same meaning as render()'s: paused/hidden submits layerlessly,
+  // merely-between-visual-frames re-presents the last quads (see XrOutput::render_idle).
   virtual bool render_idle(bool blank)
   {
     (void) blank;
@@ -89,8 +97,9 @@ public:
   // 2D UI (the F2 ImGui panels) composites onto the same frame it belongs to. Calling
   // display() again outside render() instead double-swaps: the UI lands on the previous
   // frame's back buffer, strobing the UI at half rate and ping-ponging the scene one
-  // frame back every other swap. Only ScreenRenderer honours it (VR renders per-eye,
-  // with no single flat pass to composite onto).
+  // frame back every other swap. It runs in the desktop (NONE) pass only -- the eye
+  // passes are per-eye targets with no flat 2D surface to composite onto, which is also
+  // why the F2 panel and the F1 HUD never appear in the headset.
   void set_ui_hook(std::function<void()> hook) { _ui_hook = std::move(hook); }
 
 protected:
@@ -98,10 +107,26 @@ protected:
   std::function<void()> _ui_hook;
 };
 
+// The only renderer: it owns the one visible window and its GL context, and optionally an
+// XrOutput fed from that same context (docs/spec-xr-unified.md sec 1). There is no
+// renderer selection and no VR mode -- attaching a headset adds two passes to the frame,
+// it does not replace the window.
 class ScreenRenderer : public Renderer
 {
 public:
   ScreenRenderer(const trance_pb::System& system, const OverlayConfig& overlay = {});
+  ~ScreenRenderer() override;
+
+  // Attempt to attach a headset output to this window's context. Returns false (having
+  // printed the OpenXR diagnosis chain -- no runtime registered / registered but
+  // unreachable / no HMD) when there is nothing to attach to; the window plays on
+  // regardless. Startup-only in phase 2; phase 4 makes it a repeating background probe.
+  bool attach_xr();
+  // Tear the XR side down with this window's GL context current (trap 5): the runtime
+  // holds the hDC/hGLRC from the graphics binding, and the FBO deletes plus the
+  // swapchain/session teardown are all GL-bound. Same ordering at detach time as at
+  // process exit -- which is why the destructor routes through here too.
+  void detach_xr();
 
   bool vr_enabled() const override;
   uint32_t view_width() const override;
@@ -111,7 +136,19 @@ public:
 
   void init() override;
   bool update() override;
-  void render(const std::function<void(State)>& render_fn) override;
+  void render(const std::function<void(State)>& render_fn, bool blank) override;
+  bool render_idle(bool blank) override;
+
+private:
+  // Held by pointer through an incomplete type on purpose: openxr.h needs Renderer::State
+  // for its per-eye render callback, so it includes this header -- and a member of a
+  // forward-declared class is what keeps that from becoming a cycle. The destructor,
+  // attach and detach all live in render.cpp, which has the full definition.
+  std::unique_ptr<XrOutput> _xr;
+  // The pass being rendered right now, so the per-pass dimension accessors above can
+  // answer for it. NONE outside render(), which is what makes startup sizing read the
+  // window.
+  State _pass = State::NONE;
 };
 
 #endif
