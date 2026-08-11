@@ -15,6 +15,12 @@ cmake_install.cmake
 CTestTestfile.cmake
 compile_commands.json
 
+# Local packaging/dependency output (cmake --install --prefix dist; stray in-source
+# vcpkg manifest installs — real ones live under build/).
+dist/
+vcpkg_installed/
+
 # Runtime-generated config written next to the binary (not source).
 system.cfg
 system.json
+imgui.ini
