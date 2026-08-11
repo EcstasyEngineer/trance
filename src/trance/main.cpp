@@ -114,6 +114,24 @@ void show_control_panel(CommandRuntimeState& state, AppUi* app_ui);
 void handle_events(std::atomic<bool>& running, sf::RenderWindow& window, Director& director,
                    Audio& audio, AppUi* app_ui, CommandRuntimeState& state)
 {
+  // TRAP 7 OBSERVATION POINT (docs/spec-xr-unified.md). Dragging or resizing the window by
+  // its border puts Windows into a MODAL move/size loop INSIDE this pollEvent call: the OS
+  // runs its own message loop and does not return until the mouse is released, so the
+  // whole frame loop below -- including XR submission -- stalls for the duration of the
+  // drag. Nothing SFML-specific; SDL3 has exactly the same pump, so phase 6 does not fix
+  // it either.
+  //
+  // Status: NOT measured on hardware. The stall's existence is a property of the Win32
+  // modal loop and needs no measurement; what phase 3 was asked to measure is whether the
+  // runtime's reprojection covers it acceptably, and that reading only exists with a
+  // headset attached (drag the window for several seconds during playback, watch the
+  // runtime performance overlay's reprojection/stale-frame counters). It belongs to the
+  // spec's §5 QA matrix pass, and no code is added here on speculation: the standard fix
+  // is a WM_ENTERSIZEMOVE timer pumping the frame from inside the modal loop, and the
+  // bigger hammer is the XR render thread that trap 8 already names as the escalation
+  // path. Whichever is chosen should be chosen from the measurement, not from this
+  // comment. Note also that this only affects a WINDOWED run: the default (and the
+  // overlay) is borderless fullscreen, which has no drag handles at all.
   while (const std::optional event = window.pollEvent()) {
     // ImGui gets first look at input so clicks/typing inside its panels don't also
     // fall through to the F-key/Escape handling below. Null only when the ImGui backend
@@ -976,10 +994,32 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       // the hide seam anyway; the idle branch below takes over. show_fresh_frame
       // guarantees the first post-restore iteration repaints even when playback
       // stays paused, so the un-hidden window is never stale/black.
+      //
+      // desktop_pass: whether director.render() below will run its desktop pass at all,
+      // decided ONCE here (the renderer latches it) because two things downstream need
+      // the same answer. It goes false only when the window is minimized while a headset
+      // paces the loop -- the headset keeps running at native rate behind a minimized
+      // window (D6), and the pass that nothing can see is the part that gets dropped.
+      // Both users:
+      //   - the ImGui frame must not START if the pre-display hook that renders it will
+      //     never run: ImGui::SFML::Update calls NewFrame, and a second NewFrame with no
+      //     Render in between is an ImGui error-recovery case, not a skipped panel.
+      //   - show_fresh_frame is only DISCHARGED by a desktop pass, since it exists to
+      //     guarantee the visible window isn't stale.
+      // A pending screenshot forces the pass back on: the verb has been acknowledged and
+      // only the hook inside that pass can consume it (trap 15).
+      const bool desktop_pass =
+          renderer->desktop_pass_due(!command_state.screenshot_path.empty());
       const bool do_render = update || (app_ui != nullptr && !command_state.hidden) ||
           show_fresh_frame || !command_state.screenshot_path.empty();
-      if (app_ui && do_render) {
+      if (app_ui && do_render && desktop_pass) {
         app_ui->update(renderer->window(), ui_clock.restart(), director, audio, *theme_bank);
+      } else if (app_ui && !desktop_pass) {
+        // Frozen panel: drop the skipped iterations' time on the floor instead of banking
+        // it into the delta the first post-restore frame gets. Everything the panel times
+        // off dt (row tweens, the export/system status TTLs, the autosave retry backoff)
+        // would otherwise expire in a single frame after a long minimize.
+        ui_clock.restart();
       }
       if (do_render) {
         // playback_paused is the `blank` flag: with the F2 panel existing on every run,
@@ -989,7 +1029,12 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
         // off whether a render happened (trap 9).
         director.render(pending_render_seconds, playback_paused);
         pending_render_seconds = 0.;
-        show_fresh_frame = false;
+        if (desktop_pass) {
+          // Only a desktop pass repaints the window, so only a desktop pass settles the
+          // debt. A minimized frame rendered the eyes and nothing else; whenever the
+          // window comes back it is still owed its fresh frame.
+          show_fresh_frame = false;
+        }
       } else if (!renderer->render_idle(playback_paused)) {
         // Nothing was drawn this iteration -- hidden, or a run whose ImGui init failed
         // and whose visual frame isn't due yet. render_idle() runs on EVERY such

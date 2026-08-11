@@ -54,7 +54,8 @@ public:
   //   Idle -- attached, but the runtime holds the session out of the running state
   //     (pre-READY, or a STOPPING that was acknowledged on doff / Link close). Nothing
   //     may be submitted and there is NO xrWaitFrame to block on, so the desktop side
-  //     must keep pacing the loop (trap 11, wired in phase 3).
+  //     must keep pacing the loop -- which is why ScreenRenderer::sync_pacing() keys the
+  //     vsync/limiter restore off session_running() and not off being attached (trap 11).
   //   DetachRequested -- every failure that used to quit the app: instance loss, a
   //     wedged swapchain, event-pump death, EXITING/LOSS_PENDING. Phase 4 turns this
   //     into "tear the XR side down and keep playing on the desktop, then re-probe";

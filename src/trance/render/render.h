@@ -143,6 +143,23 @@ public:
   // process exit -- which is why the destructor routes through here too.
   void detach_xr();
 
+  // Decides -- and LATCHES, for the next render() -- whether that frame's desktop (NONE)
+  // pass and its buffer swap run at all (D6, trap 13). They are skipped only while the
+  // window is minimized AND the headset is pacing the loop: the point of the skip is that
+  // a minimized window must not be able to hold the headset back, and where there is no
+  // headset the desktop present is the loop's ONLY pacer, so skipping it would replace a
+  // blocked swap with a hot spin. Everything else about the frame is unaffected -- the eye
+  // passes, the event pump, audio and the content tick all run exactly as when visible.
+  //
+  // `force` is a pending screenshot (trap 15): the verb has already been acknowledged and
+  // is consumed by the pre-display UI hook, which only runs inside the desktop pass, so
+  // without this an acknowledged screenshot would hang forever behind a minimized window.
+  //
+  // LATCHED rather than re-asked inside render() because the caller has to make the same
+  // decision for the ImGui frame: starting a frame the desktop pass never renders leaves
+  // ImGui's NewFrame/Render pairing broken. One answer, one iteration, both users.
+  bool desktop_pass_due(bool force);
+
   bool vr_enabled() const override;
   uint32_t view_width() const override;
   uint32_t width() const override;
@@ -156,6 +173,18 @@ public:
   bool render_idle(bool blank) override;
 
 private:
+  // The one condition under which xrWaitFrame is the loop's pacer (D5): a headset is
+  // attached AND its session is actually running. Attached-idle -- pre-READY, or a
+  // STOPPING acknowledged on doff / Link close -- has no xrWaitFrame to block on and so
+  // still needs the desktop's pacing (trap 11), which is exactly why this asks
+  // session_running() rather than just whether an XrOutput exists.
+  bool xr_paces() const;
+  // Push the pacing that xr_paces() implies onto the window, if it isn't already there:
+  // forced off while XR paces, restored to the system.json-derived values otherwise.
+  // Called on every state transition that can change the answer -- attach, detach, and
+  // each update() (which is where running<->idle flips).
+  void sync_pacing();
+
   // Held by pointer through an incomplete type on purpose: openxr.h needs Renderer::State
   // for its per-eye render callback, so it includes this header -- and a member of a
   // forward-declared class is what keeps that from becoming a cycle. The destructor,
@@ -165,6 +194,19 @@ private:
   // answer for it. NONE outside render(), which is what makes startup sizing read the
   // window.
   State _pass = State::NONE;
+  // The desktop pacing this window was configured with at startup, kept so it can be put
+  // back on detach and in attached-idle. Read from system.json once, in the constructor,
+  // rather than re-derived later: display_refresh_hz() is a live mode-table read and a
+  // mid-run refresh change must not silently become a different restore value than the
+  // one the run started with.
+  bool _vsync;
+  uint32_t _framerate_limit;
+  // Whether the pacing currently pushed onto the window is the XR one (forced off).
+  // Starts false: the constructor applies the desktop pacing itself.
+  bool _xr_pacing = false;
+  // desktop_pass_due()'s latched answer, consumed by render(). True by default so a
+  // render() that was never preceded by the query behaves exactly as it always did.
+  bool _desktop_pass = true;
 };
 
 #endif

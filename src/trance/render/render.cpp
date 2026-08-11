@@ -11,10 +11,35 @@
 #include <common/trance.pb.h>
 #include <SFML/Graphics.hpp>
 #include <SFML/OpenGL.hpp>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #pragma warning(pop)
 
 namespace
 {
+  // Is the window minimized to the taskbar, i.e. is there no pixel of it on screen that a
+  // present could possibly reach? Only minimization, deliberately: a fully occluded or
+  // DWM-cloaked window (one on another virtual desktop) answers false here and keeps
+  // presenting (trap 13). Extending this to occlusion would mean DwmGetWindowAttribute
+  // cloaking checks plus an occlusion query, and the spec's T5 soak is what decides
+  // whether that is needed at all -- with swap-interval forced off (D5) a swap to an
+  // invisible surface should already be effectively free, and the minimize case is only
+  // handled because it is the one state where drivers are known to behave differently
+  // (some throttle or stall the swap chain outright).
+  bool window_is_minimized(sf::RenderWindow& window)
+  {
+#ifdef _WIN32
+    return IsIconic(static_cast<HWND>(window.getNativeHandle())) != FALSE;
+#else
+    // X11 has no cheap equivalent (it means reading WM_STATE / _NET_WM_STATE_HIDDEN off
+    // the window, per-frame), and the throttling drivers this guards against are the
+    // Windows ones. Presenting to a minimized window on X11 costs what it always has.
+    (void) window;
+    return false;
+#endif
+  }
+
   void compile_shader(GLuint shader)
   {
     glCompileShader(shader);
@@ -152,7 +177,6 @@ ScreenRenderer::ScreenRenderer(const trance_pb::System& system, const OverlayCon
   // Overlay mode: input passes through to whatever's beneath (platform/overlay_hints),
   // so there's nothing for this window to usefully grab the cursor for.
   _window->setMouseCursorGrabbed(!overlay.enabled);
-  _window->setVerticalSyncEnabled(system.enable_vsync());
   // Presentation cap -- the ONLY thing in the engine that bounds how many frames get
   // drawn and swapped. global_fps does not: the main loop drains however many content
   // ticks elapsed wall-clock bought and then presents at most once per iteration, and on
@@ -166,8 +190,16 @@ ScreenRenderer::ScreenRenderer(const trance_pb::System& system, const OverlayCon
   // previously no cap at all -- the loop free-spun the GPU rendering frames the panel
   // can never show -- so fall back to the display's own rate there. Unknown rate (off
   // Windows, display_info.h) keeps the old uncapped behaviour rather than inventing one.
+  //
+  // Both values are REMEMBERED (_vsync/_framerate_limit), because attaching a headset
+  // takes them away and detaching has to put them back: while an XR session is running,
+  // xrWaitFrame is the sole pacer and neither a blocking swap nor a sleeping limiter may
+  // add a second one (D5, sync_pacing below).
   const uint32_t refresh_hz = display_refresh_hz();
-  _window->setFramerateLimit(system.enable_vsync() ? 0 : refresh_hz);
+  _vsync = system.enable_vsync();
+  _framerate_limit = _vsync ? 0 : refresh_hz;
+  _window->setVerticalSyncEnabled(_vsync);
+  _window->setFramerateLimit(_framerate_limit);
   _window->setVisible(false);
   if (!_window->setActive(true)) {
     std::cerr << "couldn't activate window OpenGL context" << std::endl;
@@ -213,6 +245,11 @@ bool ScreenRenderer::attach_xr()
   std::cerr << "OpenXR attached: " << xr->width() << "x" << xr->height() << " per eye"
             << std::endl;
   _xr = std::move(xr);
+  // Normally a no-op: a freshly created session is not RUNNING yet, so this attach lands
+  // in attached-idle and the desktop keeps pacing until the runtime says READY (trap 11).
+  // Called anyway rather than left to the first update(), so that the pacing is never a
+  // function of which call happened to run first.
+  sync_pacing();
   return true;
 }
 
@@ -225,6 +262,47 @@ void ScreenRenderer::detach_xr()
     std::cerr << "couldn't activate window OpenGL context for OpenXR teardown" << std::endl;
   }
   _xr.reset();
+  // The pacer just went away: without this the loop would present as fast as the GPU
+  // allows, with nothing left blocking anywhere (D5's restore -- the detach half; the
+  // attached-idle half rides on update()).
+  sync_pacing();
+}
+
+bool ScreenRenderer::xr_paces() const
+{
+  return _xr != nullptr && _xr->session_running();
+}
+
+void ScreenRenderer::sync_pacing()
+{
+  const bool xr = xr_paces();
+  if (xr == _xr_pacing) {
+    return;
+  }
+  _xr_pacing = xr;
+  // Both calls go through the window's GL context, which is current on this thread for
+  // every caller (update() runs in the main loop; attach/detach make it active first).
+  if (xr) {
+    // xrWaitFrame is the sole pacer now. Vsync would peg the whole loop -- headset
+    // included -- to the MONITOR's refresh (90Hz headset on a 60Hz screen presents at
+    // 60), and SFML's limiter is a sleep, which would do the same in software.
+    _window->setVerticalSyncEnabled(false);
+    _window->setFramerateLimit(0);
+  } else {
+    // Detached, or attached-idle: there is no xrWaitFrame to block on, so the desktop
+    // pacing is the only thing standing between this loop and a hot spin (trap 11).
+    _window->setVerticalSyncEnabled(_vsync);
+    _window->setFramerateLimit(_framerate_limit);
+  }
+}
+
+bool ScreenRenderer::desktop_pass_due(bool force)
+{
+  // See the declaration. Note the xr_paces() term: with no headset running, the desktop
+  // present is the loop's pacer, so it is never skipped -- which is also what keeps a
+  // desktop-only run byte-for-byte the behaviour it had before this existed.
+  _desktop_pass = force || !xr_paces() || !window_is_minimized(*_window);
+  return _desktop_pass;
 }
 
 bool ScreenRenderer::vr_enabled() const
@@ -283,6 +361,10 @@ bool ScreenRenderer::update()
     detach_xr();
     return false;
   }
+  // The event pump above is where the session flips between RUNNING and not, so this is
+  // the seam that catches BOTH halves of D5's restore: the running->idle direction (doff,
+  // Link close, pre-READY startup -- trap 11's hot-spin) and idle->running.
+  sync_pacing();
   return true;
 }
 
@@ -312,7 +394,18 @@ void ScreenRenderer::render(const std::function<void(State)>& render_fn, bool bl
   //    reason it is disabled there -- the pipeline writes gamma-encoded bytes and the
   //    default framebuffer is not sRGB-typed, so this is a straight passthrough (trap 3).
   //    The desktop is a third render pass, never a blit from an eye texture (D4).
+  //
+  //    The ONE thing that can skip it is a minimized window while the headset paces the
+  //    loop (D6/trap 13) -- decided and latched by desktop_pass_due() before the caller
+  //    built its ImGui frame, never re-asked here. This is not an XR early-out (trap 10
+  //    forbids those): the eye passes above ran, and the only reason to skip is that
+  //    there is provably nothing on screen for this pass to land on.
+  //    (_pass is reset first regardless: outside render() the dimension accessors must
+  //    answer for the window, skipped desktop pass or not.)
   _pass = State::NONE;
+  if (!_desktop_pass) {
+    return;
+  }
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   glDisable(GL_FRAMEBUFFER_SRGB);
   glViewport(0, 0, GLsizei(_window->getSize().x), GLsizei(_window->getSize().y));

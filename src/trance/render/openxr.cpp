@@ -722,7 +722,10 @@ bool XrOutput::render_idle(bool blank)
   if (!_session_running) {
     // Attached-idle: no xrWaitFrame to block on while the runtime holds the session out
     // of the running state, and this path presents nothing either -- so sleep rather
-    // than spin. (Phase 3 restores the desktop's own pacing for this sub-state, trap 11.)
+    // than spin. Unreachable through ScreenRenderer, which asks session_running() before
+    // calling here and, since phase 3, hands the sub-state back to the desktop's own
+    // pacing (trap 11) -- this stays as the guard that makes the contract true for any
+    // caller, not as the mechanism.
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
     return true;
   }
