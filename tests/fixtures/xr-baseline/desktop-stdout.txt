@@ -1,0 +1,6 @@
+wrote ./default.json
+command channel: listening on 127.0.0.1:57531
+
+-> default
+system control: tray icon installed
+system control: global hide-everything hotkey Shift+F11 registered

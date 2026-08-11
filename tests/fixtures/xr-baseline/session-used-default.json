@@ -1,0 +1,84 @@
+{
+  "first_playlist_item": "default",
+  "format": "trance-session",
+  "format_version": 1,
+  "playlist": {
+    "default": {
+      "standard": {
+        "program": "default"
+      }
+    }
+  },
+  "program_map": {
+    "default": {
+      "enabled_theme": [
+        {
+          "random_weight": 1,
+          "theme_name": "/root/"
+        }
+      ],
+      "entrainment": {
+        "layer": [
+          {
+            "binaural_hz": 3.0,
+            "center_hz": 312.0,
+            "pulse_hz": 5.0
+          },
+          {
+            "amplitude_db": -6.0,
+            "binaural_hz": 3.0,
+            "center_hz": 60.0,
+            "pulse_hz": 3.25
+          }
+        ],
+        "master_db": -28.0
+      },
+      "global_fps": 120,
+      "main_text_colour": "#FF96C8E0",
+      "shadow_text_colour": "#000000C0",
+      "spiral_colour_a": "#FF96C832",
+      "spiral_colour_b": "#00000032",
+      "visual_type": [
+        {
+          "random_weight": 1,
+          "type": "accelerate"
+        },
+        {
+          "random_weight": 1,
+          "type": "slow_flash"
+        },
+        {
+          "random_weight": 1,
+          "type": "sub_text"
+        },
+        {
+          "random_weight": 1,
+          "type": "flash_text"
+        },
+        {
+          "random_weight": 1,
+          "type": "parallel"
+        },
+        {
+          "random_weight": 1,
+          "type": "super_parallel"
+        },
+        {
+          "random_weight": 1,
+          "type": "animation"
+        },
+        {
+          "random_weight": 1,
+          "type": "super_fast"
+        }
+      ],
+      "zoom_intensity": 0.5
+    }
+  },
+  "theme_map": {
+    "/root/": {
+      "scan": "."
+    }
+  },
+  "theme_scan_root": "."
+}

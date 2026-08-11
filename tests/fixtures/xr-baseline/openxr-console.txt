@@ -1,0 +1,18 @@
+=== stdout ===
+-> renderer overridden to 'openxr' for this run (system.json unchanged)
+*** VR UNAVAILABLE: OpenXR initialization failed (requested by --renderer=openxr); playing on the desktop window instead ***
+
+-> default
+system control: tray icon installed
+system control: global hide-everything hotkey Shift+F11 registered
+
+=== stderr ===
+Error [GENERAL | xrEnumerateInstanceExtensionProperties | OpenXR-Loader] : RuntimeManifestFile::FindManifestFiles - failed to find active runtime file in registry
+Error [GENERAL | xrEnumerateInstanceExtensionProperties | OpenXR-Loader] : RuntimeInterface::LoadRuntimes - unknown error
+Error [GENERAL | xrEnumerateInstanceExtensionProperties | OpenXR-Loader] : RuntimeInterface::LoadRuntimes - failed to load a runtime
+Error [GENERAL | xrEnumerateInstanceExtensionProperties | OpenXR-Loader] : Failed to find default runtime with RuntimeInterface::LoadRuntime()
+Error [GENERAL | xrEnumerateInstanceExtensionProperties | OpenXR-Loader] : Failed querying extension properties
+xrEnumerateInstanceExtensionProperties failed: XR_ERROR_RUNTIME_UNAVAILABLE (no active OpenXR runtime)
+*** VR UNAVAILABLE: OpenXR initialization failed (requested by --renderer=openxr); playing on the desktop window instead ***
+see the OpenVR/OpenXR diagnostics above for the specific cause
+no font in theme; falling back to system font: C:/Windows/Fonts\arial.ttf
