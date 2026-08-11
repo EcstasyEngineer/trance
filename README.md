@@ -101,17 +101,22 @@ Quest Link if that is set, SteamVR's OpenXR runtime if that is. trance has no ru
 selection logic. Set the active runtime in the Oculus or SteamVR desktop app before
 launching.
 
-**If VR can't start**, trance still plays the session on the desktop window, but it says
-so loudly: a `*** VR UNAVAILABLE: ... ***` banner on stdout/stderr and a persistent red
-line at the top of the F2 panel. The specific cause is printed by the backend itself
-just above the banner, and it distinguishes the three cases that matter — no OpenXR
-runtime registered on the machine, a runtime registered but unreachable, and a runtime
-that is up but has no HMD attached.
+**Attaching is automatic and continuous.** There is no VR mode, no setting and no
+restart: for the whole run, trance looks for a headset every 5 seconds in the
+background, and one that appears — Link started, headset donned, runtime switched —
+simply joins as a second output while the desktop window keeps playing. The reverse is
+just as undramatic: any XR failure (Link killed, runtime quit, session lost) detaches
+the headset and the desktop plays straight through it, with probing resuming for the
+next one. The look-ahead costs nothing on a machine with no VR software: it is one
+registry read, and nothing is loaded into the process at all.
 
-Today the attempt happens once, at startup, and a successful one takes over the whole
-process (no desktop output while the headset is driven). Both of those are interim: the
-plan is one renderer with the headset as a hot-attachable output, so a headset plugged
-in mid-session simply joins.
+**If a headset can't be attached**, trance says so once — a single line on stderr, plus
+a persistent red line at the top of the F2 panel — and repeats it only when the answer
+changes, so a console left running overnight stays readable. It distinguishes the cases
+that matter: no OpenXR runtime registered on the machine, a runtime registered but
+unreachable, a runtime that is up but has no HMD attached, and a session that could not
+be created. `status` over the command channel reports the same thing as
+`xr=off|unattached|attached|attached-idle`.
 
 ## Data model
 

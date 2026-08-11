@@ -22,6 +22,8 @@ namespace trance_pb
   class System;
 }
 class XrOutput;
+class XrProbe;
+struct XrProbeVerdict;
 
 GLuint compile(const std::string& vertex_text, const std::string& fragment_text);
 void init_glew();
@@ -70,14 +72,24 @@ public:
   // detached and only glyph memory attached, since render_text scales the string to a
   // fraction of the view either way.
   //
-  // PHASE 4 NOTE: read once, at startup, because that is when the only attach happens
-  // today. Once attach becomes a hot background probe, a headset plugged in later still
-  // gets the window-sized atlas -- fixing that means rebuilding the FontCache on attach,
-  // which belongs with the phase that introduces the late attach.
+  // KNOWN GAP, unpaid by phase 4 (which introduced the late attach and therefore owed
+  // this): this is read ONCE, at Director construction. With hot-attach the headset can
+  // arrive minutes later, and it then draws text from an atlas rasterized for the window
+  // -- soft, exactly the way the pre-max_height code was on every VR run. Paying it means
+  // rebuilding the FontCache on attach, which needs VisualApiImpl to retain the session +
+  // cache-size it was built with and adds a synchronous font preload to the attach hitch
+  // budget (D7); both belong with a phase that is allowed to touch the visual pipeline.
+  // A run that starts with the headset already attached is unaffected.
   virtual uint32_t max_height() const = 0;
   virtual float eye_spacing_multiplier() const = 0;
 
   virtual void init() = 0;
+  // Per-iteration event pump: the XR event queue while a headset is attached, the
+  // hot-attach probe while one is not. The bool is a vestige of the deleted VR mode, whose
+  // update() returning false ended the run; since phase 4 no XR failure can end a run
+  // (D7's detach-never-exit), so this is now always true and phase 5's collapse removes
+  // it. Kept for now rather than rippling a signature change through Director for one
+  // phase.
   virtual bool update() = 0;
   // Renders one frame: the eye passes (when a headset is attached and its session is
   // running) followed ALWAYS by the desktop pass -- no XR failure or early-out may skip
@@ -132,16 +144,20 @@ public:
   ScreenRenderer(const trance_pb::System& system, const OverlayConfig& overlay = {});
   ~ScreenRenderer() override;
 
-  // Attempt to attach a headset output to this window's context. Returns false (having
-  // printed the OpenXR diagnosis chain -- no runtime registered / registered but
-  // unreachable / no HMD) when there is nothing to attach to; the window plays on
-  // regardless. Startup-only in phase 2; phase 4 makes it a repeating background probe.
-  bool attach_xr();
-  // Tear the XR side down with this window's GL context current (trap 5): the runtime
-  // holds the hDC/hGLRC from the graphics binding, and the FBO deletes plus the
-  // swapchain/session teardown are all GL-bound. Same ordering at detach time as at
-  // process exit -- which is why the destructor routes through here too.
-  void detach_xr();
+  // Where the XR side is right now, for the `status` verb (the QA observability hook,
+  // spec phase 4) -- one of:
+  //   "off"           -- probing is impossible (no XR backend in this build) or has been
+  //                      given up on for the run (the probe watchdog fired).
+  //   "unattached"    -- no headset output; the background probe is looking for one.
+  //   "attached"      -- a headset is attached and its session is running (XR paces).
+  //   "attached-idle" -- attached, session not running (pre-READY, or STOPPING
+  //                      acknowledged on doff / Link close); the desktop paces.
+  const char* xr_status() const;
+  // One line for the F2 panel's persistent banner (#41): why there is no headset output
+  // right now, or empty while attached / before the first probe has decided anything.
+  // Live, not latched at startup, because attach is now a background probe: a run that
+  // starts with no runtime and ends up attached must not keep claiming otherwise.
+  std::string xr_status_detail() const;
 
   // Decides -- and LATCHES, for the next render() -- whether that frame's desktop (NONE)
   // pass and its buffer swap run at all (D6, trap 13). They are skipped only while the
@@ -173,6 +189,19 @@ public:
   bool render_idle(bool blank) override;
 
 private:
+  // Take over a probe's instance + system and stand the headset output up on this
+  // window's GL context: the GL-bound half of an attach (graphics requirements, session,
+  // swapchains, FBOs), which is why it runs here and not on the probe thread. Returns
+  // false having destroyed the instance if the session could not be created; the window
+  // plays on regardless, and the probe keeps looking.
+  bool attach_xr(const XrProbeVerdict& verdict);
+  // Tear the XR side down with this window's GL context current (trap 5): the runtime
+  // holds the hDC/hGLRC from the graphics binding, and the FBO deletes plus the
+  // swapchain/session teardown are all GL-bound. Same ordering at detach time as at
+  // process exit -- which is why the destructor routes through here too. Detach is never
+  // an exit: the desktop keeps playing and probing resumes (D7).
+  void detach_xr();
+
   // The one condition under which xrWaitFrame is the loop's pacer (D5): a headset is
   // attached AND its session is actually running. Attached-idle -- pre-READY, or a
   // STOPPING acknowledged on doff / Link close -- has no xrWaitFrame to block on and so
@@ -190,6 +219,11 @@ private:
   // forward-declared class is what keeps that from becoming a cycle. The destructor,
   // attach and detach all live in render.cpp, which has the full definition.
   std::unique_ptr<XrOutput> _xr;
+  // The hot-attach probe (D7), polled from update() whenever _xr is null: a registry read
+  // inline every 5 s, and one detached worker thread at a time when a runtime is actually
+  // registered. Always present, even where XR cannot work at all -- it answers "off" then,
+  // which is what the status verb reports.
+  std::unique_ptr<XrProbe> _probe;
   // The pass being rendered right now, so the per-pass dimension accessors above can
   // answer for it. NONE outside render(), which is what makes startup sizing read the
   // window.

@@ -396,6 +396,32 @@ configs, full ctest green **with test targets rebuilt**, independently shippable
   change-only logging, `status` verb gains `xr=off|unattached|attached|attached-idle`
   (the QA observability hook). *Verify:* T9/T10/T11/T12 below, plus the dead-runtime
   no-hitch and runtime-switch tests from D7.
+  *Landed*, with four notes:
+  (a) **trap 12 was widened.** The spec named `xrEndFrame`/`xrEndSession`; the phase also
+  routes `xrWaitFrame`, `xrBeginFrame` and `xrAcquireSwapchainImage` failures into the
+  same detach. Same argument in each case — every failure code those calls can return
+  describes an already-broken session, and the alternative is a permanently black headset
+  that still reports itself attached while printing one error line per frame. It also
+  retires phase 3's 10 ms anti-spin floor in `render()`, which existed only because
+  nothing else could react to a wedged runtime.
+  (b) `xr=off` is real, not hypothetical: it is what a non-Win32 build reports and what
+  the 30 s watchdog leaves behind after it disables probing for the run.
+  (c) **trap 2's phase-4 debt (font atlas on late attach) is NOT paid** — see the comment
+  on `Renderer::max_height`. A headset that attaches after startup draws text from a
+  window-sized atlas. Paying it needs `VisualApiImpl` to retain the session + cache size
+  so the `FontCache` can be rebuilt, and adds a synchronous font preload to the attach
+  hitch budget; it wants a phase that is allowed into the visual pipeline (phase 5, or a
+  follow-up of its own). A run that starts with the headset already attached is
+  unaffected.
+  (d) **Every hardware verification is owed**, as in phase 3: the development machine has
+  no OpenXR runtime registered at all. What WAS observed there: a 95 s soak (≈19 probe
+  intervals) printed the no-runtime line exactly once and `status` answered
+  `xr=unattached` throughout, with the desktop playing normally — T1, and the D3 message
+  discipline, on the one leaf reachable without hardware. T9–T13, the dead-registered-
+  runtime no-hitch reading and the runtime-switch test are code-inspection only so far.
+  The startup "VR UNAVAILABLE" banner is gone with them: it asserted a whole-run fact that
+  hot-attach makes unknowable at startup, so the F2 panel's #41 banner now reads a live
+  callback instead.
 - **Phase 5 — Collapse + docs.** Renderer base merges into ScreenRenderer; docs
   (README, CLAUDE.md architecture notes, this spec's status line) updated; final
   strings/OPSEC scan; release zip.

@@ -69,6 +69,24 @@ VERBS = [
 ]
 
 
+XR_STATES = ("off", "unattached", "attached", "attached-idle")
+
+
+def check_status_xr(reply):
+    """`status` must carry xr=<state> (spec-xr-unified.md phase 4).
+
+    It is the only external view of the hot-attach machine, so every QA scenario that
+    kills or starts a runtime mid-run is watched through this field; returns a complaint
+    string, or None if the field is there and parses.
+    """
+    fields = dict(part.split("=", 1) for part in reply.split() if "=" in part)
+    if "xr" not in fields:
+        return "no xr= field in the status reply"
+    if fields["xr"] not in XR_STATES:
+        return f"xr={fields['xr']!r}, expected one of {XR_STATES}"
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("exe", help="path to trance.exe")
@@ -115,6 +133,17 @@ def main():
             print(f"{tag} {line!r:32} -> {reply!r}")
             if not passed:
                 failures += 1
+        # One reply inspected for CONTENT rather than framing: status's xr= field. On a
+        # machine with no VR software this is "unattached" (or "off" if probing was given
+        # up on); with a headset it walks unattached -> attached-idle -> attached without
+        # a restart, which is what makes the hot-attach scenarios observable at all.
+        sock.sendall(b"status\n")
+        reply = reader.readline().rstrip("\n")
+        problem = check_status_xr(reply)
+        tag = "  ok " if problem is None else "FAIL "
+        print(f"{tag} {'status xr= field':32} -> {problem or reply}")
+        if problem is not None:
+            failures += 1
     finally:
         sock.close()
         proc.terminate()

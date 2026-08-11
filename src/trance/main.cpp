@@ -12,7 +12,6 @@
 #include <trance/platform/overlay_hints.h>
 #include <trance/playlist_runner.h>
 #include <trance/platform/system_control.h>
-#include <trance/render/openxr.h>
 #include <trance/render/render.h>
 #include <trance/runtime_state.h>
 #include <trance/theme_bank.h>
@@ -229,7 +228,8 @@ void set_paused(CommandRuntimeState& state, Audio& audio, bool paused)
 }
 
 std::string execute_command(const command_protocol::ParsedCommand& cmd, Director& director,
-                            Audio& audio, const ThemeBank& themes, AppUi* app_ui,
+                            Audio& audio, const ThemeBank& themes,
+                            const ScreenRenderer& renderer, AppUi* app_ui,
                             CommandRuntimeState& state,
                             const std::chrono::steady_clock::time_point& start_time,
                             const std::function<trance_pb::Program*()>& active_program,
@@ -284,7 +284,12 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
         << (director.status_bed_active() ? "on" : "off") << " muted="
         << (audio.Muted() ? "on" : "off") << " overlay="
         << (state.overlay_on ? "on" : "off") << " hidden="
-        << (state.hidden ? "on" : "off") << " uptime=" << uptime;
+        << (state.hidden ? "on" : "off") << " uptime=" << uptime
+        // The headset output, as the hot-attach machine currently sees it:
+        // off|unattached|attached|attached-idle (see ScreenRenderer::xr_status). This is
+        // the only external view of attach/detach, which is why the QA matrix's
+        // kill-Link and hot-attach scenarios can be watched from a socket at all.
+        << " xr=" << renderer.xr_status();
     // ThemeBank's four queue slots (prev|primary|alternate|next), so an external
     // controller -- and the test harness -- can watch theme rotation happen.
     auto snap = themes.debug_snapshot();
@@ -424,7 +429,7 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
 // each one, and replies exactly once per command -- spec sec 3 ("always exactly one line
 // back per command line in"). Render-thread only (see CommandRuntimeState comment above).
 void handle_commands(CommandChannel& channel, Director& director, Audio& audio,
-                     const ThemeBank& themes, AppUi* app_ui,
+                     const ThemeBank& themes, const ScreenRenderer& renderer, AppUi* app_ui,
                      CommandRuntimeState& state,
                      const std::chrono::steady_clock::time_point& start_time,
                      const std::function<trance_pb::Program*()>& active_program,
@@ -432,7 +437,7 @@ void handle_commands(CommandChannel& channel, Director& director, Audio& audio,
 {
   for (const auto& command : channel.drain()) {
     auto parsed = command_protocol::parse_command(command.line);
-    auto reply = execute_command(parsed, director, audio, themes, app_ui,
+    auto reply = execute_command(parsed, director, audio, themes, renderer, app_ui,
                                  state, start_time,
                                  active_program, apply_program_change);
     channel.reply(command.conn_id, reply);
@@ -513,32 +518,13 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   // context, never a replacement for it -- there is no VR mode, no renderer selection and
   // no configuration item (D2).
   std::unique_ptr<ScreenRenderer> renderer{new ScreenRenderer{system, overlay}};
-  // Non-empty when a headset could not be attached (#41). The desktop plays regardless --
-  // that is the whole point of the unification -- but the reason was previously visible
-  // only on stderr, which a Windows GUI launch never shows: hence the banner below plus
-  // the persistent line in the F2 panel.
-  std::string vr_failure;
-  // XrOutput::available() gates the attempt because where the backend is compiled out
-  // (everything that isn't Win32) it can only ever fail, and a permanent red banner for a
-  // feature the build does not contain is noise, not diagnosis. Nothing else gates it:
-  // an --overlay run gets a headset too now that attaching adds a pass instead of
-  // swapping the window out from under the overlay.
-  //
-  // STARTUP-ONLY, still (phase 4 makes it a repeating background probe): plug a headset
-  // in after this point and it is not noticed until the next launch. Which failure it was
-  // comes from XrOutput's own three-way diagnosis on stderr (no runtime registered /
-  // runtime registered but unreachable / no HMD), which is why nothing here restates it.
-  if (XrOutput::available() && !renderer->attach_xr()) {
-    vr_failure = "no headset output this run; the desktop window is playing";
-  }
-  if (!vr_failure.empty()) {
-    // Both streams: stdout is what a console launch scrolls past, stderr is where the
-    // XR diagnostics (the actual reason) already went.
-    const std::string banner{"*** VR UNAVAILABLE: " + vr_failure + " ***"};
-    std::cout << banner << std::endl;
-    std::cerr << banner << std::endl;
-    std::cerr << "see the OpenXR diagnostics above for the specific cause" << std::endl;
-  }
+  // NOTHING is attached here, and nothing is decided here either (spec phase 4): the
+  // renderer's own update() runs a background probe every 5 s for the whole run, so a
+  // headset plugged in, or a Link started, ten minutes from now attaches without a
+  // restart -- and the startup banner this replaced ("no headset output this run") would
+  // have been a lie in exactly that case. The probe prints its own one-line diagnosis on
+  // stderr when it decides something, once per state, and the F2 panel's persistent
+  // banner (#41) reads the live answer through the callback handed to AppUi below.
 
   // Constructed before Director because Director holds it by reference (the grammar's
   // theme-audio verbs relay through it) and must not outlive it. Audio itself has no
@@ -597,7 +583,8 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
 
   std::unique_ptr<AppUi> app_ui;
   app_ui.reset(new AppUi(session, session_path, root_path, sidecar, system, system_path,
-                         command_state, on_program_change, active_program, vr_failure));
+                         command_state, on_program_change, active_program,
+                         [&renderer] { return renderer->xr_status_detail(); }));
   if (!app_ui->init(renderer->window())) {
     std::cerr << "warning: ImGui-SFML init failed; F2 UI unavailable this run" << std::endl;
     app_ui.reset();
@@ -698,8 +685,8 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       // after handle_events (spec sec 3: "Parse + dispatch happens in the drain loop --
       // main.cpp's per-frame loop, right after handle_events").
       if (command_channel) {
-        handle_commands(*command_channel, director, audio, *theme_bank, app_ui.get(),
-                        command_state, command_start_time,
+        handle_commands(*command_channel, director, audio, *theme_bank, *renderer,
+                        app_ui.get(), command_state, command_start_time,
                         active_program, on_program_change);
       }
       // MCP tool calls: identical parse + dispatch, reply routed back as the JSON-RPC
@@ -707,8 +694,8 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
       if (mcp) {
         for (const auto& command : mcp->drain()) {
           auto parsed = command_protocol::parse_command(command.line);
-          auto reply = execute_command(parsed, director, audio, *theme_bank, app_ui.get(),
-                                       command_state,
+          auto reply = execute_command(parsed, director, audio, *theme_bank, *renderer,
+                                       app_ui.get(), command_state,
                                        command_start_time, active_program,
                                        on_program_change);
           mcp->reply(command.key, reply);

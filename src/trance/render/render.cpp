@@ -155,6 +155,7 @@ sf::RenderWindow& Renderer::window()
 
 ScreenRenderer::ScreenRenderer(const trance_pb::System& system, const OverlayConfig& overlay)
 {
+  _probe.reset(new XrProbe);
   _window.reset(new sf::RenderWindow);
   glClearColor(0.f, 0.f, 0.f, 0.f);
   glClear(GL_COLOR_BUFFER_BIT);
@@ -230,7 +231,7 @@ ScreenRenderer::~ScreenRenderer()
   detach_xr();
 }
 
-bool ScreenRenderer::attach_xr()
+bool ScreenRenderer::attach_xr(const XrProbeVerdict& verdict)
 {
   if (_xr) {
     return true;
@@ -240,18 +241,29 @@ bool ScreenRenderer::attach_xr()
   // context any more -- the hidden helper window is gone.
   if (!_window->setActive(true)) {
     std::cerr << "couldn't activate window OpenGL context for OpenXR" << std::endl;
+    // Refuse rather than bind the session to whatever context happens to be current --
+    // and destroy the instance here, because this is the one attach path that never
+    // reaches an XrOutput and the probe has already let go of it (D7: nothing retained).
+    xrDestroyInstance(verdict.instance);
     return false;
   }
-  std::unique_ptr<XrOutput> xr{new XrOutput};
+  // Ownership of the probe's instance passes in here and never comes back out: whether
+  // this succeeds or fails, the XrOutput destroys it (D7's no-retention rule).
+  std::unique_ptr<XrOutput> xr{new XrOutput{verdict.instance, verdict.system_id}};
   if (!xr->success()) {
-    // Every failure leaf has already printed its specific diagnosis (no runtime
-    // registered / registered but unreachable / no HMD). Destroying it here, with the
-    // context still current, is also what releases the loader's instance.
+    // The probe owns the message discipline: it prints the captured diagnosis once, on
+    // the transition into "attach failed", and never again while that stays true.
+    _probe->note_attach_failure(xr->log());
     return false;
   }
-  std::cerr << "OpenXR attached: " << xr->width() << "x" << xr->height() << " per eye"
-            << std::endl;
+  // An attach IS a state change, so it always prints -- naming the runtime and the per-eye
+  // resolution, which is what makes "it attached to the thing I expected, at native res"
+  // checkable from the console (D3, and the T4/T10 observations).
+  std::cerr << xr->log();
+  std::cerr << "OpenXR attached: " << verdict.runtime_name << ", " << xr->width() << "x"
+            << xr->height() << " per eye" << std::endl;
   _xr = std::move(xr);
+  _probe->note_attached();
   // Normally a no-op: a freshly created session is not RUNNING yet, so this attach lands
   // in attached-idle and the desktop keeps pacing until the runtime says READY (trap 11).
   // Called anyway rather than left to the first update(), so that the pacing is never a
@@ -269,10 +281,27 @@ void ScreenRenderer::detach_xr()
     std::cerr << "couldn't activate window OpenGL context for OpenXR teardown" << std::endl;
   }
   _xr.reset();
+  // Back to looking for a headset. The line that says WHY we are here was printed by
+  // XrOutput at the moment it decided to detach (one line, naming the leaf); this side
+  // only has to make sure the run continues -- trance never exits for an XR failure (D7).
+  _probe->note_detached();
   // The pacer just went away: without this the loop would present as fast as the GPU
   // allows, with nothing left blocking anywhere (D5's restore -- the detach half; the
   // attached-idle half rides on update()).
   sync_pacing();
+}
+
+const char* ScreenRenderer::xr_status() const
+{
+  if (_xr) {
+    return _xr->session_running() ? "attached" : "attached-idle";
+  }
+  return _probe->probing() ? "unattached" : "off";
+}
+
+std::string ScreenRenderer::xr_status_detail() const
+{
+  return _xr ? std::string{} : _probe->status_detail();
 }
 
 bool ScreenRenderer::xr_paces() const
@@ -360,18 +389,28 @@ void ScreenRenderer::init()
 
 bool ScreenRenderer::update()
 {
-  if (_xr && _xr->update() == XrOutput::Update::DetachRequested) {
-    // The seam phase 4 completes: the XR side comes down here, with the context current,
-    // and the desktop is meant to keep playing while a background probe re-attaches.
-    // Until that lands, a detach request still ends the run -- exactly what the VR-mode
-    // renderer's `update() == false` did, minus taking the window with it.
-    detach_xr();
-    return false;
+  if (_xr) {
+    if (_xr->update() == XrOutput::Update::DetachRequested) {
+      // DETACH, NEVER EXIT (D7): every XR failure that used to quit the app -- instance
+      // loss, session loss, a wedged swapchain, event-pump death, EXITING, a session that
+      // refuses to begin, and (trap 12) a failed xrEndFrame/xrEndSession -- lands here.
+      // The XR side comes down with the GL context current (trap 5), the desktop keeps
+      // playing without so much as a dropped audio sample, and probing resumes.
+      detach_xr();
+    }
+  } else {
+    // Unattached: look for a headset. Cheap by construction -- a time check, and at most
+    // one registry read every 5 s -- so calling it from every update() (which runs once
+    // per drained content frame plus once per iteration that drained none) costs nothing.
+    if (_probe->poll()) {
+      attach_xr(_probe->take_verdict());
+    }
   }
   // The event pump above is where the session flips between RUNNING and not, so this is
   // the seam that catches BOTH halves of D5's restore: the running->idle direction (doff,
   // Link close, pre-READY startup -- trap 11's hot-spin) and idle->running.
   sync_pacing();
+  // Always true since phase 4: an XR failure detaches, it does not end the run.
   return true;
 }
 

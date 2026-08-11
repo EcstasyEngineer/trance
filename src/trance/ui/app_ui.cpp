@@ -68,7 +68,8 @@ AppUi::AppUi(trance_pb::Session& session, const std::string& session_path,
              const std::string& root_path, SessionJsonSidecar& sidecar,
              trance_pb::System& system, const std::string& system_path,
              CommandRuntimeState& command_state, std::function<void()> on_program_change,
-             std::function<trance_pb::Program*()> active_program, std::string vr_failure)
+             std::function<trance_pb::Program*()> active_program,
+             std::function<std::string()> vr_failure)
 : _session{session}
 , _session_path{session_path}
 , _root_path{root_path}
@@ -183,12 +184,15 @@ void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Au
   // row's name after it. FirstUseEver, so an existing imgui.ini keeps the user's size.
   ImGui::SetNextWindowSize(ImVec2(500.f, 640.f), ImGuiCond_FirstUseEver);
   ImGui::Begin("trance");
-  // Above every section, unmissable and never timed out: a requested VR backend failed
-  // and this desktop window is the fallback (#41). Wrapped -- the reason string is
-  // longer than the panel is wide.
-  if (!_vr_failure.empty()) {
+  // Above every section, unmissable and never timed out: there is no headset output and
+  // this desktop window is all there is (#41). Wrapped -- the reason string is longer than
+  // the panel is wide. ASKED EVERY FRAME, not latched at construction: attach is a
+  // background probe now (spec phase 4), so this banner appears when a runtime dies and
+  // disappears the moment one attaches, without a restart.
+  const std::string vr_failure = _vr_failure ? _vr_failure() : std::string{};
+  if (!vr_failure.empty()) {
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.4f, 0.4f, 1.f));
-    ImGui::TextWrapped("VR UNAVAILABLE: %s", _vr_failure.c_str());
+    ImGui::TextWrapped("VR UNAVAILABLE: %s", vr_failure.c_str());
     ImGui::PopStyleColor();
     ImGui::Separator();
   }

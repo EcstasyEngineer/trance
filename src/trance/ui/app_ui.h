@@ -132,10 +132,12 @@ public:
   // (the Program section disables itself in that case). `system`/`system_path` are
   // main()'s live System config + where it was loaded from: the System section edits
   // the proto in place and persists straight back to `system_path` via save_system.
-  // `vr_failure` (#41) is empty in the normal case; non-empty when no headset output
-  // could be attached at startup (the session still plays on this window -- that is the
-  // unified runtime, not a fallback). It is shown as a persistent banner at the top of
-  // the panel, so the warning is not stderr-only (invisible on a Windows GUI launch).
+  // `vr_failure` (#41) answers "why is there no headset output right now": empty in the
+  // normal case (attached, or nothing decided yet), non-empty while the hot-attach probe
+  // is failing to find one (the session still plays on this window -- that is the unified
+  // runtime, not a fallback). It is CALLED EVERY FRAME and shown as a persistent banner at
+  // the top of the panel, so the warning is not stderr-only (invisible on a Windows GUI
+  // launch) and so it tracks attach/detach, which can now happen at any point in a run.
   // `root_path` is the session's MEDIA root -- the same string ThemeBank resolves its
   // root-relative image paths against (root + "/" + path). The Themes section needs it
   // to turn a listed path into a file it can decode for the hover preview.
@@ -144,7 +146,7 @@ public:
         const std::string& system_path, CommandRuntimeState& command_state,
         std::function<void()> on_program_change,
         std::function<trance_pb::Program*()> active_program,
-        std::string vr_failure = {});
+        std::function<std::string()> vr_failure = {});
   ~AppUi();
 
   AppUi(const AppUi&) = delete;
@@ -318,10 +320,10 @@ private:
   CommandRuntimeState& _command_state;
   std::function<void()> _on_program_change;
   std::function<trance_pb::Program*()> _active_program;
-  // Why VR isn't running this session (#41), or empty if VR was never requested / is
-  // running. Fixed at construction -- the renderer is built once at startup -- so this
-  // banner is persistent for the run rather than timed out like _system_status.
-  const std::string _vr_failure;
+  // Why there is no headset output right now (#41), or empty while there is one. A
+  // callback, not a string: with hot-attach the answer changes during a run, and a value
+  // captured at construction would keep claiming "no headset" long after one attached.
+  const std::function<std::string()> _vr_failure;
 
   bool _visible = false;
   bool _initialized = false;
