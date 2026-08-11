@@ -500,13 +500,26 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   // still means today's hidden-window VR mode with no desktop output. Phase 2 turns
   // OpenXrRenderer into an optional output of ScreenRenderer so both run at once; Phase 4
   // turns this one-shot attempt into a repeating background probe.
+  //
+  // Two gates on the attempt, both consequences of that interim shape -- XR success here
+  // REPLACES the desktop window rather than adding an output, and both disappear once
+  // Phase 2 makes it additive:
+  //  * OpenXrRenderer::available(): where the backend is compiled out (everything that
+  //    isn't Win32) construction can only ever fail, so attempting it would put a VR
+  //    UNAVAILABLE banner on stdout/stderr and a permanent red line in the F2 panel on
+  //    every single launch, for a feature the build does not contain.
+  //  * !overlay.enabled: an --overlay run is by definition a desktop-window run (the
+  //    click-through window IS the product). Attempting XR would mean that on any
+  //    machine with a live runtime and a headset the overlay silently never exists,
+  //    while the process still prints the overlay banner and runs the overlay apply
+  //    seam against the hidden XR helper window.
   std::unique_ptr<Renderer> renderer;
   // Non-empty once the XR attempt failed and we fell back to the desktop window (#41).
   // The fallback stays -- a session should still play -- but the failure was previously
   // visible only on stderr, which a Windows GUI launch never shows: hence the banner
   // below plus the persistent line in the F2 panel.
   std::string vr_failure;
-  {
+  if (OpenXrRenderer::available() && !overlay.enabled) {
     auto openxr = new OpenXrRenderer(system);
     renderer.reset(openxr);
     if (!openxr->success()) {

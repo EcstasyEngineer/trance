@@ -13,6 +13,19 @@ class OpenXrRenderer : public Renderer
 public:
   OpenXrRenderer(const trance_pb::System& system);
   ~OpenXrRenderer() override;
+  // Compile-time availability. The graphics binding is XR_KHR_opengl_enable's Win32
+  // one, so on every other platform the constructor is a stub that prints
+  // "Windows-only" and fails. Callers gate on this rather than construct-and-fail:
+  // a build with no XR backend in it at all must not report a VR *failure* (banner,
+  // F2 panel line) on every launch.
+  static constexpr bool available()
+  {
+#ifdef _WIN32
+    return true;
+#else
+    return false;
+#endif
+  }
   bool success() const;
 
   bool vr_enabled() const override;
