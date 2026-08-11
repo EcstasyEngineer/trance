@@ -27,6 +27,13 @@ namespace
   // invisible surface should already be effectively free, and the minimize case is only
   // handled because it is the one state where drivers are known to behave differently
   // (some throttle or stall the swap chain outright).
+  //
+  // To be explicit about the order things happened in: this skip shipped ahead of that
+  // soak rather than as a reaction to it, because a minimized window has no pixel for
+  // the pass to land on and D4's rationale test uses minimize as the toggle that turns
+  // the desktop pass off. The trade is recorded in the spec's D6 ("what actually
+  // shipped"): the minimized swap's cost is no longer measurable, the occluded and
+  // other-virtual-desktop cases still measure it.
   bool window_is_minimized(sf::RenderWindow& window)
   {
 #ifdef _WIN32

@@ -119,9 +119,26 @@ on a minimized window is effectively free; if a driver misbehaves, the fallback 
 skipping the NONE pass + present while `IsIconic()` — the XR side is untouched either
 way. Event pumping never stops.
 
+**What actually shipped (phase 3, recorded because it deviates from the paragraph
+above):** the `IsIconic()` skip is **unconditional and on by default**, not held back
+pending a driver misbehaving. Two reasons, neither of them a measurement:
+D4's own rationale test is written as "measure GPU frame time attached with and without
+the desktop pass (**minimize toggles it**)" — that toggle only exists if the skip is
+always on; and a pass whose entire output is a swap to a window with no pixel on screen
+is the one case where skipping provably costs nothing visible (trap 15's pending-
+screenshot force is the sole exception, and it is implemented). What this costs is
+honest to state: **T5's minimized leg can no longer measure whether the unskipped swap
+was in fact free**, which was D6's original rationale test for that state. The occluded
+and other-virtual-desktop legs still present unskipped and still measure exactly that —
+which is also the case trap 13 says decides — so the measurement is narrowed, not lost.
+The soaks themselves were **not run** in phase 3 (no XR runtime on the development
+machine); they are owed to the §5 QA matrix pass.
+
 **Rationale test:** minimize / fully occlude / move to another virtual desktop for 60 s
 each during headset playback: runtime overlay holds native rate, no reprojection spike;
-restore shows current content within 1 s.
+restore shows current content within 1 s. (Minimized: also confirm the headset holds
+native rate *because* nothing blocks, not merely because the pass is skipped — the
+occluded leg is the control for that.)
 
 ### D7 — Detach, never exit; hot-attach via a background probe
 
@@ -208,7 +225,7 @@ subsystems with the libraries they wrap. Itemized, in priority terms:
 
 | Swap | What it buys | Test of the rationale |
 |---|---|---|
-| SFML window/events → SDL3 | *Fast/correctness:* pacing becomes fully explicit — `SDL_GL_SetSwapInterval(0)` is a direct, unlayered call (driver control panels can still override swap behavior, as for any GL app — the gain is no sleep-based limiter of our own to fight), and minimize/occlusion arrive as events (`SDL_EVENT_WINDOW_MINIMIZED`/`_OCCLUDED`) instead of native `IsIconic` polling. The D6 fallback hack (if we needed it) gets deleted. | The minimize test passes with no native-API workaround in the tree; the pacing code paths shrink (measure: lines deleted in render.cpp pacing logic). |
+| SFML window/events → SDL3 | *Fast/correctness:* pacing becomes fully explicit — `SDL_GL_SetSwapInterval(0)` is a direct, unlayered call (driver control panels can still override swap behavior, as for any GL app — the gain is no sleep-based limiter of our own to fight), and minimize/occlusion arrive as events (`SDL_EVENT_WINDOW_MINIMIZED`/`_OCCLUDED`) instead of native `IsIconic` polling. The D6 skip (which phase 3 shipped unconditionally, so this is a certainty, not an "if we needed it") loses its native-API half: same decision, driven by an event. | The minimize test passes with no native-API workaround in the tree; the pacing code paths shrink (measure: lines deleted in render.cpp pacing logic). |
 | imgui-sfml → stock `imgui[sdl3-binding,opengl3-binding]` | *Small/maintenance:* imgui-sfml is a third-party bridge that pins our windowing to SFML and lags imgui releases. The SDL3+GL3 backends ship **in the Dear ImGui repo itself**, maintained by the imgui project — they update the day imgui does and drop a whole dependency. Concretely for us: it also removes the texture tight-packing workaround and the imgui-sfml focus-latch quirk `main.cpp` carries. | `vcpkg.json` loses a dep; the two named workarounds are deleted; F2 works identically (full #39 hand-test matrix). |
 | sf::Font → FreeType direct | *Small:* sf::Font **is** a FreeType wrapper, so metrics/kerning parity is near-exact (same engine underneath; our rasterization/atlas choices can still differ slightly); we keep `Font`'s public interface frozen so `director.cpp` doesn't change. One wrapper removed. | Before/after screenshots of text-heavy visuals differ only by ≤1px antialiasing. |
 | sf::Image → stb_image direct | *Small:* SFML 3's loader **is** stb_image; same decode, one wrapper removed. | Decode is byte-identical on a fixture set (hash comparison). |
@@ -313,7 +330,9 @@ model against the code and the OpenXR loader source; each must land with its pha
     or DWM-cloaked (other virtual desktop) window still swaps, and driver behavior
     there is not guaranteed non-blocking even with swap-interval 0. T5's occluded case
     decides; if it fails, extend the skip-present check to DWM cloaking/occlusion
-    queries. Phase 3.
+    queries. Phase 3. **Landed:** the `IsIconic` skip is in the tree unconditionally
+    (see D6's "what actually shipped"), so T5 now decides only whether the check must be
+    *extended* to cloaking/occlusion, not whether the skip exists at all.
 14. **Phase 1 config sweep** — deleting `System.renderer` touches more than the
     parser: the defaults table (session.cpp), the legacy protobuf conversion
     (session_legacy.cpp), and session_json tests all reference it and must be swept in
@@ -361,6 +380,16 @@ configs, full ctest green **with test targets rebuilt**, independently shippable
 - **Phase 3 — Pacing decouple.** D5's force-off/restore, including the attached-idle
   sub-state (trap 11); D6 verification (minimize / occlude / virtual desktop soaks —
   trap 13); drag-the-window measurement (trap 7).
+  *Landed:* D5 and the D6 `IsIconic` skip (shipped as the default — see D6) plus trap
+  15's screenshot force are code; every hardware measurement phase 3 was asked for —
+  the D6 soaks and trap 7's drag reading — is **unrun**, because the development machine
+  has no XR runtime. They carry forward to the §5 QA matrix (T5, and a drag leg), and
+  trap 7's observation point is commented in `main.cpp` rather than guessed at in code.
+  One anti-spin consequence of D5 that phase 3 owed and now has: with the desktop no
+  longer pacing anything while the session runs, `XrOutput::render()` sleeps 10 ms on an
+  `xrWaitFrame` failure the way `render_idle()` always has — a wedged runtime that fails
+  every frame call without posting an event must not spin the loop. Trap 12 (phase 4)
+  replaces that floor with an actual detach.
 - **Phase 4 — Hot-attach.** D7's background probe (registry gate inline, single
   in-flight probe thread, no instance retention, GL-bound attach steps on the render
   thread), detach-never-exit rewiring including end-call failures (trap 12), state-

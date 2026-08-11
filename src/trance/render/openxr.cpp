@@ -564,19 +564,30 @@ XrOutput::Update XrOutput::update()
 
 void XrOutput::render(const std::function<void(Renderer::State)>& render_fn)
 {
-  // Only called while update() last reported Running, so there is no not-running case to
-  // anti-spin against here: the desktop pass that follows this one presents, and that
-  // present is what paces the loop when xrWaitFrame doesn't.
+  // Only called while update() last reported Running, which is exactly the state where
+  // xrWaitFrame is the loop's SOLE pacer: phase 3 forces the window's vsync and framerate
+  // limit off while the session runs (D5), and lets a minimized window skip the present
+  // entirely (D6), so the desktop side is no longer a fallback pacer for anything here.
+  // The one path that returns without ever reaching xrWaitFrame's block therefore has to
+  // sleep, exactly as render_idle does -- otherwise a runtime that fails xrWaitFrame every
+  // iteration while posting no event (a wedged Link that never says LOSS_PENDING/EXITING,
+  // so update() keeps reporting Running) spins the loop at 100% CPU. Routing persistent
+  // frame-call failure into a detach instead is trap 12's job, in phase 4; this is the
+  // floor under the loop until then.
   XrFrameState frame_state{XR_TYPE_FRAME_STATE};
   XrFrameWaitInfo wait_info{XR_TYPE_FRAME_WAIT_INFO};
   if (!xr_check(_instance, xrWaitFrame(_session, &wait_info, &frame_state), "xrWaitFrame")) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
     return;
   }
   // xrWaitFrame blocks to the runtime's pacing point -- it replaces WaitGetPoses
   // as the frame governor, including while SYNCHRONIZED/VISIBLE-but-unfocused.
   XrFrameBeginInfo begin_info{XR_TYPE_FRAME_BEGIN_INFO};
   if (!xr_check(_instance, xrBeginFrame(_session, &begin_info), "xrBeginFrame")) {
-    // Frame never began, so xrEndFrame must not be called; try again next loop.
+    // Frame never began, so xrEndFrame must not be called; try again next loop. No sleep
+    // here, and none in render_idle's twin of this path either: the xrWaitFrame above
+    // succeeded, which means it already blocked to the runtime's pacing point and this
+    // iteration is paced.
     return;
   }
   // XR_FRAME_DISCARDED is a success code -- proceed, no log spam.
