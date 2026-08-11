@@ -203,7 +203,8 @@ OpenXrRenderer::OpenXrRenderer(const trance_pb::System& system)
     std::cerr << "OpenXR system: " << system_properties.systemName << std::endl;
   }
 
-  // Hidden window owns the OpenGL context (same pattern as OpenVrRenderer).
+  // Hidden window owns the OpenGL context. (Phase 2 of docs/spec-xr-unified.md deletes
+  // this window and binds from the visible one instead.)
   // Vsync stays off unconditionally: xrWaitFrame is the frame pacing authority.
   //
   // The context version is REQUESTED explicitly rather than left to SFML's default,
@@ -380,8 +381,8 @@ OpenXrRenderer::OpenXrRenderer(const trance_pb::System& system)
   }
   _blend_mode = blend_modes[0];
 
-  // Prefer an sRGB-typed swapchain: the pipeline writes gamma-encoded bytes (the
-  // OpenVR path submits them as ColorSpace_Gamma). With GL_FRAMEBUFFER_SRGB
+  // Prefer an sRGB-typed swapchain: the pipeline writes gamma-encoded bytes. With
+  // GL_FRAMEBUFFER_SRGB
   // disabled while drawing, GL stores our output verbatim and the compositor
   // decodes it as sRGB -- byte-exact match. Plain RGBA8 is treated as linear and
   // re-encoded by Quest Link, which washes the image out.
@@ -442,7 +443,7 @@ OpenXrRenderer::OpenXrRenderer(const trance_pb::System& system)
       return;
     }
     // Wrap each runtime-owned texture in an FBO once at init; the runtime already
-    // allocated storage, so no glTexImage2D here (unlike the OpenVR path).
+    // allocated the storage, so there is no glTexImage2D here.
     for (const auto& image : images) {
       GLuint fbo;
       glGenFramebuffers(1, &fbo);
@@ -520,8 +521,8 @@ uint32_t OpenXrRenderer::height() const
 
 float OpenXrRenderer::eye_spacing_multiplier() const
 {
-  // Same derivation as the OpenVR path, but the "camera" here is the quad, not a
-  // runtime projection: the content spans kQuadWidthMetres at kQuadDistanceMetres,
+  // The "camera" here is the quad, not a runtime projection: the content spans
+  // kQuadWidthMetres at kQuadDistanceMetres,
   // so its half-FOV tangent is fixed by our own geometry rather than queried.
   // eye_offset = eye_spacing_multiplier * eye_spacing_setting; at the shader's
   // near_plane=1 and nominal far_plane=129 the NDC parallax shift is
@@ -531,8 +532,7 @@ float OpenXrRenderer::eye_spacing_multiplier() const
   //
   // A quad layer needs no per-runtime IPD query: the quad is a fixed virtual
   // screen, so the correct shear depends on the viewer's IPD only through the
-  // nominal human average -- 64mm, the same 0.032f half-IPD the OpenVR path falls
-  // back to when the runtime reports nothing.
+  // nominal human average -- 64mm.
   const float half_ipd = 0.032f;
   const float half_fov_tangent = (kQuadWidthMetres / 2.f) / kQuadDistanceMetres;
   const float nominal_far_plane = 1.f + 0.5f * 256.f;

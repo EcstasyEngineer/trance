@@ -59,10 +59,10 @@
 //     drag tick but commit (fire on_program_change, which also refreshes the live
 //     bed via Audio::SetEntrainment) on RELEASE, so the stream isn't restarted per
 //     tick. Persisted by the autosave, same as every other program edit.
-//   - System: renderer selection (Monitor / SteamVR / OpenXR), windowed mode, eye
-//     spacing -- edits trance_pb::System in place and persists immediately to
-//     system.json via save_system. Renderer/windowed take effect on next launch
-//     (the renderer/window are constructed once at startup). Ends with the session
+//   - System: windowed mode and eye spacing -- edits trance_pb::System in place and
+//     persists immediately to system.json via save_system. There is no renderer
+//     choice (XR output is automatic; docs/spec-xr-unified.md D2); windowed takes
+//     effect on next launch, the window being constructed once at startup. Ends with the session
 //     FILE controls (what used to be its own Session section, which held nothing but
 //     a save button): the loaded path, and Export, which writes a copy elsewhere via
 //     save_session(session, path, sidecar) so pattern files / scan-dir themes

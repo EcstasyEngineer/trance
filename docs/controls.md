@@ -28,8 +28,8 @@ serves `image` draws from its gifs and a stills-only theme serves `anim` draws f
 stills.
 
 Every edit made in the F2 panel is saved as you make it — visual/theme weights, colours,
-pattern text and the entrainment bed go back to the loaded session file, renderer and
-window settings to `system.json`. There is no Save button; **System → Export** writes a
+pattern text and the entrainment bed go back to the loaded session file, window and
+display settings to `system.json`. There is no Save button; **System → Export** writes a
 copy of the session somewhere else and leaves the live file alone.
 
 In **Themes**, hovering a media row shows a thumbnail of that file, so deciding what to
@@ -40,11 +40,10 @@ couple of dozen are kept in memory at a time, so a theme of several thousand ima
 nothing until a row is actually pointed at.
 
 The F2 panel is **not built in VR mode** (there is no single flat 2D pass to composite
-it onto). Its **System → Renderer** radios persist to
-`system.json` immediately but only take effect on the next launch;
-`--renderer=monitor|openvr|openxr` overrides them for a single run. See the README's
-[VR setup](../README.md#vr-setup) section — in particular, a `system.json` with no
-`renderer` key is monitor mode, which SteamVR then shows as a flat virtual desktop.
+it onto). There is no renderer setting to find in it: VR output is automatic and
+unconfigurable — see the README's [VR setup](../README.md#vr-setup) section. **System →
+windowed** persists to `system.json` immediately but only takes effect on the next
+launch.
 
 ## Global hide-everything hotkey — Shift+F11
 

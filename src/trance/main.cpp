@@ -12,7 +12,6 @@
 #include <trance/platform/overlay_hints.h>
 #include <trance/playlist_runner.h>
 #include <trance/platform/system_control.h>
-#include <trance/render/openvr.h>
 #include <trance/render/openxr.h>
 #include <trance/render/render.h>
 #include <trance/runtime_state.h>
@@ -63,8 +62,7 @@
 // D3D11 (XrGraphicsRequirementsD3D11KHR::adapterLuid) OpenGL exposes NO adapter-selection
 // mechanism at all -- XrGraphicsRequirementsOpenGLKHR carries only a version range. The
 // ONLY lever an OpenGL XR app has over which GPU it lands on is which one Windows assigns
-// the process, i.e. exactly these exports. The OpenVR path has the same exposure via the
-// compositor's shared-texture path.
+// the process, i.e. exactly these exports.
 //
 // Declared as `unsigned long` rather than DWORD deliberately: that is DWORD's exact
 // underlying type on Windows, and it keeps <windows.h> out of this translation unit (the
@@ -430,19 +428,13 @@ void handle_commands(CommandChannel& channel, Director& director, Audio& audio,
 // ThemeBank keep their const refs -- in-place field mutation keeps map value addresses
 // stable, and the UI never reorders/erases map entries. `system` is non-const (and
 // `system_path` threaded through) for the same reason: the UI's System section edits
-// renderer/windowed/eye-spacing in place and persists them back via save_system.
-//
-// `renderer_override` is --renderer (#41): null means "use system.renderer()". It is
-// deliberately a separate parameter rather than a set_renderer() on `system` -- the F2
-// System section persists `system` straight back to system.json, so writing the
-// override in would make a one-run flag permanent.
+// windowed/eye-spacing in place and persists them back via save_system.
 void play_session(const std::string& root_path, trance_pb::Session& session,
                   const std::string& session_path, SessionJsonSidecar& sidecar,
                   trance_pb::System& system, const std::string& system_path,
                   const std::map<std::string, std::string> variables,
                   const std::function<void(Director&)>& visual_override = {},
                   const OverlayConfig& overlay = {}, uint16_t command_port = 0,
-                  const trance_pb::System_Renderer* renderer_override = nullptr,
                   bool mcp_stdio = false)
 {
   // Command channel: constructed here, before ThemeBank/renderer/window, so the socket
@@ -498,49 +490,40 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   auto theme_bank =
       std::make_unique<ThemeBank>(root_path, session, system, program(), sidecar.theme_tiers);
 
+  // XR is not a configuration choice any more (docs/spec-xr-unified.md D2): every launch
+  // simply tries the OpenXR backend, and a machine with no runtime, no headset or no VR
+  // software at all falls through to the desktop window. Which of those it was comes from
+  // the constructor's own three-way diagnosis on stderr (no runtime registered / runtime
+  // registered but unreachable / no HMD), which is why nothing here tries to restate it.
+  //
+  // INTERIM SHAPE (Phase 1 of the spec): the attempt is still startup-only, and success
+  // still means today's hidden-window VR mode with no desktop output. Phase 2 turns
+  // OpenXrRenderer into an optional output of ScreenRenderer so both run at once; Phase 4
+  // turns this one-shot attempt into a repeating background probe.
   std::unique_ptr<Renderer> renderer;
-  // --renderer wins over system.json for this run only; neither is written back.
-  const auto requested_renderer = renderer_override ? *renderer_override : system.renderer();
-  const char* requested_renderer_name = requested_renderer == trance_pb::System::OPENVR
-      ? "openvr"
-      : (requested_renderer == trance_pb::System::OPENXR ? "openxr" : "monitor");
-  // Non-empty once a REQUESTED VR backend failed to initialize and we fell back to the
-  // desktop window (#41). The fallback stays -- a session should still play -- but the
-  // failure was previously visible only on stderr, which a Windows GUI launch never
-  // shows: hence the banner below plus the persistent line in the F2 panel. That panel
-  // only exists in non-VR mode, which is exactly this case.
+  // Non-empty once the XR attempt failed and we fell back to the desktop window (#41).
+  // The fallback stays -- a session should still play -- but the failure was previously
+  // visible only on stderr, which a Windows GUI launch never shows: hence the banner
+  // below plus the persistent line in the F2 panel.
   std::string vr_failure;
-  if (requested_renderer == trance_pb::System::OPENVR) {
-    auto openvr = new OpenVrRenderer(system);
-    renderer.reset(openvr);
-    if (!openvr->success()) {
-      renderer.reset();
-      vr_failure = "SteamVR (OpenVR) initialization failed";
-    }
-  } else if (requested_renderer == trance_pb::System::OPENXR) {
+  {
     auto openxr = new OpenXrRenderer(system);
     renderer.reset(openxr);
     if (!openxr->success()) {
       renderer.reset();
-      vr_failure = "OpenXR initialization failed";
+      vr_failure = "OpenXR initialization failed; playing on the desktop window instead";
     }
   }
   // Printed BEFORE the fallback window is constructed: ScreenRenderer can itself die
   // (no DISPLAY, no GL), and the reason VR was skipped must survive that.
   if (!vr_failure.empty()) {
-    vr_failure += " (requested by " +
-        std::string{renderer_override ? "--renderer=" : "system.json renderer="} +
-        requested_renderer_name + "); playing on the desktop window instead";
     // Both streams: stdout is what a console launch scrolls past, stderr is where the
     // renderer's own diagnostics (the actual reason) already went.
     const std::string banner{"*** VR UNAVAILABLE: " + vr_failure + " ***"};
     std::cout << banner << std::endl;
     std::cerr << banner << std::endl;
-    std::cerr << "see the OpenVR/OpenXR diagnostics above for the specific cause"
-              << std::endl;
+    std::cerr << "see the OpenXR diagnostics above for the specific cause" << std::endl;
   }
-  // System::OCULUS (LibOVR) support was removed; old sessions requesting it fall
-  // through to the screen renderer below.
   if (!renderer) {
     renderer.reset(new ScreenRenderer(system, overlay));
   }
@@ -1142,12 +1125,6 @@ DEFINE_bool(overlay, false,
 DEFINE_double(overlay_opacity, 0.35,
              "overlay window opacity, 0 (fully transparent) to 1 (fully opaque). Only "
              "meaningful with --overlay.");
-DEFINE_string(renderer, "",
-             "renderer for this run: monitor, openvr (SteamVR) or openxr (head-locked "
-             "quad). Overrides system.json's \"renderer\" key for this run ONLY -- it is "
-             "never written back, so the F2 System radios stay the persistent setting. "
-             "Empty (default) means use system.json, where a missing key is monitor "
-             "mode (which SteamVR then mirrors as a flat virtual desktop).");
 DEFINE_bool(lint, false,
             "parse + lower + compile every built-in pattern (and, given a session "
             "argument, its custom patterns against that program's entrainment beat), "
@@ -1186,24 +1163,6 @@ namespace
     }
     std::cerr << std::endl;
     std::exit(1);
-  }
-
-  // --renderer, same spelling set session_json.cpp's parse_renderer accepts for the
-  // "renderer" key (that one is file-local to the JSON layer, so the names are mirrored
-  // here rather than the parser exported). Fatal on a bad value, like --visual above:
-  // a typo'd --renderer must not silently play on the monitor.
-  bool parse_renderer_flag(const std::string& s, trance_pb::System_Renderer& out)
-  {
-    if (s == "monitor") {
-      out = trance_pb::System_Renderer_MONITOR;
-    } else if (s == "openvr") {
-      out = trance_pb::System_Renderer_OPENVR;
-    } else if (s == "openxr") {
-      out = trance_pb::System_Renderer_OPENXR;
-    } else {
-      return false;
-    }
-    return true;
   }
 
   std::string read_file(const std::string& path)
@@ -1369,20 +1328,6 @@ int main(int argc, char** argv)
   if (FLAGS_lint) {
     return run_lint(argc, argv);
   }
-  // --renderer: eagerly validated for the same reason, and resolved into an optional
-  // override play_session applies on top of system.json (never writing it back).
-  trance_pb::System_Renderer renderer_override_value = trance_pb::System_Renderer_MONITOR;
-  const trance_pb::System_Renderer* renderer_override = nullptr;
-  if (!FLAGS_renderer.empty()) {
-    if (!parse_renderer_flag(FLAGS_renderer, renderer_override_value)) {
-      std::cerr << "error: --renderer '" << FLAGS_renderer
-                << "' is not a known renderer. Valid names: monitor, openvr, openxr" << std::endl;
-      return 1;
-    }
-    renderer_override = &renderer_override_value;
-    std::cout << "-> renderer overridden to '" << FLAGS_renderer
-              << "' for this run (system.json unchanged)" << std::endl;
-  }
   OverlayConfig overlay;
   overlay.enabled = FLAGS_overlay;
   overlay.opacity = static_cast<float>(FLAGS_overlay_opacity);
@@ -1515,7 +1460,6 @@ int main(int argc, char** argv)
     };
   }
   play_session(root_path, session, session_path, sidecar, system, system_path, variables,
-              visual_override, overlay, uint16_t(FLAGS_command_port), renderer_override,
-              FLAGS_mcp);
+              visual_override, overlay, uint16_t(FLAGS_command_port), FLAGS_mcp);
   return 0;
 }

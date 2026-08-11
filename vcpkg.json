@@ -9,7 +9,6 @@
     "libwebm",
     "giflib",
     "gflags",
-    "openvr",
     "openxr-loader",
     "sfml",
     "imgui-sfml",

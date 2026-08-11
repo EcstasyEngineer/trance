@@ -337,7 +337,6 @@ namespace
 
     trance_pb::System system;
     system.set_enable_vsync(true);
-    system.set_renderer(trance_pb::System_Renderer_OPENVR);
     system.set_windowed(true);
     system.mutable_draw_depth()->set_draw_depth(.75f);
     system.set_image_cache_size(128);
@@ -349,7 +348,6 @@ namespace
     auto reloaded = load_system_json(path);
 
     check(reloaded.enable_vsync() == true, "system enable_vsync round-trips");
-    check(reloaded.renderer() == trance_pb::System_Renderer_OPENVR, "system renderer round-trips");
     check(reloaded.windowed() == true, "system windowed round-trips");
     check(reloaded.has_draw_depth(), "system draw_depth presence round-trips");
     check(std::abs(reloaded.draw_depth().draw_depth() - .75f) < 1e-6f,
@@ -360,6 +358,22 @@ namespace
           "last_session_map key round-trips");
     check(reloaded.last_session_map().at("deep.session.json").variable_map().at("Mode") == "Deep",
           "LastSession wrapper flattens to a direct string->string map");
+
+    // The deleted `renderer` key got NO back-compat allow-list entry
+    // (docs/spec-xr-unified.md D2): an old config carrying it must fail the load and
+    // regenerate, not be quietly tolerated. Catches exactly the well-meaning re-add.
+    auto legacy_key_path = (root / "old-system.json").string();
+    {
+      std::ofstream f{legacy_key_path};
+      f << R"({"format":"trance-system","format_version":1,"renderer":"openvr"})";
+    }
+    bool renderer_key_threw = false;
+    try {
+      load_system_json(legacy_key_path);
+    } catch (const std::exception&) {
+      renderer_key_threw = true;
+    }
+    check(renderer_key_threw, "a system.json still carrying \"renderer\" is a load error");
   }
 
   void test_pattern_slug_assigned_on_save_without_sidecar()
@@ -1181,7 +1195,10 @@ variable_map {
     }
     check(!threw, "upstream-era system.cfg still imports");
     check(system.enable_vsync(), "legacy enable_vsync survives");
-    check(system.renderer() == trance_pb::System::OPENVR, "legacy renderer enum survives");
+    // The `renderer: OPENVR` line above still PARSES -- the frozen legacy schema keeps
+    // the field, which is what makes an upstream-era file readable at all -- but there is
+    // no renderer setting left to translate it into, so the converter drops it and the
+    // rest of the file must still import (docs/spec-xr-unified.md D2).
     check(system.has_draw_depth() && std::abs(system.draw_depth().draw_depth() - 0.5f) < 1e-6f,
           "legacy draw_depth survives with presence");
     check(!system.has_eye_spacing(),

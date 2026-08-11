@@ -29,18 +29,14 @@ message ExportSettings {
 
 // General system-wide configuration.
 message System {
-  enum Renderer {
-    MONITOR = 0;
-    OCULUS = 1;  // LibOVR support removed; value reserved, do not reuse.
-    OPENVR = 2;
-    OPENXR = 3;
-  }
+  // Field 2 was `Renderer renderer`. There is no renderer choice any more: there is one
+  // desktop renderer, and XR output is attempted automatically (docs/spec-xr-unified.md
+  // D2). Reserved so the number is never reused, not as a migration hook -- the JSON
+  // layer has no "renderer" key at all and a config carrying one regenerates.
+  reserved 2;
 
   // Enable vsync to eliminate tearing, but can cause stuttering.
   bool enable_vsync = 1;
-
-  // The renderer to use.
-  Renderer renderer = 2;
 
   // Draw depth, between 0 and 1. Affects intensity of zoom effect, and depth in VR.
   message DrawDepth {

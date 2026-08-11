@@ -1818,47 +1818,31 @@ void AppUi::draw_system_section()
   // system.json (save_system_config below) -- there's no separate Apply/Save step.
   // This was the first section to work that way and is now the model for all of them
   // (see the persistence model in app_ui.h).
-  // The renderer and window are constructed once at play_session startup, so
-  // renderer/windowed changes only land on the next launch; the note below makes
-  // that explicit so a radio click that visibly does nothing isn't read as a bug.
-  ImGui::TextUnformatted("Renderer:");
+  // There are no renderer radios: XR output is automatic and unconfigurable
+  // (docs/spec-xr-unified.md D2). The window is still constructed once at play_session
+  // startup, so `windowed` only lands on the next launch; the note below makes that
+  // explicit so a click that visibly does nothing isn't read as a bug.
   bool changed = false;
-  auto renderer_radio = [&](const char* label, trance_pb::System::Renderer value) {
-    bool selected = _system.renderer() == value;
-    if (ImGui::RadioButton(label, selected) && !selected) {
-      _system.set_renderer(value);
-      changed = true;
-    }
-  };
-  renderer_radio("Monitor", trance_pb::System::MONITOR);
-  renderer_radio("SteamVR (OpenVR)", trance_pb::System::OPENVR);
-  renderer_radio("OpenXR (Quest Link, any runtime)", trance_pb::System::OPENXR);
-  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.75f, 0.3f, 1.f));
-  ImGui::TextWrapped("Renderer and windowed mode take effect on next launch.");
-  ImGui::PopStyleColor();
-
   bool windowed = _system.windowed();
   if (ImGui::Checkbox("windowed", &windowed)) {
     _system.set_windowed(windowed);
     changed = true;
   }
+  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.75f, 0.3f, 1.f));
+  ImGui::TextWrapped("Windowed mode takes effect on next launch.");
+  ImGui::PopStyleColor();
 
-  // Eye spacing feeds the per-eye camera offset in both VR renderers; grey it out
-  // elsewhere rather than hiding it, so the setting stays discoverable. mutable_ on
-  // an unset EyeSpacing materializes it zeroed -- same value the renderer reads
-  // through the const accessor, so no behaviour change until the user drags.
-  const bool stereo = _system.renderer() == trance_pb::System::OPENVR ||
-      _system.renderer() == trance_pb::System::OPENXR;
-  ImGui::BeginDisabled(!stereo);
+  // Eye spacing feeds the per-eye camera offset of the XR output. Always enabled: there
+  // is no longer a mode it doesn't apply to -- a headset can attach to any run, and the
+  // value is read live when it does. mutable_ on an unset EyeSpacing materializes it
+  // zeroed -- same value the renderer reads through the const accessor, so no behaviour
+  // change until the user drags.
   float eye_spacing = _system.eye_spacing().eye_spacing();
   if (ImGui::SliderFloat("eye spacing", &eye_spacing, 0.f, 1.f, "%.3f")) {
     _system.mutable_eye_spacing()->set_eye_spacing(eye_spacing);
     changed = true;
   }
-  ImGui::EndDisabled();
-  if (!stereo) {
-    ImGui::TextDisabled("(eye spacing: only used by the VR renderers)");
-  }
+  ImGui::TextDisabled("(eye spacing: only used by the headset output)");
 
   if (changed) {
     save_system_config();

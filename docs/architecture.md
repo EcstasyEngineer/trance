@@ -40,9 +40,11 @@ The player's lifecycle lives in `play_session()` (`src/trance/main.cpp`):
    for the active program. It keeps two themes active in video memory and
    asynchronously loads a third on a background thread (`run_async_thread` in
    `main.cpp`) so themes can swap without a load stall.
-3. **Renderer.** One of three `Renderer` subclasses (`src/trance/render/`) is
-   chosen: `ScreenRenderer` (window), `OpenVrRenderer` (SteamVR), or
-   `OpenXrRenderer` (OpenXR quad layer). See the renderer section below.
+3. **Renderer.** Startup tries `OpenXrRenderer` (OpenXR quad layer) unconditionally
+   and falls back to `ScreenRenderer` (the desktop window) when there is no runtime
+   or no headset — there is no renderer setting. Both are `Renderer` subclasses in
+   `src/trance/render/`. (Interim shape: `docs/spec-xr-unified.md` folds XR into
+   `ScreenRenderer` as a hot-attachable output.)
 4. **Director.** The `Director` (`src/trance/director.{h,cpp}`) owns the visual
    engine and the GL programs. It holds a `Visual` (the current pattern), the
    `VisualApiImpl` bridge to the theme bank and renderer, and the compiled
@@ -83,7 +85,7 @@ play_session frame loop ──► Director ──► Visual (cycler tree + effec
 | `src/common/media/` | Decoders: `Image`, the `Streamer` animation interface (`streamer.{h,cpp}`). |
 | `src/trance/` | The realtime player: `main.cpp`, `director.{h,cpp}`, `theme_bank.{h,cpp}`, `playlist_runner.{h,cpp}` (the playlist stack machine), GLSL `shaders.h`. |
 | `src/trance/media/` | Player-side media: `audio.{h,cpp}`, `entrainment.{h,cpp}` (the synthesised bed), `font.{h,cpp}`, `async_streamer.{h,cpp}`. |
-| `src/trance/render/` | The `Renderer` interface and its subclasses: `render.{h,cpp}` (screen — also home of the click-through overlay window hints, `apply_overlay_hints` / `clear_overlay_hints`), `openvr.{h,cpp}` (SteamVR), `openxr.{h,cpp}` (OpenXR head-locked quad-layer backend — Quest Link, any conformant runtime). |
+| `src/trance/render/` | The `Renderer` interface and its subclasses: `render.{h,cpp}` (screen — also home of the click-through overlay window hints, `apply_overlay_hints` / `clear_overlay_hints`), `openxr.{h,cpp}` (OpenXR head-locked quad-layer backend — Quest Link, SteamVR, any conformant runtime). |
 | `src/trance/visual/` | The visual engine: the cycler/pattern system. The v3 pattern DSL parser/compiler, the `Cycler` tree, compiled visuals, and the data-driven render blocks (`render_eval`). |
 | `src/trance/ui/` | The ImGui in-app control panel (`app_ui.{h,cpp}`), toggled with F2. |
 | `src/trance/net/` | The `--command_port` control channel: line→verb protocol (`command_protocol.{h,cpp}`) and the socket/mailbox (`command_channel.{h,cpp}`). |

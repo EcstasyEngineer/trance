@@ -203,8 +203,9 @@ void Director::render() const
 bool Director::render_mutations_enabled() const
 {
   // See the declaration: VR_RIGHT is the second of a stereo frame's two passes, so the
-  // accumulating render-time state must not advance again on it. (This also covers the
-  // old OpenVR stereo path, which has always double-ticked for the same reason.)
+  // accumulating render-time state must not advance again on it. (This assumes a frame
+  // is exactly two passes -- docs/spec-xr-unified.md trap 1 replaces it in Phase 2, when
+  // a frame becomes eyes + desktop and mutation moves onto playback elapsed time.)
   return _render_state != Renderer::State::VR_RIGHT;
 }
 

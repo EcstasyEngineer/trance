@@ -36,10 +36,9 @@ class Renderer
 public:
   // TODO: could factor out actual rendering to intermediate texture(s) and add multisampling?
   // NONE is the flat single-pass case; VR_LEFT/VR_RIGHT are the two passes of a stereo
-  // frame. Both VR backends emit the pair -- OpenVR into its two eye framebuffers,
-  // OpenXR into its two per-eye swapchains -- so there is no mono VR pass. (There was a
-  // VR_MONO state for the OpenXR path's original single-quad implementation; b86c476
-  // gave it per-eye quads and nothing has emitted VR_MONO since.)
+  // frame, drawn into the OpenXR backend's two per-eye swapchains -- there is no mono VR
+  // pass. (There was a VR_MONO state for the OpenXR path's original single-quad
+  // implementation; b86c476 gave it per-eye quads and nothing has emitted VR_MONO since.)
   enum class State {
     NONE = 0,
     VR_LEFT = 1,
@@ -62,23 +61,21 @@ public:
   // Frame-loop keep-alive for any iteration where the main loop drew nothing -- paused,
   // hidden, or simply between visual frames. Returns true if the renderer performed its
   // own frame pacing (so the caller must not add an anti-spin sleep); the default no-op
-  // returns false. Only the VR backends override it.
+  // returns false. Only the XR backend overrides it.
   //
   // WHY it must run even when not paused: a VR frame loop is a handshake with the
   // runtime, not a consequence of having something new to draw. A running OpenXR session
   // REQUIRES continuous xrWaitFrame/xrBeginFrame/xrEndFrame (the spec asks applications
   // to keep the loop running "to maintain synchronisation", calling xrEndFrame with no
-  // layers if need be), and OpenVR's WaitGetPoses is both the compositor's pacing point
-  // and its liveness signal. Stalling either -- which is what happens if this is gated on
-  // a visual frame being due at global_fps -- makes the runtime flag the app unresponsive
-  // and drops the headset to the grey void.
+  // layers if need be). Stalling it -- which is what happens if this is gated on a visual
+  // frame being due at global_fps -- makes the runtime flag the app unresponsive and
+  // drops the headset to the grey void.
   //
   // `blank` distinguishes the two reasons for having nothing to draw, and the distinction
   // is load-bearing:
-  //   true  (paused/hidden) -- the content should stop being visible. OpenXR submits
-  //         layerCount=0 and OpenVR submits black eye textures; either way the handshake
-  //         stays alive AND the content goes away, so `hide` genuinely vanishes in the
-  //         headset instead of freezing there.
+  //   true  (paused/hidden) -- the content should stop being visible. The submission
+  //         becomes layerCount=0: the handshake stays alive AND the content goes away, so
+  //         `hide` genuinely vanishes in the headset instead of freezing there.
   //   false (merely between visual frames) -- the content must stay exactly as it is.
   //         Submitting layerless frames here would blank the view on every gap between
   //         visual frames, strobing the headset at (runtime rate - global_fps).

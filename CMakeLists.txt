@@ -3,7 +3,6 @@ project(trance CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
 
 # Relocatable binaries: embed the library search path relative to the executable
 # ($ORIGIN) rather than the absolute build tree, so the output doesn't depend on
@@ -59,7 +58,6 @@ if(TARGET unofficial::libwebm::libwebm)
   set_property(TARGET unofficial::libwebm::libwebm APPEND PROPERTY
     INTERFACE_INCLUDE_DIRECTORIES "${_webm_inc}/webm")
 endif()
-find_package(OpenVR REQUIRED)
 find_package(OpenXR CONFIG REQUIRED)
 
 # ---------------------------------------------------------------------------
@@ -189,7 +187,6 @@ add_executable(trance
   src/trance/platform/overlay_hints.cpp
   src/trance/playlist_runner.cpp
   src/trance/platform/system_control.cpp
-  src/trance/render/openvr.cpp
   src/trance/render/openxr.cpp
   src/trance/render/render.cpp
   src/trance/theme_bank.cpp
@@ -214,7 +211,6 @@ target_link_libraries(trance PRIVATE
   unofficial::libvpx::libvpx
   unofficial::libwebm::libwebm
   GIF::GIF
-  OpenVR::OpenVR
   OpenXR::openxr_loader)
 
 if(WIN32)
@@ -245,15 +241,13 @@ set_target_properties(common_lib trance PROPERTIES
 
 # ---------------------------------------------------------------------------
 # Install / bundle. `cmake --install build/<preset> --config Release --prefix <dir>`
-# produces the complete distributable: trance.exe and, on Windows, the DLLs
-# vcpkg's applocal step deployed beside it (openvr_api.dll — Valve ships OpenVR
-# only as a DLL, so it cannot be linked static; everything else is already
-# static via the x64-windows-static-md triplet).
+# produces the complete distributable, which is trance.exe and nothing else:
+# every dependency is static via the x64-windows-static-md triplet, and the one
+# DLL that used to ship beside it left with the SteamVR-specific backend that
+# required it. Keep it that way — a dependency that can only be linked
+# dynamically is a decision to re-make, not one to absorb here.
 # ---------------------------------------------------------------------------
 install(TARGETS trance RUNTIME DESTINATION .)
-if(WIN32)
-  install(FILES $<TARGET_FILE_DIR:trance>/openvr_api.dll DESTINATION .)
-endif()
 
 # ---------------------------------------------------------------------------
 # Headless tests (tests/CMakeLists.txt). Default OFF; enable with

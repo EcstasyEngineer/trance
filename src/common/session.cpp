@@ -645,7 +645,6 @@ trance_pb::System get_default_system()
 {
   trance_pb::System system;
   system.set_enable_vsync(true);
-  system.set_renderer(trance_pb::System::MONITOR);
   system.mutable_draw_depth()->set_draw_depth(.5f);
   system.mutable_eye_spacing()->set_eye_spacing(1.f / 16);
   system.set_image_cache_size(64);

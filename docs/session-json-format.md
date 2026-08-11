@@ -63,7 +63,7 @@ These apply to both `session.json` and `system.json`.
    The only structural deviations from the proto are the five transforms listed in §7.
 2. **Enums are lowercase strings** of the proto enum value name: visual types
    `accelerate | slow_flash | sub_text | flash_text | parallel | super_parallel |
-   animation | super_fast`; renderer `monitor | openvr | openxr`; audio event type
+   animation | super_fast`; audio event type
    `play | stop | fade` (the redundant `AUDIO_` prefix is dropped). Integers are not
    accepted. Note: the CLI `--visual` name table (`main.cpp:463-473`) calls PARALLEL
    `simple` — the JSON parser must NOT reuse that table; JSON says `parallel`.
@@ -534,7 +534,6 @@ here with the ImGui editor (which lives inside trance.exe).
   "format": "trance-system",
   "format_version": 1,
   "enable_vsync": true,
-  "renderer": "monitor",
   "windowed": false,
   "draw_depth": 0.5,
   "eye_spacing": 0.0625,
@@ -556,7 +555,6 @@ here with the ImGui editor (which lives inside trance.exe).
 | Key | Type | Proto mapping |
 |---|---|---|
 | `enable_vsync` | bool | `System.enable_vsync` |
-| `renderer` | `"monitor"` \| `"openvr"` \| `"openxr"` | `System.renderer`; **absent = `"monitor"`** — the saver omits the key entirely when it is monitor, so a file with no `renderer` is a non-VR config, not an unset one (see README "VR setup"). `openxr` is the head-locked quad backend; `OCULUS` has no JSON form (dead — LibOVR removed; `main.cpp:138` already treats it as monitor). `--renderer` overrides this for one run without writing back |
 | `windowed` | bool | `System.windowed` |
 | `draw_depth` | float 0–1; absent = default 0.5 | `System.draw_depth.draw_depth` — wrapper **flattened**; key presence carries the `has_draw_depth()` distinction (`validate_system`, session.cpp:450), so `0.0` present and key absent behave differently, as today |
 | `eye_spacing` | float −1–1; absent = default 0.0625 | `System.eye_spacing.eye_spacing` — flattened, same presence rule |
@@ -566,6 +564,13 @@ here with the ImGui editor (which lives inside trance.exe).
 | `last_root_directory` | string, absolute OK (machine-local file) | `System.last_root_directory` |
 | `last_export_settings` | object, all `ExportSettings` fields verbatim (`path`, `export_3d`, `width`, `height`, `fps`, `length`, `quality` 0–4, `threads`). **Deliberately-dead schema:** the video-export path it configured has been deleted and nothing reads these values. The key stays specified because `get_default_system()` writes it into every `system.json` and §2.5's strict loader throws on an unknown key — so removing it from the spec would make every existing config unloadable | `System.last_export_settings` |
 | `last_session_map` | object: session path → object: variable → value | `System.last_session_map`; the single-field `LastSession{variable_map}` wrapper is **flattened** to a direct string→string object |
+
+**Removed key: `renderer`.** It mapped to `System.renderer` (proto field 2, now
+`reserved 2;`). VR output is automatic and unconfigurable — there is one renderer and the
+headset is an output of it (`docs/spec-xr-unified.md` D2). The key got **no** back-compat
+allow-list entry, so a `system.json` still carrying it fails §2.5's strict key check and
+is regenerated with defaults, losing its other settings. That is the accepted, spec'd cost
+of the greenfield config rule, not an oversight.
 
 `last_root_directory` and `last_session_map` are unread by the 2017 player but are the
 ImGui editor's file-dialog memory and per-session variable memory (a behaviour inherited
@@ -610,8 +615,9 @@ Pipeline:
 4. Externalize each `custom_visual_pattern[].source_text` to
    `patterns/<slug(name)>.pattern` (slug rule in §5) and emit `file` references.
 5. Drops (no JSON form, by design): `AudioEvent.Type.NONE` events (no-ops in audio.cpp),
-   zero-weight entries validate already prunes, `renderer: OCULUS` → `"monitor"` with a
-   printed warning, the entire `SessionArchive` message (dead schema — the shipped bundle
+   zero-weight entries validate already prunes, the whole legacy `System.renderer` field
+   (still parsed by the frozen schema, translated into nothing — there is no renderer
+   setting left), the entire `SessionArchive` message (dead schema — the shipped bundle
    format is the zip in §9.1, whose central directory subsumes the offset/length table),
    deprecated fields 100/101 (migrated above).
 6. `system.cfg` → `system.json`: mechanical; `last_session_map` keys (old `.session`
@@ -703,8 +709,8 @@ change shape at that point — that is the test of the retirement wave.
    files named by pattern-name slug; edit those files directly from now on.
 4. Sessions whose colours were hand-set to non-1/255-grid floats quantize to 8-bit on
    convert (visually identical; noted for round-trip exactness only).
-5. `renderer: OCULUS` in an old `system.cfg` converts to `"monitor"` (already its
-   effective behavior).
+5. Any `renderer:` line in an old `system.cfg` is read and discarded — the setting no
+   longer exists, and the rest of the file still imports.
 6. Any `#` comments in hand-edited textproto files are lost by the converter — re-add as
    `"_note"` keys.
 7. Old launcher `.bat`/shortcut lines pointing at `.session` paths need the new

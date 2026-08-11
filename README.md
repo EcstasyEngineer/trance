@@ -23,9 +23,9 @@ configuration — things just work, and say so loudly on the console when they c
 - Programmable playlist with conditionals and subroutines
 - Session bundling: `--export_archive out.trance` writes a plain zip of the session file
   plus every asset it references
-- VR output: SteamVR (OpenVR) stereo, or a head-locked OpenXR quad that stays straight
-  ahead and survives window occlusion — **neither backend has been verified against a
-  physical headset**; see [VR setup](#vr-setup)
+- VR output: a head-locked OpenXR quad that stays straight ahead and survives window
+  occlusion, attempted automatically at startup with no configuration — **not yet
+  verified against a physical headset**; see [VR setup](#vr-setup)
 
 ## Quick start
 
@@ -62,10 +62,6 @@ trance.exe --pattern=my_pattern.v3 some.session.json
 # escape routes -- the window intentionally ignores clicks and keys once engaged):
 trance.exe --overlay some.session.json
 
-# pick the renderer for this run only (system.json is not modified):
-trance.exe --renderer=openxr some.session.json
-# valid names: monitor, openvr, openxr. An unknown name is a fatal error at startup.
-
 # serve MCP on stdin/stdout so an MCP host (e.g. Claude Desktop) can drive playback --
 # the binary itself is the server, no sidecar process (see docs/mcp-install.md):
 trance.exe --mcp some.session.json
@@ -79,33 +75,25 @@ trance.exe --export_archive out.trance some.session.json
 
 ## VR setup
 
-> **Status: unverified on hardware.** Both VR backends compile and have been reviewed and
-> corrected against the OpenXR/OpenVR specs, but **neither has ever run against a physical
+> **Status: unverified on hardware.** The OpenXR backend compiles and has been reviewed
+> and corrected against the OpenXR spec, but it **has never run against a physical
 > headset** — the development machine has none. Treat everything in this section as the
 > intended behaviour rather than observed behaviour, and expect to debug. If you do run it
 > on a headset, the failure banner described at the end of this section is the first thing
 > to read.
 
-**Choosing a renderer.** Three ways, in increasing precedence:
+**There is nothing to configure.** VR is not a mode you select: every launch tries the
+OpenXR backend and falls back to the desktop window if there is no runtime, no headset,
+or no VR software at all. There is no `renderer` setting, no F2 radios and no
+`--renderer` flag — they were deleted along with the SteamVR-specific OpenVR backend
+(SteamVR is itself an OpenXR runtime, so nothing is lost by going through OpenXR).
+The full plan and its rationale: [docs/spec-xr-unified.md](docs/spec-xr-unified.md).
 
-1. The `"renderer"` key in `system.json` — `"monitor"`, `"openvr"` or `"openxr"`.
-   **A missing key means monitor mode**, and the saver *omits* the key whenever it is
-   monitor — so a `system.json` with no `renderer` line is a complete, deliberate
-   non-VR config, not an unset one. This is the usual cause of "I launched it under
-   SteamVR and only got a flat floating window": that window is SteamVR mirroring the
-   ordinary desktop output, not trance rendering to the headset.
-2. The F2 panel's **System → Renderer** radios, which write `system.json` immediately
-   but **take effect on the next launch** — the renderer is constructed once at startup.
-3. `--renderer=monitor|openvr|openxr`, which overrides both for that run and is never
-   written back.
-
-**The two VR backends.** `openvr` renders a stereo projection through SteamVR.
-`openxr` submits a head-locked quad one metre ahead of the view — the image stays
-centred wherever you look, and nothing on the desktop can occlude it. Both paths are
-stereo: the OpenXR path renders the scene once per eye and submits one eye-restricted
-quad each, so the parallax lives in the rendered content while the quads themselves
-share a single head-locked pose. The OpenXR path is currently Windows-only (the
-`XR_KHR_opengl_enable` binding it uses is the Win32 one).
+**What the headset shows.** A head-locked quad one metre ahead of the view — the image
+stays centred wherever you look, and nothing on the desktop can occlude it. It is
+stereo: the scene renders once per eye and each eye gets its own eye-restricted quad,
+so the parallax lives in the rendered content while the quads share a single head-locked
+pose. Windows-only (the `XR_KHR_opengl_enable` binding it uses is the Win32 one).
 
 **Which OpenXR runtime is used is not ours to pick.** We create a plain OpenXR
 instance, so whichever runtime is registered **active** on the machine wins — Oculus /
@@ -113,11 +101,17 @@ Quest Link if that is set, SteamVR's OpenXR runtime if that is. trance has no ru
 selection logic. Set the active runtime in the Oculus or SteamVR desktop app before
 launching.
 
-**If VR fails to start**, trance still plays the session on the desktop window, but it
-says so loudly: a `*** VR UNAVAILABLE: ... ***` banner on stdout/stderr and a
-persistent red line at the top of the F2 panel naming the backend that was requested
-and where the request came from. The specific cause is printed by the backend itself
-just above the banner.
+**If VR can't start**, trance still plays the session on the desktop window, but it says
+so loudly: a `*** VR UNAVAILABLE: ... ***` banner on stdout/stderr and a persistent red
+line at the top of the F2 panel. The specific cause is printed by the backend itself
+just above the banner, and it distinguishes the three cases that matter — no OpenXR
+runtime registered on the machine, a runtime registered but unreachable, and a runtime
+that is up but has no HMD attached.
+
+Today the attempt happens once, at startup, and a successful one takes over the whole
+process (no desktop output while the headset is driven). Both of those are interim: the
+plan is one renderer with the headset as a hot-attachable output, so a headset plugged
+in mid-session simply joins.
 
 ## Data model
 

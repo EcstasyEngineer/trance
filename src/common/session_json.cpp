@@ -142,23 +142,6 @@ namespace
     return "accelerate";
   }
 
-  trance_pb::System_Renderer parse_renderer(const std::string& s, const std::string& json_path)
-  {
-    if (s == "monitor") return trance_pb::System_Renderer_MONITOR;
-    if (s == "openvr") return trance_pb::System_Renderer_OPENVR;
-    if (s == "openxr") return trance_pb::System_Renderer_OPENXR;
-    throw std::runtime_error(json_path + ": unknown renderer '" + s + "'");
-  }
-
-  std::string save_renderer(trance_pb::System_Renderer r)
-  {
-    // OCULUS is dead (spec sec 6); anything else that isn't a live VR backend
-    // saves as "monitor".
-    if (r == trance_pb::System_Renderer_OPENVR) return "openvr";
-    if (r == trance_pb::System_Renderer_OPENXR) return "openxr";
-    return "monitor";
-  }
-
   trance_pb::AudioEvent_Type parse_audio_event_type(const std::string& s, const std::string& json_path)
   {
     if (s == "play") return trance_pb::AudioEvent_Type_AUDIO_PLAY;
@@ -1502,8 +1485,14 @@ trance_pb::System load_system_json(const std::string& path)
   // check_unknown_keys THROWS on anything not listed here. Dropping it from the
   // allow-list would make trance.exe fail to start on every existing install. It goes
   // when the format_version is bumped and old configs are migrated, not before.
+  //
+  // `renderer` is NOT on the list, deliberately: there is no renderer choice any more
+  // (docs/spec-xr-unified.md D2), and no back-compat entry was added for it. A
+  // system.json still carrying the key therefore fails here and regenerates with
+  // defaults, losing its other settings -- the accepted, spec'd cost of the greenfield
+  // config rule.
   check_unknown_keys(root_json,
-                      {"format", "format_version", "enable_vsync", "renderer", "windowed",
+                      {"format", "format_version", "enable_vsync", "windowed",
                        "draw_depth", "eye_spacing", "image_cache_size", "animation_buffer_size",
                        "font_cache_size", "last_root_directory", "last_export_settings",
                        "last_session_map"},
@@ -1511,9 +1500,6 @@ trance_pb::System load_system_json(const std::string& path)
 
   trance_pb::System system;
   system.set_enable_vsync(get_bool(root_json, "enable_vsync", ""));
-  if (const json* renderer = find(root_json, "renderer")) {
-    system.set_renderer(parse_renderer(renderer->get<std::string>(), "/renderer"));
-  }
   system.set_windowed(get_bool(root_json, "windowed", ""));
 
   if (const json* dd = find(root_json, "draw_depth")) {
@@ -1570,9 +1556,6 @@ void save_system_json(const trance_pb::System& system, const std::string& path)
   root_json["format_version"] = 1;
 
   if (system.enable_vsync()) root_json["enable_vsync"] = system.enable_vsync();
-  if (system.renderer() != trance_pb::System_Renderer_MONITOR) {
-    root_json["renderer"] = save_renderer(system.renderer());
-  }
   if (system.windowed()) root_json["windowed"] = system.windowed();
 
   if (system.has_draw_depth()) {

@@ -157,21 +157,6 @@ namespace
     return out;
   }
 
-  trance_pb::System::Renderer convert(trance_legacy_pb::System::Renderer in)
-  {
-    switch (in) {
-    case trance_legacy_pb::System::OCULUS:
-      // Still translated faithfully; validate_system() is what downgrades it to
-      // MONITOR with a warning (docs/session-json-format.md sec 7).
-      return trance_pb::System::OCULUS;
-    case trance_legacy_pb::System::OPENVR:
-      return trance_pb::System::OPENVR;
-    case trance_legacy_pb::System::MONITOR:
-    default:
-      return trance_pb::System::MONITOR;
-    }
-  }
-
   trance_pb::Program::VisualType convert(trance_legacy_pb::Program::VisualType in)
   {
     switch (in) {
@@ -371,7 +356,9 @@ namespace
   {
     trance_pb::System out;
     out.set_enable_vsync(in.enable_vsync());
-    out.set_renderer(convert(in.renderer()));
+    // legacy System.renderer is READ AND DROPPED: the frozen schema still carries the
+    // field (that is what lets an old system.cfg parse at all), but the live model has
+    // no renderer choice to translate it into (docs/spec-xr-unified.md D2).
     // Presence-sensitive (see the note in convert(Program)): an absent draw_depth is
     // what makes validate_system fill in the default rather than leaving it at 0.
     if (in.has_draw_depth()) {

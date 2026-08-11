@@ -36,7 +36,7 @@ cmake --build --preset linux-release          # or linux-debug
 # Run (realtime windowed; needs a real GPU — software GL won't do)
 ./build/windows-msvc/Release/trance.exe "C:\path\to\some.session"
 
-# Bundle a clean distributable (trance.exe + openvr_api.dll, nothing else)
+# Bundle a clean distributable (trance.exe alone -- there are no DLLs to ship)
 cmake --install build/windows-msvc --config Release --prefix dist
 ```
 
