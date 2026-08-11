@@ -3,6 +3,10 @@
 **trance** is a self-hypnosis tool that displays images, animations, and text in
 randomly-generated patterns designed to aid induction and deepening.
 
+Three priorities govern every design decision: **fast** (native-rate rendering, no
+wasted work), **small** (one exe, few dependencies), and **easy to use** (zero
+configuration — things just work, and say so loudly on the console when they can't).
+
 ## Features
 
 - Randomly-generated visuals — no two sessions are the same

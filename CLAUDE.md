@@ -116,6 +116,11 @@ render, media, main), `src/common` (proto `trance.proto`, session), `docs/`, `te
 
 ## Key invariants & principles
 
+- **Product priorities: fast, small, easy to use.** Every design decision is judged
+  against these three — native-rate rendering with no wasted work; one exe with few
+  dependencies and net-negative diffs preferred; zero configuration, with loud specific
+  console lines when something can't just work. A change that trades against one of
+  them needs to say which and why.
 - **Compile-down floor.** Everything the v3 grammar offers must lower to the runtime described
   in `docs/engine-today.md` — a counter tree firing the fixed draw/scalar ops feeding a render
   block. The v3 runtime extensions (curve spiral speed, the `SpiralSet` selector, the wave
