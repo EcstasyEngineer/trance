@@ -756,6 +756,186 @@ namespace
           "get_current_theme_image never passes another theme's animation frame off as "
           "the lane's current theme (violations: " + std::to_string(honest_foreign) + ")");
   }
+  // ------------------------------------------------------------------------------------
+  // CASE 7 -- AN ANIM DRAW ON A GIF-LESS THEME HOLDS ONE STILL; IT DOES NOT RE-ROLL.
+  //
+  // Failure mode (reported live: slow_flash "randomly super ultra fast", a third speed
+  // beyond the pattern's 64f and 8f cadences): the render side reads the animation lane
+  // EVERY FRAME of an anim cut, and get_animation's stills fallback (case 4's never-black
+  // rule) answered each read with a fresh get_still_image -- a shuffled random pick. On a
+  // theme with no gifs, an `anim every 2nd` cut therefore strobed a new random still on
+  // every single frame for 64 frames, and burned a recency slot per frame doing it. The
+  // fix latches the substitute: it holds like a real animation would, until the next
+  // change_animation request (one fresh still per anim cut) or a lane theme change.
+  //
+  // Three properties pinned, each against the specific way it broke or could break:
+  //   A. stability -- no change_animation, no change: the substitute is frame-stable.
+  //      (>= 2 resident stills is what makes this bite: with one still the old re-roll
+  //      "re-picked" the same image and the strobe was invisible.)
+  //   B. a latch held across a theme swap is invalidated by the lane's generation --
+  //      the substitute must never show the OUTGOING theme once the lane has settled.
+  //   C. a real gif outranks the substitute on a theme that has both.
+  // ------------------------------------------------------------------------------------
+  AnimFixture make_latch_fixture(const std::string& name, const std::string& enabled)
+  {
+    AnimFixture fx;
+    fx.root = scratch_root() / name;
+    std::filesystem::remove_all(fx.root);
+    // "stills" (width 2) and "stills1" (width 1): gif-less themes, provenance readable
+    // off Image::width() as everywhere else in this file. Three files each so the
+    // anti-repeat shuffler has somewhere else to go -- see the case comment.
+    for (int i = 0; i < 3; ++i) {
+      write_png(fx.root / "stills" / ("s" + std::to_string(i) + ".png"), kPng2x1,
+                sizeof(kPng2x1));
+      write_png(fx.root / "stills1" / ("t" + std::to_string(i) + ".png"), kPng1x1,
+                sizeof(kPng1x1));
+    }
+    // "mixed": one width-1 still plus the width-2 gif, so a substitute (1) and a real
+    // animation frame (2) are distinguishable.
+    write_png(fx.root / "mixed" / "m.png", kPng1x1, sizeof(kPng1x1));
+    write_file(fx.root / "mixed" / "m.gif",
+               std::string{reinterpret_cast<const char*>(kGif2Frame2x1),
+                           sizeof(kGif2Frame2x1)});
+    write_file(fx.root / "s.session.json", std::string{R"json({
+  "format": "trance-session", "format_version": 1,
+  "first_playlist_item": "main",
+  "playlist": { "main": { "standard": { "program": "p" } } },
+  "program_map": { "p": { "global_fps": 120, "enabled_theme": [ )json"} +
+                     enabled + R"json( ] } },
+  "theme_scan_root": { "dir": ".", "auto_rescan": false },
+  "theme_map": { "stills": { "scan": "stills" }, "stills1": { "scan": "stills1" },
+                 "mixed": { "scan": "mixed" } }
+})json");
+    fx.session =
+        load_session_json((fx.root / "s.session.json").string(), fx.root.string(), fx.sidecar);
+    fx.system = get_default_system();
+    fx.bank = std::make_unique<ThemeBank>(fx.root.string(), fx.session, fx.system,
+                                          fx.session.program_map().at("p"), fx.sidecar.theme_tiers);
+    return fx;
+  }
+
+  void test_anim_fallback_latch()
+  {
+    {
+      // A. Stability, then one fresh substitute per change_animation.
+      auto fx = make_latch_fixture("latch_hold",
+                                   R"({ "theme_name": "stills", "random_weight": 1 })");
+      Image first = fx.bank->get_animation(false);
+      check(first && first.texture(),
+            "a gif-less theme's anim fallback is drawable (otherwise this proves nothing)");
+
+      // 128 frames, the way the renderer reads the lane during two 64f anim cuts. The
+      // old code re-rolled the shuffler on every read; with three resident stills the
+      // anti-repeat bookkeeping makes staying on one image essentially impossible.
+      bool drifted = false;
+      for (int i = 0; i < 128; ++i) {
+        fx.bank->advance_frames();
+        Image frame = fx.bank->get_animation(false);
+        if (!frame || frame.texture() != first.texture()) {
+          drifted = true;
+        }
+      }
+      check(!drifted, "a still substituting for an animation is frame-stable -- it holds "
+                      "like a real animation instead of strobing a new pick per frame");
+
+      // change_animation ends the substitute's lifetime. The shuffle is random, so a
+      // single attempt returning the same image is legitimate; bounded attempts keep
+      // this a property, not a pick sequence (the file's no-seed rule).
+      Image repick;
+      int attempts = 0;
+      for (; attempts < 10; ++attempts) {
+        fx.bank->change_animation(false);
+        fx.bank->advance_frames();
+        repick = fx.bank->get_animation(false);
+        if (repick && repick.texture() != first.texture()) {
+          break;
+        }
+      }
+      check(repick && repick.texture() != first.texture(),
+            "change_animation re-picks the substitute (a fresh still per anim cut; took " +
+                std::to_string(attempts + 1) + "/10 attempts)");
+      Image held = fx.bank->get_animation(false);
+      check(held && held.texture() == repick.texture(),
+            "the re-picked substitute is itself latched, not the start of a re-roll");
+    }
+    {
+      // B. Generation invalidation: the latch is held across theme swaps (get_animation
+      // on every iteration, mirroring a pattern whose anim draws never stop), and once a
+      // lane settles on a theme the substitute must be that theme's own content. The
+      // pacing and grace-window logic mirror case 6, which explains the constants.
+      auto fx = make_latch_fixture("latch_swap",
+                                   R"({ "theme_name": "stills", "random_weight": 1 },)"
+                                   R"({ "theme_name": "stills1", "random_weight": 1 })");
+      auto lane_theme = [&] { return fx.bank->debug_snapshot().slots[1].name; };
+      auto theme_width = [](const std::string& name) -> uint32_t {
+        return name == "stills" ? 2u : name == "stills1" ? 1u : 0u;
+      };
+      const int kGrace = 200;
+      std::string current_theme = lane_theme();
+      int since_change = kGrace;
+      std::size_t lane_changes = 0;
+      std::size_t sampled = 0;
+      std::size_t stale = 0;
+      for (int i = 0; i < 16000; ++i) {
+        fx.bank->async_update();
+        fx.bank->advance_frames();
+        if (i % 500 == 499) {
+          fx.bank->change_themes();
+        }
+        const std::string now_theme = lane_theme();
+        if (now_theme != current_theme) {
+          current_theme = now_theme;
+          ++lane_changes;
+          since_change = 0;
+        } else if (since_change < kGrace) {
+          ++since_change;
+        }
+        Image frame = fx.bank->get_animation(false);
+        if (since_change >= kGrace && frame) {
+          ++sampled;
+          if (frame.width() != theme_width(current_theme)) {
+            ++stale;
+          }
+        }
+      }
+      check(lane_changes >= 2, "the primary lane's theme changed at least twice (" +
+                                   std::to_string(lane_changes) + ") -- otherwise this "
+                                   "case proves nothing");
+      check(sampled > 0, "substitutes were actually sampled outside the grace window (" +
+                             std::to_string(sampled) + ")");
+      check(stale == 0,
+            "a substitute latched under the outgoing theme is invalidated when the "
+            "lane's theme changes -- settled lanes serve their own stills (stale: " +
+                std::to_string(stale) + "/" + std::to_string(sampled) + ")");
+    }
+    {
+      // C. A real animation outranks the substitute. The AsyncStreamer constructor
+      // fills its buffer synchronously, so the gif may be there from the first read;
+      // the pump only covers the case where it is not.
+      auto fx = make_latch_fixture("latch_mixed",
+                                   R"({ "theme_name": "mixed", "random_weight": 1 })");
+      bool gif_seen = false;
+      for (int i = 0; i < 200 && !gif_seen; ++i) {
+        fx.bank->async_update();
+        fx.bank->advance_frames();
+        Image frame = fx.bank->get_animation(false);
+        gif_seen = frame && frame.width() == 2;
+      }
+      check(gif_seen, "a theme with a real gif serves the gif to anim draws");
+      std::size_t substituted = 0;
+      for (int i = 0; i < 100; ++i) {
+        fx.bank->async_update();
+        fx.bank->advance_frames();
+        Image frame = fx.bank->get_animation(false);
+        if (!frame || frame.width() != 2) {
+          ++substituted;
+        }
+      }
+      check(substituted == 0,
+            "once the real gif flows, the still substitute never fights it (substituted "
+            "on " + std::to_string(substituted) + "/100 reads)");
+    }
+  }
 } // namespace
 
 int main()
@@ -781,6 +961,7 @@ int main()
   test_animations_stay_in_their_theme();
   test_theme_change_is_detectable();
   test_lane_animation_follows_theme_swap();
+  test_anim_fallback_latch();
 
   if (g_fail) {
     std::cout << g_fail << " check(s) failed\n";

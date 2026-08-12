@@ -211,20 +211,20 @@ void VisualApiImpl::begin_pass() const
 
 Image VisualApiImpl::pass_animation(bool alternate) const
 {
-  // ThemeBank::get_animation is NOT a pure read. When the lane's theme has no gif of its
-  // own -- which theme_bank.cpp notes is MOST themes -- it falls through to
-  // get_still_image, a weighted/shuffled random pick that also advances the anti-repeat
-  // recency bookkeeping. Called once per pass, that draws a different still in the left
-  // eye, the right eye and the desktop mirror of the SAME frame (and burns three recency
-  // slots for one on-screen image). `anim` appears in nearly every built-in, so this is
-  // the ordinary case with a headset attached, and a mirror that disagrees with the
-  // headset is exactly what D4 says must not happen.
+  // ThemeBank::get_animation is not a pure read. When the lane's theme has no gif of
+  // its own -- which theme_bank.cpp notes is MOST themes -- it serves a still substitute,
+  // and ESTABLISHING that latch is a shuffled pick that advances the anti-repeat recency
+  // bookkeeping. `anim` appears in nearly every built-in, so this is the ordinary case
+  // with a headset attached, and a mirror that disagrees with the headset is exactly
+  // what D4 says must not happen.
   //
   // So: resolve on the frame's first pass, replay on the others -- the same
   // once-per-frame-before-all-passes rule as the stale-register refresh in
   // compiled_visual.cpp and the spiral/warp advances in render_eval.cpp (spec trap 1).
-  // Replay by ORDER rather than by lane so a block with two `anim` draws still gets two
-  // independent picks, exactly as a desktop-only run does today; eval_render is
+  // Replay by ORDER so later passes reproduce the first pass's exact call sequence,
+  // including blocks that mix primary and alternate draws. Multiple draws from one lane
+  // intentionally SHARE that lane's current animation selection (or its latched still
+  // substitute), just as they share one real animation streamer; eval_render is
   // deterministic given the registers and the cycler, neither of which moves between the
   // passes of one frame, so every pass makes the identical sequence of calls.
   if (_director.render_mutations_enabled()) {

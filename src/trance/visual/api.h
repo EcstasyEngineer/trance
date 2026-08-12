@@ -186,9 +186,9 @@ private:
   float zoom_intensity(float zoom_origin, float zoom) const;
   // ThemeBank::get_animation for a draw, resolved ONCE per frame and replayed on the
   // frame's later passes. See the definition: get_animation is not a pure read -- on a
-  // theme with no gifs (most themes) it falls through to the random still shuffle -- so
-  // calling it per pass draws a different image in each eye and a third on the desktop
-  // mirror (spec trap 1, D4).
+  // theme with no gifs (most themes) it serves a latched still substitute, and
+  // establishing that latch is a shuffled pick -- so this keeps every pass of one frame
+  // (each eye and the desktop mirror) drawing the same thing (spec trap 1, D4).
   Image pass_animation(bool alternate) const;
 
   Director& _director;

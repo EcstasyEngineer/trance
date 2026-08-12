@@ -282,6 +282,17 @@ private:
   // a theme with nothing currently drawable repeats the previous image instead
   // of flashing an empty (black) frame. Render-thread-only.
   std::array<Image, 2> _last_good_image;
+  // A still standing in for an animation on a theme that has no gifs of its own
+  // (get_animation's fallback). Latched so the substitute holds steady the way a real
+  // animation would -- re-picked when the next animation is requested (change_animation)
+  // or when the lane's occupancy changes (generation mismatch) -- rather than re-rolling
+  // the shuffler on every read, which strobed a new random still on every FRAME of an
+  // anim cut. Render-thread-only, like _last_good_image.
+  struct AnimFallback {
+    Image image;
+    uint32_t generation = 0;
+  };
+  std::array<AnimFallback, 2> _anim_fallback;
 
   std::unique_ptr<AsyncStreamer> _streamer;
   std::unique_ptr<AsyncStreamer> _alt_streamer;

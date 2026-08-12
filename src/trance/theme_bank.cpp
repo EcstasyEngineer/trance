@@ -404,8 +404,13 @@ Image ThemeBank::get_animation(bool alternate)
 {
   auto& theme = *_active_themes[alternate ? 2 : 1].load();
   auto& last_good = _last_good_image[alternate ? 1 : 0];
+  auto& fallback = _anim_fallback[alternate ? 1 : 0];
   Image frame = get_animation_frame(alternate);
   if (frame) {
+    // A real animation is flowing, so any substitute's selection lifetime is over: the
+    // next dry spell re-picks a current still rather than resurrecting one that may
+    // have been hidden behind the gif for minutes.
+    fallback = {};
     last_good = frame;
     return frame;
   }
@@ -416,11 +421,29 @@ Image ThemeBank::get_animation(bool alternate)
   // do_load_animation) -- that was the cross-theme leak, and taking it away without
   // putting this here turned the leak into a black frame. A still from the right theme
   // is the honest answer to "animate this theme" when the theme does not animate.
+  //
+  // LATCHED, not re-rolled: the draw side reads the animation lane every frame, and a
+  // fresh shuffle per read strobed a new random still on every frame of an anim cut
+  // (and burned a recency slot each time). One substitute holds -- the way a real
+  // animation holds between change requests -- until change_animation asks for the next
+  // one or the lane's occupancy changes (generation mismatch, checked at read time so
+  // no clearing is owed anywhere else).
   if (theme.size) {
-    Image image = get_still_image(alternate);
-    if (image) {
-      last_good = image;
-      return image;
+    if (!fallback.image || fallback.generation != _lane_generation[alternate ? 1 : 0]) {
+      Image image = get_still_image(alternate);
+      if (image) {
+        fallback = {image, _lane_generation[alternate ? 1 : 0]};
+      } else {
+        // A miss with stills present: nothing resident yet, or a stale-generation latch
+        // whose new theme cannot pick this instant. Wrong-theme content must not
+        // masquerade as the current substitute -- fall to last_good below, which is
+        // ALLOWED to be stale, and retry the current theme next read.
+        fallback = {};
+      }
+    }
+    if (fallback.image) {
+      last_good = fallback.image;
+      return fallback.image;
     }
   }
   return last_good;
@@ -599,6 +622,10 @@ const std::string& ThemeBank::get_audio(bool alternate)
 
 void ThemeBank::change_animation(bool alternate)
 {
+  // "Give me the next animation" also ends a still substitute's lifetime (see
+  // get_animation): the next fallback read re-picks, so a gif-less theme gets one fresh
+  // still per animation change instead of holding a single substitute forever.
+  _anim_fallback[alternate ? 1 : 0] = {};
   if (alternate) {
     _alt_change_animation = true;
   } else {
