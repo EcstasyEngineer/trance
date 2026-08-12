@@ -99,6 +99,16 @@ public:
   // parser's "line:col: message" diagnostic and leaves the current visual untouched.
   // `name` is used only for the debug overlay's "visual:" line.
   std::string force_pattern_from_source(const std::string& source, const std::string& name);
+  // Release whichever force is in effect -- a built-in pinned by `visual`, or a pattern
+  // loaded from a file or over the wire -- and go back to the program's own visual
+  // schedule (its pin, else the weighted shuffle). No-op when nothing is forced.
+  // The runtime half of #59: `load pattern` shipped with no un-force at all, so a restart
+  // was the only way back out of a pinned visual.
+  void clear_forced_visual();
+  // Whether a force is in effect right now, for the `visuals` verb: a controller that
+  // cannot see the screen otherwise cannot tell "the schedule chose this" from "someone
+  // pinned this an hour ago".
+  bool visual_forced() const;
 
   void render_spiral(float spiral, uint32_t spiral_width, uint32_t spiral_type) const;
   void render_image(const Image& image, float alpha, float zoom_origin, float zoom) const;

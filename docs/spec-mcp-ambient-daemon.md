@@ -162,6 +162,58 @@ make trance vanish instantly without killing the process**):
 
 Loading:
 - **`load pattern FILE`** — load/compile a single v3 pattern file as the active visual.
+  `FILE` is the rest of the line, so an unquoted Windows path with spaces in it works.
+- **`load pattern source V3-SOURCE`** — the same thing from source text carried on the
+  line itself (added 2026-08-12, #59). The engine API underneath was always
+  source-text-in (`Director::force_pattern_from_source`; the FILE verb reads a file to a
+  string and calls exactly this), so this is a wrapper, not engine work. It exists because a
+  controller that is not the trance machine — or that composed a pattern in memory — cannot
+  use the FILE form at all without first materialising a file somewhere trance can see.
+  v3 treats newlines as ordinary whitespace so a one-line source parses as-is; the two
+  characters `\n` are translated to a real newline for the one construct that needs one (a
+  `#` comment, which otherwise swallows the rest of the pattern). Errors return the parser's
+  `line:col` diagnostic and leave the playing visual alone.
+- **`unload pattern`** — release whatever visual is forced (by either `load pattern` form or
+  by `visual`) and return to the program's own schedule: its pin, else the weighted shuffle.
+  Idempotent. Added with the verbs above for a reason the original surface got wrong:
+  `load pattern` shipped with no un-force at all, so a restart was the only way back.
+
+Content selection (added 2026-08-12, #59 — the visual side of the surface had *no* runtime
+control, which made a controller that cannot see the screen blind and mute at once):
+- **`themes`** — one line listing every theme in the session as `name:weight`, with markers
+  `*` pinned, `+` live on a lane right now, `!` nothing to draw. This is the "what may I
+  pin?" answer; before it, `status`'s four slots were a keyhole view of (in the session that
+  prompted the issue) 43 themes, and the names existed nowhere else a controller could read.
+- **`theme pin NAME[,NAME]`** / **`theme unpin`** — hold the session on one or two themes.
+  One name puts that theme on *both* lanes; two put one on each. Two is the ceiling because
+  the engine holds exactly two live themes and 3+ is a decided non-goal
+  (`spec-grammar-v3.md` §9), so a third name is a mistake rather than a request. Expressed
+  through the two levers `ThemeBank::advance_theme` already had — the pin and the rotation
+  weights — so no second selection path exists to disagree with the first. Not instant: the
+  bank must load the theme before it can put it on a lane.
+- **`visuals`** — one line listing what `visual` accepts: the built-ins and the active
+  program's custom patterns, as `name:weight` with `*` on the one playing, plus
+  `forced=yes|no` so "the schedule chose this" is distinguishable from "someone pinned it".
+- **`visual NAME`** — runtime twin of the `--visual` flag, extended to the program's custom
+  patterns since both are things `visuals` lists. Released by `unload pattern`.
+- **`text pin WORD[,WORD]`** / **`text unpin`** — every text draw
+  (`word`/`caption`/`subtext`/`line`) serves from the caller's words, round-robin, instead of
+  the themes' text pools. Comma-separated because a "word" may be a phrase with spaces in it.
+  This is a **runtime word-pool override, not a grammar change**: the content vocabulary is
+  `content ::= primary | secondary | runtime` (`spec-grammar-v3.md` §4.2) and a pattern
+  cannot carry a literal string, so the override lives at `ThemeBank::get_text` — the single
+  funnel every text verb already draws through. Both lanes read the same list: the words are
+  the caller's, so there is nothing thematic about them to keep on one side. It overrides the
+  text *source* and adds no draws, so a visual that draws no text still shows none.
+- Known gap: the **F2 panel does not show a runtime pin.** Its Themes rows read the session's
+  own weights and pin flags, which a runtime pin deliberately does not touch, so while one is
+  in effect the panel's numbers describe the session rather than what is on screen. Live
+  state, one banner's worth of work, filed rather than bodged.
+- **All three pins are process-lifetime state and do not touch the session file**, for the
+  same reason the `bed` verbs don't (see the note above): the loaded session is live state
+  that the F2 panel autosaves, so a pin issued over a socket must not become something the
+  author appears to have chosen. They deliberately survive a playlist program switch —
+  "stay on this theme" is about the session, not about one program.
 
 Audio (added 2026-08-02 — the same surface as the F2 Audio section; `bed` edits apply to
 the ACTIVE program in place, live through the program-change seam, and reconfigures MORPH
@@ -187,6 +239,12 @@ the one live program, and the autosave writes whatever it finds:
 - **`bed master DB`** — bed output level in dB RMS, clamped to `-60..-6` (the F2 slider's
   range; the top stays below 0 dB both as a loudness guard and because 0 in the stored
   config means "default"). Errs if the bed is off.
+- **`bed layers`** — READ the bed back (added 2026-08-12, #60): `ok layers=N master_db=...`
+  followed by every layer's carrier/binaural/pulse/level. Read-only, and the letter the
+  layers' CRUD was missing: without it `bed layer remove` was effectively irreversible (the
+  removed layer's parameters could not be read first, so it could not be rebuilt with
+  `bed layer add` + `set`), a changed `level` was unrestorable, and the only way to learn the
+  layer count was to call a *mutating* verb and read its `layers=N` reply.
 - **`bed layer add`** — append a layer (200 Hz carrier, 3 Hz binaural, continuous, −6 dB
   mix — the F2 "+ add layer" seed). Replies `ok layers=N`.
 - **`bed layer remove I`** — remove layer `I` (0-based). Replies `ok layers=N`; errs on a
@@ -215,9 +273,11 @@ the one live program, and the autosave writes whatever it finds:
 
 Status:
 - **`status`** — single-line, parseable reply: current visual name, entrainment-bed state,
-  overlay state, hidden state, process uptime, and ThemeBank's four queue slots. Exact
+  mute, overlay state, hidden state, process uptime, the headset output's attach state, and
+  ThemeBank's four queue slots, plus whether either runtime content pin is in effect. Exact
   reply shape:
-  `ok visual=<name> bed=<on|off> overlay=<on|off> hidden=<on|off> uptime=<seconds> themes=<a|b|c|d>`
+  `ok visual=<name> bed=<on|off> muted=<on|off> overlay=<on|off> hidden=<on|off> uptime=<seconds> xr=<off|unattached|attached|attached-idle> themes=<a|b|c|d> themepin=<names|-> text=<theme|pinned:N>`
+  Fields are appended, never reordered or removed, so a `grep`-shaped client keeps working.
 
 Debug/validation (same line protocol, not part of the settings surface proper):
 - **`ui on|off`** — show/hide the F2 ImGui panels remotely (same state the F2 key

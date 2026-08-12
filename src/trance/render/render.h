@@ -55,7 +55,11 @@ public:
     VR_RIGHT = 2,
   };
 
-  ScreenRenderer(const trance_pb::System& system, const OverlayConfig& overlay = {});
+  // `start_hidden` (--hidden, #58): create AND LEAVE the window unmapped, so a run that
+  // begins in silent running never puts a frame on screen. Everything else is unchanged --
+  // the GL context, the XR probe and the frame loop all run exactly as when visible.
+  ScreenRenderer(const trance_pb::System& system, const OverlayConfig& overlay = {},
+                 bool start_hidden = false);
   ~ScreenRenderer();
   ScreenRenderer(const ScreenRenderer&) = delete;
   ScreenRenderer& operator=(const ScreenRenderer&) = delete;
@@ -225,6 +229,10 @@ private:
   // desktop_pass_due()'s latched answer, consumed by render(). True by default so a
   // render() that was never preceded by the query behaves exactly as it always did.
   bool _desktop_pass = true;
+  // --hidden (#58): suppresses the one setVisible(true) in init(), so a run that starts in
+  // silent running never maps the window at all. Read once, in init(); every later
+  // hide/show goes through main.cpp's seam, which owns the window's visibility from then on.
+  bool _start_hidden = false;
 };
 
 #endif

@@ -22,7 +22,28 @@ namespace command_protocol
     kOverlayOff,
     kOverlayOpacity,
     kLoadPattern,
+    // Inline v3 grammar over the wire, and the release twin every pin verb owes
+    // (#59). kLoadPatternSource carries the SOURCE TEXT, not a path: a controller that
+    // isn't the trance machine -- or that composed a pattern in memory -- cannot write a
+    // file into a path this process can see, and the engine API underneath was always
+    // source-text-in. kUnloadPattern drops whatever is forced (a pattern OR a built-in
+    // pinned by `visual`) and returns to the program's own visual schedule; before it
+    // there was no un-force at all and a restart was the only way back.
+    kLoadPatternSource,
+    kUnloadPattern,
     kStatus,
+    // Discovery + runtime content control (#59). A controller that cannot see the screen
+    // had no way to learn what it may pin: `status` reports the four live theme slots,
+    // which is a keyhole view of a 43-theme session, and the valid built-in visual names
+    // existed only in --visual's help text and an error message. kThemes/kVisuals
+    // enumerate; the pin verbs select. Every pin has its unpin twin.
+    kThemes,
+    kThemePin,
+    kThemeUnpin,
+    kVisuals,
+    kVisual,
+    kTextPin,
+    kTextUnpin,
     // Hide-everything / silent running (spec sec 4): window invisible + playback paused +
     // audio muted, process alive. Idempotent -- `hide` while hidden and `show` while shown
     // are both `ok` no-ops. Same state Shift+F11 and the tray's Hide/Show item toggle.
@@ -48,6 +69,10 @@ namespace command_protocol
     kBedLayerAdd,
     kBedLayerRemove,
     kBedLayerSet,
+    // The missing R in the bed layers' CRUD (#60): `bed layer remove` was effectively
+    // irreversible and a changed `level` unrestorable, because nothing could read a
+    // layer's parameters back. Read-only.
+    kBedLayers,
   };
 
   struct ParsedCommand {
@@ -55,6 +80,11 @@ namespace command_protocol
     // Populated depending on verb: kOverlayOpacity -> number; kLoadPattern/kScreenshot ->
     // value (the file path); kBedMaster -> number; kBedLayerRemove -> index;
     // kBedLayerSet -> index + value (field name: carrier|binaural|pulse|level) + number.
+    // The free-text verbs put the whole rest of the line in `value`, un-tokenized:
+    // kLoadPatternSource (v3 source), kThemePin (comma-separated theme names),
+    // kVisual (a built-in or custom pattern name), kTextPin (comma-separated words).
+    // kLoadPattern/kScreenshot take their path the same way, so a Windows path with
+    // spaces in it works unquoted.
     std::string value;
     float number = 0.f;
     int index = 0;

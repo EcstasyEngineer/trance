@@ -70,8 +70,10 @@ namespace
   {
     static const std::vector<Tool> table = {
         {"status",
-         "One-line status of the running trance instance (playing/paused, current "
-         "visual, overlay, hidden, bed, themes).",
+         "One-line status of the running trance instance: current visual, bed on/off, "
+         "muted, overlay, hidden, uptime, headset (xr), the four theme queue slots "
+         "(prev|primary|secondary|next), and whether a theme or text pin is in effect. "
+         "Cheap and side-effect-free -- call it before anything else to see where you are.",
          obj_schema(), [](const json&) { return std::string{"status"}; }},
         {"pause", "Freeze playback in place (program state retained; the frame stays up).",
          obj_schema(), [](const json&) { return std::string{"pause"}; }},
@@ -93,11 +95,74 @@ namespace
                     {"opacity"}),
          [](const json& args) { return "overlay opacity " + num_str(num_arg(args, "opacity")); }},
         {"load_pattern",
-         "Load and pin a v3 pattern from a source file on this machine (replaces the "
-         "playing visual).",
+         "Load and pin a v3 pattern from a source file, resolved ON THE TRANCE MACHINE "
+         "(replaces the playing visual until unload_pattern). If you did not put that file "
+         "on that machine yourself, use load_pattern_source instead.",
          obj_schema({{"file", {{"type", "string"}, {"description", "pattern source path"}}}},
                     {"file"}),
          [](const json& args) { return "load pattern " + str_arg(args, "file"); }},
+        {"load_pattern_source",
+         "Load and pin a v3 pattern from source text sent over this connection -- no file "
+         "on the trance machine needed. Newlines are ordinary whitespace to the grammar, so "
+         "a one-line source is fine; write \\n where you need a real line break (only a `#` "
+         "comment requires one). A parse error comes back as the parser's line:col "
+         "diagnostic and the playing visual is left alone. Released by unload_pattern.",
+         obj_schema({{"source", {{"type", "string"}, {"description", "v3 pattern source text"}}}},
+                    {"source"}),
+         [](const json& args) { return "load pattern source " + str_arg(args, "source"); }},
+        {"unload_pattern",
+         "Release whatever visual is pinned -- by load_pattern, load_pattern_source or "
+         "visual -- and return to the program's own visual schedule. Idempotent.",
+         obj_schema(), [](const json&) { return std::string{"unload pattern"}; }},
+        {"themes",
+         "List every theme in the session (the answer to 'what may I pin?'), as "
+         "name:weight with markers: * pinned, + live on one of the two theme slots right "
+         "now, ! nothing to draw so it cannot be pinned. weight is the program's rotation "
+         "weight; 0 means it is not in the rotation but can still be pinned.",
+         obj_schema(), [](const json&) { return std::string{"themes"}; }},
+        {"theme_pin",
+         "Hold the session on specific themes instead of letting them rotate. One name "
+         "puts that theme on BOTH live theme slots; two names put one on each (the engine "
+         "holds exactly two live themes, so two is the maximum). Takes a few seconds to "
+         "become visible -- the bank has to load the theme in -- so do not read a "
+         "screenshot taken immediately as a failed pin. Released by theme_unpin. This does "
+         "not edit the session file.",
+         obj_schema({{"names",
+                      {{"type", "string"},
+                       {"description", "one or two theme names, comma-separated"}}}},
+                    {"names"}),
+         [](const json& args) { return "theme pin " + str_arg(args, "names"); }},
+        {"theme_unpin", "Release the theme pin: back to the program's own theme rotation.",
+         obj_schema(), [](const json&) { return std::string{"theme unpin"}; }},
+        {"visuals",
+         "List what `visual` accepts: the built-in visuals and the active program's custom "
+         "patterns, as name:weight with * marking the one playing now, plus whether a force "
+         "is currently in effect (forced=yes means someone pinned it, not that the schedule "
+         "chose it).",
+         obj_schema(), [](const json&) { return std::string{"visuals"}; }},
+        {"visual",
+         "Force every visual selection to one built-in (accelerate, slow_flash, sub_text, "
+         "flash_text, simple, super_parallel, animation, super_fast) or to one of the "
+         "active program's custom patterns, by name. Themes, audio and the playlist are "
+         "unaffected -- only the visual schedule. Released by unload_pattern.",
+         obj_schema({{"name",
+                      {{"type", "string"},
+                       {"description", "built-in or custom pattern name; send `visuals` to list"}}}},
+                    {"name"}),
+         [](const json& args) { return "visual " + str_arg(args, "name"); }},
+        {"text_pin",
+         "Display exactly these words: every text draw (word/caption/subtext/line) serves "
+         "from this list, round-robin, instead of the themes' own text pools. The words are "
+         "yours, not a theme's, so both theme slots draw from the same list. Released by "
+         "text_unpin. Note that a visual with no text draws in it shows none of this -- "
+         "pair it with `visual sub_text` or `visual flash_text` if nothing appears.",
+         obj_schema({{"words",
+                      {{"type", "string"},
+                       {"description", "comma-separated words or phrases"}}}},
+                    {"words"}),
+         [](const json& args) { return "text pin " + str_arg(args, "words"); }},
+        {"text_unpin", "Release pinned text: back to drawing text from the themes.",
+         obj_schema(), [](const json&) { return std::string{"text unpin"}; }},
         {"ui_on", "Open the in-app F2 control panel (debug/validation).", obj_schema(),
          [](const json&) { return std::string{"ui on"}; }},
         {"ui_off", "Close the in-app F2 control panel.", obj_schema(),
@@ -117,13 +182,26 @@ namespace
          obj_schema(), [](const json&) { return std::string{"bed on"}; }},
         {"bed_off", "Disable the entrainment bed.", obj_schema(),
          [](const json&) { return std::string{"bed off"}; }},
-        {"bed_master", "Set the bed's master level in dB (clamped to the F2 slider range).",
+        {"bed_master",
+         "Set the bed's master level in dB, clamped to -60..-6. THIS is the bed's absolute "
+         "volume control: the mix is normalised to this level, so a layer's own `level` "
+         "cannot make the bed quieter (see bed_layer_set).",
          obj_schema({{"db", {{"type", "number"}, {"description", "master level, dB"}}}},
                     {"db"}),
          [](const json& args) { return "bed master " + num_str(num_arg(args, "db")); }},
-        {"bed_layer_add", "Append a new entrainment layer to the active program's bed.",
+        {"bed_layers",
+         "Read the bed back: layer count, master level, and every layer's carrier/binaural/"
+         "pulse/level. Read-only. Call it BEFORE bed_layer_remove or a level change -- "
+         "nothing else can recover a layer's parameters afterwards.",
+         obj_schema(), [](const json&) { return std::string{"bed layers"}; }},
+        {"bed_layer_add",
+         "Append a new entrainment layer (carrier 200 Hz, binaural 3 Hz, level -6 dB) to the "
+         "active program's bed. Returns the layer count AFTER the append, as `layers=N`.",
          obj_schema(), [](const json&) { return std::string{"bed layer add"}; }},
-        {"bed_layer_remove", "Remove the entrainment layer at the given index.",
+        {"bed_layer_remove",
+         "Remove the entrainment layer at the given index. Returns the layer count AFTER the "
+         "removal, as `layers=N`. Read bed_layers first if you might want it back -- the "
+         "parameters are gone once it is removed.",
          obj_schema({{"index", {{"type", "integer"}, {"description", "layer index, 0-based"}}}},
                     {"index"}),
          [](const json& args) {
@@ -131,12 +209,22 @@ namespace
          }},
         {"bed_layer_set",
          "Set one field of one entrainment layer; the reconfigure morphs live rather "
-         "than cutting.",
+         "than cutting. Two things worth knowing before you diagnose anything from what you "
+         "hear: (1) every layer emits a binaural beat AND an independent isochronic pulse, "
+         "and both are audible at once, so a layer with binaural 10 and pulse 4 is producing "
+         "two perceived rates -- it is not a leftover layer that failed to tear down; "
+         "(2) `level` is a RELATIVE balance between layers, not a volume: the bed normalises "
+         "its summed level to the master, so turning the only layer down to -60 dB just "
+         "raises the master gain to compensate and produces no silence. Use bed_master for "
+         "absolute level, bed_off or mute_on for silence.",
          obj_schema({{"index", {{"type", "integer"}, {"description", "layer index, 0-based"}}},
                      {"field",
                       {{"type", "string"},
                        {"enum", {"carrier", "binaural", "pulse", "level"}},
-                       {"description", "carrier Hz | binaural Hz | pulse Hz | level dB"}}},
+                       {"description",
+                        "carrier Hz (tone centre) | binaural Hz (L/R difference) | pulse Hz "
+                        "(isochronic gate, independent of and simultaneous with binaural) | "
+                        "level dB (relative balance between layers, not absolute volume)"}}},
                      {"value", {{"type", "number"}}}},
                     {"index", "field", "value"}),
          [](const json& args) {

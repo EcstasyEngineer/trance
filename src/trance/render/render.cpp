@@ -153,7 +153,9 @@ sf::RenderWindow& ScreenRenderer::window()
   return *_window;
 }
 
-ScreenRenderer::ScreenRenderer(const trance_pb::System& system, const OverlayConfig& overlay)
+ScreenRenderer::ScreenRenderer(const trance_pb::System& system, const OverlayConfig& overlay,
+                               bool start_hidden)
+: _start_hidden{start_hidden}
 {
   _probe.reset(new XrProbe);
   _window.reset(new sf::RenderWindow);
@@ -380,7 +382,13 @@ float ScreenRenderer::eye_spacing_multiplier() const
 
 void ScreenRenderer::init()
 {
-  _window->setVisible(true);
+  // --hidden (#58): the window is created unmapped and this is the one place that would
+  // have mapped it, so leaving it alone here is what makes "started hidden" mean the
+  // player was never on screen at all -- not "it flashed up and the first frame's hide
+  // seam took it away". main.cpp's hide seam still runs the rest of silent running
+  // (pause, mute, panel collapsed) on that first iteration, and `show` maps the window
+  // for the first time.
+  _window->setVisible(!_start_hidden);
   if (!_window->setActive()) {
     std::cerr << "couldn't reactivate window OpenGL context" << std::endl;
   }

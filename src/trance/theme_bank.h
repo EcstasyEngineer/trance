@@ -45,6 +45,50 @@ public:
   const std::string& get_root_path() const;
   void set_program(const trance_pb::Program& program);
 
+  // --- Runtime control surface (#59). Render-thread only, like the get_* accessors: the
+  // command channel dispatches every verb from the frame loop, so these need no locking
+  // against the draw and none against each other.
+  //
+  // Deliberately NOT implemented by mutating the session's own enabled_theme rows, which
+  // was the other obvious shape: the loaded session is live state that the F2 panel
+  // autosaves, so a pin issued over a socket would eventually be written to disk as if the
+  // author had chosen it. An override held here is transient by construction, and it also
+  // survives a playlist program switch -- which is the behaviour a control surface wants
+  // ("stay on this theme" is about the session, not about one program).
+  struct ThemeListing {
+    std::string name;
+    // The active program's rotation weight. 0 means the program does not have it in
+    // rotation at all -- it can still be pinned.
+    uint32_t weight;
+    // Held on a lane right now (one of the two live themes), and pinned right now (by the
+    // program's own pin or by a runtime pin).
+    bool live;
+    bool pinned;
+    // Has anything at all to put on screen. An undrawable theme is skipped at runtime (a
+    // pure container directory, or one whose drive isn't mounted), so pinning it is
+    // refused rather than silently producing a black screen.
+    bool drawable;
+  };
+  // Every theme the bank knows, name-sorted -- the answer to "what may I pin?", which
+  // nothing but reading the session JSON off disk could give before.
+  std::vector<ThemeListing> list_themes() const;
+  // Pin one or two themes (bi-thematic floor: one name puts that theme on BOTH lanes, two
+  // names put one on each). Returns "" on success, else why not -- an unknown or undrawable
+  // name, or more than two names. Rejected before anything changes, so a bad pin leaves the
+  // rotation exactly as it was.
+  std::string set_runtime_theme_pin(const std::vector<std::string>& names);
+  // Release the pin: straight back to the program's own rotation.
+  void clear_runtime_theme_pin();
+  const std::vector<std::string>& runtime_theme_pin() const;
+  // Caller-supplied words for every text draw, in place of the theme pools (`text pin`).
+  // Empty vector = release. This is the runtime word-pool override the grammar's content
+  // vocabulary can't express (`content ::= primary | secondary | runtime` -- a pattern
+  // cannot carry a literal string), and it lives here because get_text is the single funnel
+  // every text verb (`word`/`caption`/`subtext`/`line`) already draws through, so no
+  // grammar or draw-op change is needed to reach it.
+  void set_pinned_text(std::vector<std::string> words);
+  const std::vector<std::string>& pinned_text() const;
+
   // Advance animation frames.
   void advance_frames();
   // Get a random loaded in-memory image, text string, etc.
@@ -242,6 +286,11 @@ private:
   void advance_theme();
   bool all_loaded() const;
   bool all_unloaded() const;
+  // Recomputes which themes are enabled, their rotation weights and which one is pinned,
+  // from the active program and then from the runtime pin on top of it. Called by
+  // set_program and by every runtime-pin change, so the two can never disagree about the
+  // selection state (the bug the obvious "just patch the fields here" shape would have).
+  void apply_theme_selection();
 
   // The still half of get_image: the tiered/flat shuffle over this theme's own RESIDENT
   // images, plus the recency bookkeeping a successful pick owes the other themes. Returns
@@ -309,6 +358,18 @@ private:
   std::unordered_map<std::string, std::size_t> _theme_map;
   std::unordered_map<std::string, uint32_t> _enabled_theme_weights;
   std::string _pinned_theme;
+  // The active program, kept so a runtime pin can be released back to ITS rotation rather
+  // than to a guess. Null until the first set_program (the constructor takes a program but
+  // builds the theme table from the session).
+  const trance_pb::Program* _program = nullptr;
+  // `theme pin` (#59): 1 or 2 names, empty when unpinned. Applied on top of whatever the
+  // program says, by apply_theme_selection.
+  std::vector<std::string> _runtime_theme_pin;
+  // `text pin` (#59): every text draw serves from these words instead of the theme pools.
+  // Round-robin rather than shuffled -- "display exactly these words" wants each of them
+  // shown, predictably, and a single pinned word must read as a constant.
+  std::vector<std::string> _pinned_text;
+  std::size_t _pinned_text_index = 0;
   // Vector of themes.
   std::vector<std::unique_ptr<ThemeInfo>> _themes;
   // Currently-active themes in queue.

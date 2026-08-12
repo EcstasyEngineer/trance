@@ -55,6 +55,32 @@ namespace command_protocol
     {
       return value < lo ? lo : value > hi ? hi : value;
     }
+
+    // Everything after the first `count` whitespace-separated tokens, trimmed at both ends
+    // but with inner spacing intact. The token split above is right for verbs and
+    // enumerated fields and wrong for every ARGUMENT that is free text: a theme name or a
+    // media path with a space in it, a comma-separated word list, a whole inline v3
+    // pattern source. Those take the tail verbatim instead.
+    std::string rest_after(const std::string& line, std::size_t count)
+    {
+      std::size_t i = 0;
+      for (std::size_t token = 0; token < count; ++token) {
+        while (i < line.size() && std::isspace(static_cast<unsigned char>(line[i]))) {
+          ++i;
+        }
+        while (i < line.size() && !std::isspace(static_cast<unsigned char>(line[i]))) {
+          ++i;
+        }
+      }
+      while (i < line.size() && std::isspace(static_cast<unsigned char>(line[i]))) {
+        ++i;
+      }
+      std::size_t end = line.size();
+      while (end > i && std::isspace(static_cast<unsigned char>(line[end - 1]))) {
+        --end;
+      }
+      return line.substr(i, end - i);
+    }
   }
 
   float clamp01(float value)
@@ -110,12 +136,55 @@ namespace command_protocol
       cmd.ok = false;
       cmd.error = "usage: overlay on|off|opacity VALUE";
       return cmd;
-    } else if (verb == "load" && tokens.size() == 3 && tokens[1] == "pattern") {
+      // Checked BEFORE `load pattern FILE` below, which now takes its path as free text:
+      // without the precedence, an inline source would be read as a file called "source
+      // ...". The cost is that a pattern file literally named `source` is unreachable
+      // through this verb, which is the better trade.
+    } else if (verb == "load" && tokens.size() >= 4 && tokens[1] == "pattern" &&
+               tokens[2] == "source") {
+      cmd.verb = Verb::kLoadPatternSource;
+      cmd.value = rest_after(line, 3);
+    } else if (verb == "load" && tokens.size() >= 3 && tokens[1] == "pattern") {
       cmd.verb = Verb::kLoadPattern;
-      cmd.value = tokens[2];
+      cmd.value = rest_after(line, 2);
     } else if (verb == "load") {
       cmd.ok = false;
-      cmd.error = "usage: load pattern FILE";
+      cmd.error = "usage: load pattern FILE | load pattern source V3-SOURCE";
+      return cmd;
+    } else if (verb == "unload" && tokens.size() == 2 && tokens[1] == "pattern") {
+      cmd.verb = Verb::kUnloadPattern;
+    } else if (verb == "unload") {
+      cmd.ok = false;
+      cmd.error = "usage: unload pattern";
+      return cmd;
+    } else if (verb == "themes" && tokens.size() == 1) {
+      cmd.verb = Verb::kThemes;
+    } else if (verb == "theme" && tokens.size() >= 3 && tokens[1] == "pin") {
+      cmd.verb = Verb::kThemePin;
+      cmd.value = rest_after(line, 2);
+    } else if (verb == "theme" && tokens.size() == 2 && tokens[1] == "unpin") {
+      cmd.verb = Verb::kThemeUnpin;
+    } else if (verb == "theme") {
+      cmd.ok = false;
+      cmd.error = "usage: theme pin NAME[,NAME] | theme unpin (and `themes` to list)";
+      return cmd;
+    } else if (verb == "visuals" && tokens.size() == 1) {
+      cmd.verb = Verb::kVisuals;
+    } else if (verb == "visual" && tokens.size() >= 2) {
+      cmd.verb = Verb::kVisual;
+      cmd.value = rest_after(line, 1);
+    } else if (verb == "visual") {
+      cmd.ok = false;
+      cmd.error = "usage: visual NAME (and `visuals` to list, `unload pattern` to release)";
+      return cmd;
+    } else if (verb == "text" && tokens.size() >= 3 && tokens[1] == "pin") {
+      cmd.verb = Verb::kTextPin;
+      cmd.value = rest_after(line, 2);
+    } else if (verb == "text" && tokens.size() == 2 && tokens[1] == "unpin") {
+      cmd.verb = Verb::kTextUnpin;
+    } else if (verb == "text") {
+      cmd.ok = false;
+      cmd.error = "usage: text pin WORD[,WORD] | text unpin";
       return cmd;
     } else if (verb == "ui" && tokens.size() == 2 && tokens[1] == "on") {
       cmd.verb = Verb::kUiOn;
@@ -125,9 +194,9 @@ namespace command_protocol
       cmd.ok = false;
       cmd.error = "usage: ui on|off";
       return cmd;
-    } else if (verb == "screenshot" && tokens.size() == 2) {
+    } else if (verb == "screenshot" && tokens.size() >= 2) {
       cmd.verb = Verb::kScreenshot;
-      cmd.value = tokens[1];
+      cmd.value = rest_after(line, 1);
     } else if (verb == "screenshot") {
       cmd.ok = false;
       cmd.error = "usage: screenshot FILE.png";
@@ -152,6 +221,8 @@ namespace command_protocol
       // loudness guard and because 0 in the proto means "default".
       cmd.number = clamp(cmd.number, -60.f, -6.f);
       cmd.verb = Verb::kBedMaster;
+    } else if (verb == "bed" && tokens.size() == 2 && tokens[1] == "layers") {
+      cmd.verb = Verb::kBedLayers;
     } else if (verb == "bed" && tokens.size() == 3 && tokens[1] == "layer" &&
                tokens[2] == "add") {
       cmd.verb = Verb::kBedLayerAdd;
@@ -194,7 +265,7 @@ namespace command_protocol
       cmd.verb = Verb::kBedLayerSet;
     } else if (verb == "bed") {
       cmd.ok = false;
-      cmd.error = "usage: bed on|off | bed master DB | bed layer add | "
+      cmd.error = "usage: bed on|off | bed layers | bed master DB | bed layer add | "
                   "bed layer remove I | bed layer I carrier|binaural|pulse|level VALUE";
       return cmd;
     } else {

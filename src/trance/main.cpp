@@ -227,8 +227,33 @@ void set_paused(CommandRuntimeState& state, Audio& audio, bool paused)
   }
 }
 
+// Splits a comma-separated verb argument (`theme pin A,B`, `text pin one,two,three`) into
+// trimmed, non-empty items. Commas rather than spaces because both of these take values
+// that legitimately contain spaces -- a theme folder called "Deep Blue", a phrase to
+// display -- so whitespace cannot be the separator.
+std::vector<std::string> split_commas(const std::string& value)
+{
+  std::vector<std::string> out;
+  std::size_t start = 0;
+  while (start <= value.size()) {
+    auto comma = value.find(',', start);
+    auto end = comma == std::string::npos ? value.size() : comma;
+    auto item = value.substr(start, end - start);
+    auto first = item.find_first_not_of(" \t");
+    auto last = item.find_last_not_of(" \t");
+    if (first != std::string::npos) {
+      out.push_back(item.substr(first, last - first + 1));
+    }
+    if (comma == std::string::npos) {
+      break;
+    }
+    start = comma + 1;
+  }
+  return out;
+}
+
 std::string execute_command(const command_protocol::ParsedCommand& cmd, Director& director,
-                            Audio& audio, const ThemeBank& themes,
+                            Audio& audio, ThemeBank& themes,
                             const ScreenRenderer& renderer, AppUi* app_ui,
                             CommandRuntimeState& state,
                             const std::chrono::steady_clock::time_point& start_time,
@@ -275,6 +300,162 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
     }
     return command_protocol::format_ok();
   }
+  case Verb::kLoadPatternSource: {
+    // Inline v3 source over the wire (#59). The engine API underneath has always been
+    // source-text-in -- the file verb above reads a file to a string and calls exactly this
+    // -- so a controller that isn't this machine no longer has to materialise a file
+    // somewhere trance can see it just to try a pattern.
+    //
+    // The channel is line-based, and v3 treats newlines as ordinary whitespace, so a
+    // single-line source parses as-is. `\n` (two characters) is translated for the one case
+    // that genuinely needs a line break: a `#` comment, which otherwise swallows the whole
+    // rest of the pattern.
+    std::string source;
+    source.reserve(cmd.value.size());
+    for (std::size_t i = 0; i < cmd.value.size(); ++i) {
+      if (cmd.value[i] == '\\' && i + 1 < cmd.value.size() && cmd.value[i + 1] == 'n') {
+        source += '\n';
+        ++i;
+        continue;
+      }
+      source += cmd.value[i];
+    }
+    auto error = director.force_pattern_from_source(source, "(inline)");
+    if (!error.empty()) {
+      return command_protocol::format_err("load pattern source: " + error);
+    }
+    return command_protocol::format_ok("pinned the inline pattern (`unload pattern` releases it)");
+  }
+  case Verb::kUnloadPattern:
+    // Idempotent, like hide/show: a release with nothing forced is a fine thing for a
+    // controller to say when it doesn't know the current state.
+    if (!director.visual_forced()) {
+      return command_protocol::format_ok("nothing was forced");
+    }
+    director.clear_forced_visual();
+    return command_protocol::format_ok("released; back to the program's visual schedule");
+  case Verb::kThemes: {
+    // One line, like every other reply (spec sec 3), so a 43-theme session comes back as
+    // one long line rather than a stream a client would have to know when to stop reading.
+    // Markers: * pinned, + live on a lane right now, ! nothing to draw (unpinnable).
+    auto listing = themes.list_themes();
+    std::ostringstream out;
+    out << "count=" << listing.size() << " pin=";
+    const auto& pin = themes.runtime_theme_pin();
+    if (pin.empty()) {
+      out << "-";
+    }
+    for (std::size_t i = 0; i < pin.size(); ++i) {
+      out << (i ? "," : "") << pin[i];
+    }
+    out << " themes=";
+    for (std::size_t i = 0; i < listing.size(); ++i) {
+      const auto& theme = listing[i];
+      out << (i ? "," : "") << theme.name << ":" << theme.weight << (theme.pinned ? "*" : "")
+          << (theme.live ? "+" : "") << (theme.drawable ? "" : "!");
+    }
+    return command_protocol::format_ok(out.str());
+  }
+  case Verb::kThemePin: {
+    auto names = split_commas(cmd.value);
+    auto error = themes.set_runtime_theme_pin(names);
+    if (!error.empty()) {
+      return command_protocol::format_err("theme pin: " + error);
+    }
+    // The swap is not instant and saying so is the point: the bank has to load the theme
+    // before it can put it on a lane, so a controller that screenshots immediately would
+    // otherwise read the old theme as a failed pin.
+    return command_protocol::format_ok(
+        names.size() == 1
+            ? "pinned " + names[0] + " to both live theme slots (takes a few seconds to load in)"
+            : "pinned " + names[0] + " and " + names[1] +
+                " to one live theme slot each (takes a few seconds to load in)");
+  }
+  case Verb::kThemeUnpin: {
+    const bool was_pinned = !themes.runtime_theme_pin().empty();
+    themes.clear_runtime_theme_pin();
+    return command_protocol::format_ok(was_pinned ? "back to the program's theme rotation"
+                                                  : "no runtime theme pin was set");
+  }
+  case Verb::kVisuals: {
+    // The built-in names existed only in --visual's help text and one error message; the
+    // active program's custom patterns were not discoverable at all. Both are valid
+    // arguments to `visual`, so both are listed. Marker: * currently playing.
+    std::ostringstream out;
+    const auto& program = director.program();
+    out << "forced=" << (director.visual_forced() ? "yes" : "no") << " builtins=";
+    bool first = true;
+    for (const auto& visual : builtin_visuals()) {
+      uint32_t weight = 0;
+      for (const auto& config : program.visual_type()) {
+        if (config.type() == visual.type) {
+          weight = config.random_weight();
+        }
+      }
+      out << (first ? "" : ",") << visual.name << ":" << weight
+          << (director.current_builtin_type() == visual.type ? "*" : "");
+      first = false;
+    }
+    out << " customs=";
+    if (program.custom_visual_pattern().empty()) {
+      out << "-";
+    }
+    first = true;
+    for (const auto& custom : program.custom_visual_pattern()) {
+      out << (first ? "" : ",") << custom.name() << ":"
+          << (custom.enabled() ? custom.random_weight() : 0)
+          << (director.current_custom_name() == custom.name() ? "*" : "");
+      first = false;
+    }
+    return command_protocol::format_ok(out.str());
+  }
+  case Verb::kVisual: {
+    // Runtime twin of --visual (#59), extended to the active program's custom patterns:
+    // both are things `visuals` lists, so both have to be things this accepts, or the
+    // listing is half a lie. Same force semantics either way -- released by
+    // `unload pattern`.
+    for (const auto& visual : builtin_visuals()) {
+      if (visual.name == cmd.value) {
+        director.force_builtin_visual(visual.type);
+        return command_protocol::format_ok("forced built-in " + cmd.value +
+                                           " (`unload pattern` releases it)");
+      }
+    }
+    for (const auto& custom : director.program().custom_visual_pattern()) {
+      if (custom.name() == cmd.value) {
+        auto error = director.force_pattern_from_source(custom.source_text(), custom.name());
+        if (!error.empty()) {
+          return command_protocol::format_err("visual: pattern '" + cmd.value + "' " + error);
+        }
+        return command_protocol::format_ok("forced custom pattern " + cmd.value +
+                                           " (`unload pattern` releases it)");
+      }
+    }
+    std::string valid;
+    for (const auto& visual : builtin_visuals()) {
+      valid += (valid.empty() ? "" : ", ");
+      valid += visual.name;
+    }
+    return command_protocol::format_err("visual: no built-in or custom pattern named '" +
+                                        cmd.value + "'. Built-ins: " + valid +
+                                        " (send `visuals` for this program's customs too)");
+  }
+  case Verb::kTextPin: {
+    auto words = split_commas(cmd.value);
+    if (words.empty()) {
+      return command_protocol::format_err("text pin: no words given (`text unpin` to release)");
+    }
+    themes.set_pinned_text(words);
+    return command_protocol::format_ok("every text draw now serves from " +
+                                       std::to_string(words.size()) +
+                                       " pinned word(s); `text unpin` releases");
+  }
+  case Verb::kTextUnpin: {
+    const bool was_pinned = !themes.pinned_text().empty();
+    themes.set_pinned_text({});
+    return command_protocol::format_ok(was_pinned ? "back to the themes' own text"
+                                                  : "no pinned text was set");
+  }
   case Verb::kStatus: {
     auto uptime = std::chrono::duration_cast<std::chrono::seconds>(
                       std::chrono::steady_clock::now() - start_time)
@@ -297,6 +478,19 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
     for (std::size_t i = 0; i < snap.slots.size(); ++i) {
       out << (i ? "|" : "") << (snap.slots[i].valid ? snap.slots[i].name : "(empty)");
     }
+    // The two runtime content overrides (#59), so a controller can tell "the session looks
+    // like this" from "someone pinned it that way" without asking two more questions.
+    out << " themepin=";
+    const auto& pin = themes.runtime_theme_pin();
+    if (pin.empty()) {
+      out << "-";
+    }
+    for (std::size_t i = 0; i < pin.size(); ++i) {
+      out << (i ? "," : "") << pin[i];
+    }
+    out << " text="
+        << (themes.pinned_text().empty() ? std::string{"theme"}
+                                         : "pinned:" + std::to_string(themes.pinned_text().size()));
     return command_protocol::format_ok(out.str());
   }
   case Verb::kUiOn:
@@ -365,6 +559,37 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
     apply_program_change();
     return command_protocol::format_ok();
   }
+  case Verb::kBedLayers: {
+    // The read half of the bed layers' CRUD (#60). Without it `bed layer remove` was
+    // irreversible (the removed layer's parameters could not be read first, so it could not
+    // be rebuilt) and a `level` change unrestorable, and the only way to learn how many
+    // layers exist was to call a MUTATING verb and read its layers=N return.
+    auto* program = active_program();
+    if (!program) {
+      return command_protocol::format_err("bed: no active session program");
+    }
+    const auto& entrainment = program->entrainment();
+    std::ostringstream out;
+    out << "layers=" << entrainment.layer_size() << " master_db=";
+    // 0 in the proto means "unset, use the default" -- reported as the default it resolves
+    // to, since a controller restoring a value needs the number that is actually in effect.
+    if (entrainment.master_db() != 0.f) {
+      out << entrainment.master_db();
+    } else {
+      out << "-28(default)";
+    }
+    for (int i = 0; i < entrainment.layer_size(); ++i) {
+      const auto& layer = entrainment.layer(i);
+      out << " [" << i << "] carrier=" << layer.center_hz() << " binaural=" << layer.binaural_hz()
+          << " pulse=" << layer.pulse_hz() << " level=";
+      if (layer.amplitude_db() != 0.f) {
+        out << layer.amplitude_db();
+      } else {
+        out << "0(unset)";
+      }
+    }
+    return command_protocol::format_ok(out.str());
+  }
   case Verb::kBedLayerAdd: {
     auto* program = active_program();
     if (!program) {
@@ -429,7 +654,7 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
 // each one, and replies exactly once per command -- spec sec 3 ("always exactly one line
 // back per command line in"). Render-thread only (see CommandRuntimeState comment above).
 void handle_commands(CommandChannel& channel, Director& director, Audio& audio,
-                     const ThemeBank& themes, const ScreenRenderer& renderer, AppUi* app_ui,
+                     ThemeBank& themes, const ScreenRenderer& renderer, AppUi* app_ui,
                      CommandRuntimeState& state,
                      const std::chrono::steady_clock::time_point& start_time,
                      const std::function<trance_pb::Program*()>& active_program,
@@ -458,7 +683,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
                   const std::map<std::string, std::string> variables,
                   const std::function<void(Director&)>& visual_override = {},
                   const OverlayConfig& overlay = {}, uint16_t command_port = 0,
-                  bool mcp_stdio = false)
+                  bool mcp_stdio = false, bool start_hidden = false, bool start_muted = false)
 {
   // Command channel: constructed here, before ThemeBank/renderer/window, so the socket
   // is live and testable (netcat/pytest, spec sec 6) even in configurations where window
@@ -490,6 +715,14 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   // seam in the main loop below).
   command_state.overlay_on = overlay.enabled;
   command_state.overlay_opacity = overlay.opacity;
+  // --hidden: seed the hide INTENT only (#58). hidden_applied below starts false either
+  // way, so the first loop iteration runs the ordinary hide seam -- one code path for the
+  // flag and the verb, and the flag inherits every fix the seam ever gets. What the flag
+  // additionally does is keep the window from ever being MAPPED (the renderer below), so
+  // there is no frame of fullscreen player between window creation and that first seam
+  // pass; the seam's own setVisible(false) is then a no-op and the rest of its work
+  // (pause, mute, collapse the panel) is what actually runs.
+  command_state.hidden = start_hidden;
   const auto command_start_time = std::chrono::steady_clock::now();
 
   PlaylistRunner playlist{session, variables};
@@ -517,7 +750,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   // (docs/spec-xr-unified.md sec 1). A headset is an OUTPUT attached to that same
   // context, never a replacement for it -- there is no VR mode, no renderer selection and
   // no configuration item (D2).
-  std::unique_ptr<ScreenRenderer> renderer{new ScreenRenderer{system, overlay}};
+  std::unique_ptr<ScreenRenderer> renderer{new ScreenRenderer{system, overlay, start_hidden}};
   // NOTHING is attached here, and nothing is decided here either (spec phase 4): the
   // renderer's own update() runs a background probe every 5 s for the whole run, so a
   // headset plugged in, or a Link started, ten minutes from now attaches without a
@@ -530,6 +763,13 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   // theme-audio verbs relay through it) and must not outlive it. Audio itself has no
   // window/GL dependency, so it is free to come first.
   Audio audio{root_path};
+  // --muted: the global mute, engaged before anything is audible. Deliberately NOT the
+  // hide seam's mute -- that one is stashed/restored around a hide, so a later `show`
+  // would release it. This one is the same state `mute on` sets, so it survives a show
+  // (and the seam's stash, taken at hide time, records it as the state to come back to).
+  if (start_muted && !audio.Muted()) {
+    audio.ToggleMute();
+  }
   Director director{session, system, *theme_bank, program(), *renderer, audio};
   if (visual_override) {
     visual_override(director);
@@ -1179,6 +1419,17 @@ DEFINE_bool(mcp, false,
             "see docs/mcp-install.md). Tools map 1:1 onto the command-channel verbs. "
             "stdout becomes the JSON-RPC transport (all logging moves to stderr), and "
             "trance exits when the host closes stdin. No socket, no sidecar process.");
+DEFINE_bool(hidden, false,
+            "start in silent running: window never mapped, playback paused, audio muted, "
+            "process alive -- the startup form of the `hide` verb, released by `show`. "
+            "Exists because a control host owns the process lifecycle (--mcp launches us "
+            "on connect), so without this the fullscreen player appears before any tool "
+            "call could hide it. Independent of --mcp; also useful with --command_port.");
+DEFINE_bool(muted, false,
+            "start with the global mute engaged (the M key / `mute on` state). Distinct "
+            "from --hidden's mute, which `show` releases: this one survives a show, so "
+            "`show` brings up a visible-but-silent player. Both flags together is the "
+            "fully unattended start.");
 
 namespace
 {
@@ -1494,6 +1745,7 @@ int main(int argc, char** argv)
     };
   }
   play_session(root_path, session, session_path, sidecar, system, system_path, variables,
-              visual_override, overlay, uint16_t(FLAGS_command_port), FLAGS_mcp);
+              visual_override, overlay, uint16_t(FLAGS_command_port), FLAGS_mcp, FLAGS_hidden,
+              FLAGS_muted);
   return 0;
 }

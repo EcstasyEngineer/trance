@@ -1,5 +1,6 @@
 #include <trance/theme_bank.h>
 #include <common/util.h>
+#include <algorithm>
 #include <filesystem>
 #include <iostream>
 
@@ -295,7 +296,14 @@ ThemeBank::DebugSnapshot ThemeBank::debug_snapshot() const
 
 void ThemeBank::set_program(const trance_pb::Program& program)
 {
+  _program = &program;
   _global_fps = program.global_fps();
+  apply_theme_selection();
+}
+
+void ThemeBank::apply_theme_selection()
+{
+  const trance_pb::Program& program = *_program;
   _enabled_theme_weights.clear();
   _pinned_theme.clear();
   for (auto& theme : _themes) {
@@ -340,6 +348,31 @@ void ThemeBank::set_program(const trance_pb::Program& program)
           : 1;
     }
   }
+  // Runtime pin (`theme pin`, #59) applied LAST, on top of everything the program said, and
+  // deliberately AFTER the tier refresh above: tier weights are about how an inherited pool
+  // splits internally, which a pin has no opinion about, so they keep reading the session's
+  // own numbers.
+  //
+  // Expressed entirely through the two levers advance_theme() already has -- the pin and the
+  // rotation weights -- so no new selection path exists to disagree with the old one:
+  //   one name  -> pinned, nothing else weighted. With no weights at all advance_theme
+  //                takes the pin every time, so BOTH lanes converge on it.
+  //   two names -> first pinned, second the only weighted theme. The pin is overridden
+  //                whenever the last pick was already the pinned theme, so the two
+  //                alternate and end up one per lane.
+  if (!_runtime_theme_pin.empty()) {
+    _enabled_theme_weights.clear();
+    for (auto& theme : _themes) {
+      theme->enabled = false;
+    }
+    _pinned_theme = _runtime_theme_pin.front();
+    for (std::size_t i = 0; i < _runtime_theme_pin.size(); ++i) {
+      _themes[_theme_map[_runtime_theme_pin[i]]]->enabled = true;
+      if (i > 0) {
+        _enabled_theme_weights[_runtime_theme_pin[i]] = 1;
+      }
+    }
+  }
   for (uint32_t i = 1; i < _active_themes.size(); ++i) {
     auto theme = _active_themes[i].load();
     if (theme && !theme->enabled) {
@@ -358,6 +391,76 @@ void ThemeBank::set_program(const trance_pb::Program& program)
       _swaps_to_match_theme = std::max(_swaps_to_match_theme, 3u);
     }
   }
+}
+
+std::vector<ThemeBank::ThemeListing> ThemeBank::list_themes() const
+{
+  std::vector<ThemeListing> out;
+  out.reserve(_themes.size());
+  const auto* primary = _active_themes[1].load();
+  const auto* alternate = _active_themes[2].load();
+  for (const auto& theme : _themes) {
+    ThemeListing listing;
+    listing.name = theme->name;
+    auto weight = _enabled_theme_weights.find(theme->name);
+    listing.weight = weight == _enabled_theme_weights.end() ? 0 : weight->second;
+    listing.live = theme.get() == primary || theme.get() == alternate;
+    listing.pinned = theme->name == _pinned_theme;
+    listing.drawable = theme->drawable;
+    out.push_back(std::move(listing));
+  }
+  std::sort(out.begin(), out.end(),
+            [](const ThemeListing& a, const ThemeListing& b) { return a.name < b.name; });
+  return out;
+}
+
+std::string ThemeBank::set_runtime_theme_pin(const std::vector<std::string>& names)
+{
+  // Validate EVERYTHING before touching the selection state: a half-applied pin (first name
+  // good, second unknown) would leave the rotation in a shape nobody asked for.
+  if (names.empty()) {
+    return "no theme named";
+  }
+  if (names.size() > 2) {
+    // Not an arbitrary cap: the engine holds exactly two live themes and every accessor
+    // below the grammar is a primary/alternate bool. 3+ simultaneous themes is a decided
+    // non-goal (docs/spec-grammar-v3.md sec 9), so a third name is a mistake, not a request.
+    return "at most two themes can be pinned (the engine holds exactly two live themes)";
+  }
+  for (const auto& name : names) {
+    auto it = _theme_map.find(name);
+    if (it == _theme_map.end()) {
+      return "no theme named '" + name + "' (send `themes` for the list)";
+    }
+    if (!_themes[it->second]->drawable) {
+      return "theme '" + name + "' has nothing to draw (empty folder, or its media is missing)";
+    }
+  }
+  _runtime_theme_pin = names;
+  apply_theme_selection();
+  return {};
+}
+
+void ThemeBank::clear_runtime_theme_pin()
+{
+  _runtime_theme_pin.clear();
+  apply_theme_selection();
+}
+
+const std::vector<std::string>& ThemeBank::runtime_theme_pin() const
+{
+  return _runtime_theme_pin;
+}
+
+void ThemeBank::set_pinned_text(std::vector<std::string> words)
+{
+  _pinned_text = std::move(words);
+  _pinned_text_index = 0;
+}
+
+const std::vector<std::string>& ThemeBank::pinned_text() const
+{
+  return _pinned_text;
 }
 
 void ThemeBank::advance_frames()
@@ -572,6 +675,15 @@ Image ThemeBank::get_still_image(bool alternate)
 
 const std::string& ThemeBank::get_text(bool alternate, bool exclusive)
 {
+  // `text pin` (#59): the caller's words stand in for every theme's text pool. Checked
+  // ahead of the pools rather than merged into them -- "display exactly these words" is the
+  // whole request, and mixing them with theme text would make the pin look broken on any
+  // theme with a large pool. Both lanes read the same list: the words are the CALLER's, so
+  // there is nothing thematic about them to keep on one side.
+  if (!_pinned_text.empty()) {
+    _pinned_text_index = (_pinned_text_index + 1) % _pinned_text.size();
+    return _pinned_text[_pinned_text_index];
+  }
   auto& theme = *_active_themes[alternate ? 2 : 1].load();
   if (theme.text_lines.empty()) {
     const static std::string none;

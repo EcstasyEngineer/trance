@@ -17,7 +17,11 @@ configuration — things just work, and say so loudly on the console when they c
 - System tray icon (Windows) + global **Shift+F11** hide-everything hotkey — see [docs/controls.md](docs/controls.md)
 - Line-protocol control channel (`--command_port`) for external automation
 - Built-in MCP server (`--mcp`, beta) — an MCP host launches `trance --mcp` and drives
-  playback through tool calls; see [docs/mcp-install.md](docs/mcp-install.md)
+  playback through tool calls; register it with
+  `claude mcp add trance -- "C:\path\to\trance.exe" "C:\path\to\session.json" --mcp --hidden`
+  and see [docs/mcp-install.md](docs/mcp-install.md)
+- Unattended start (`--hidden`, `--muted`) — come up in silent running and wait to be
+  summoned, instead of appearing the instant a control host connects
 - Hardware-accelerated rendering via OpenGL
 - Audio support with multiple independent channels, plus binaural/isochronic entrainment beds
 - Programmable playlist with conditionals and subroutines
@@ -66,6 +70,16 @@ trance.exe --overlay some.session.json
 # serve MCP on stdin/stdout so an MCP host (e.g. Claude Desktop) can drive playback --
 # the binary itself is the server, no sidecar process (see docs/mcp-install.md):
 trance.exe --mcp some.session.json
+# ...but running that by hand is the one thing you never do: the HOST spawns the process
+# when it connects. Register it once instead, and it is launched for you --
+#   claude mcp add trance -- "C:\path\to\trance.exe" "C:\path\to\session.json" --mcp --hidden
+
+# start in silent running: the window is never mapped, playback is paused and audio muted,
+# and the process sits alive waiting for `show`. This is what --hidden is FOR: an MCP host
+# owns the process lifecycle, so without it connecting a host puts the fullscreen player on
+# screen before any tool call could hide it. --muted is the same idea for audio alone, and
+# unlike --hidden's mute it survives a `show`:
+trance.exe --hidden --muted --mcp some.session.json
 
 # bundle a session and every asset it references into a portable zip, then exit:
 trance.exe --export_archive out.trance some.session.json

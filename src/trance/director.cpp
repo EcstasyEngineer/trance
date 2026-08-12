@@ -292,7 +292,7 @@ std::string Director::force_pattern_from_source(const std::string& source, const
     return v3.error;
   }
   for (const auto& w : v3.warnings) {
-    std::cerr << "--pattern '" << name << "' warning: " << w << std::endl;
+    std::cerr << "pattern '" << name << "' warning: " << w << std::endl;
   }
   pattern::Parsed parsed;
   parsed.name = name;
@@ -303,6 +303,28 @@ std::string Director::force_pattern_from_source(const std::string& source, const
   _forced_builtin_type = 0;
   change_visual(0);
   return {};
+}
+
+void Director::clear_forced_visual()
+{
+  if (!_forced_pattern && !_forced_builtin_type) {
+    return;
+  }
+  _forced_pattern.reset();
+  _forced_builtin_type = 0;
+  // A forced pattern occupied _last_custom_index 0 and a forced built-in left
+  // _last_visual_selection set, both of which change_visual() reads as "this is already
+  // playing, just reset() it" -- so clear them first or the release would restart the
+  // forced visual instead of leaving it.
+  _last_custom_index = -1;
+  _last_visual_selection = trance_pb::Program_VisualType_NONE;
+  _custom_visual_name.clear();
+  change_visual(0);
+}
+
+bool Director::visual_forced() const
+{
+  return _forced_pattern != nullptr || _forced_builtin_type != 0;
 }
 
 void Director::set_warp(float amp, float wavelength, float speed)
