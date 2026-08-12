@@ -49,8 +49,14 @@ private:
   std::atomic<bool> _running;
   std::thread _reader;
 
-  // Per-connection write state, guarded by _mutex (replies can arrive from the render
-  // thread while the reader thread is still reading more lines from the same connection).
+  // Per-connection state, guarded by _mutex (replies can arrive from the render thread while
+  // the reader thread is still reading more lines from the same connection). MULTIPLE
+  // connections are served concurrently -- the reader polls the listen socket and every live
+  // connection in one wait, so an idle or slow controller cannot stall another. This was
+  // originally "one accepted connection served to EOF before the next accept", which passed
+  // every single-client test and then silently ignored a second controller: it connects (the
+  // OS completes the handshake from the listen backlog) and its lines are read only once the
+  // first client hangs up, which reads as a hung channel rather than a queued one (#29).
   struct Connection;
   std::vector<Connection>* _connections;  // pimpl-lite: keeps socket types out of the header
 };

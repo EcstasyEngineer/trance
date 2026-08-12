@@ -234,8 +234,13 @@ void SystemControl::thread_main()
     std::cout << "system control: global hide-everything hotkey Shift+F11 registered"
               << std::endl;
   } else {
-    std::cerr << "system control: couldn't register Shift+F11 (in use by another "
-                 "application?); tray menu is the fallback"
+    // Name the likely culprit rather than leaving it at "another application": a global
+    // hotkey is exclusive per-desktop, so the overwhelmingly common cause is a SECOND TRANCE
+    // already running (an MCP-host-owned instance, or one left open) -- which is exactly what
+    // sent the #31 QA pass looking for a Windows-level conflict that wasn't there.
+    std::cerr << "system control: couldn't register Shift+F11 -- another process already "
+                 "holds it (most likely another trance instance; the hotkey is exclusive "
+                 "per-desktop). Tray menu is the fallback."
               << std::endl;
   }
 

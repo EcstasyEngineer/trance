@@ -7,9 +7,9 @@
 #include <system_error>
 
 #if defined(_WIN32)
-// Winsock path: written to the same reader_loop contract as the POSIX path below, but
-// untested on Windows. Compile-guarded so it never affects the Linux build; a Windows
-// dev bringing up --command_port is expected to shake this out.
+// Winsock path: the same reader_loop contract as the POSIX path below. QA'd on Windows
+// 2026-08-12 (#29) end to end -- every verb over a real socket, malformed lines, two
+// concurrent clients, and a window-close exit with a client still connected.
 #pragma warning(push, 0)
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -39,26 +39,35 @@ namespace
 #endif
   }
 
-  // Wait until `fd` is readable or ~200ms passes. Returns true iff readable. The reader
-  // thread calls this before every accept()/recv() so it re-checks _running on a bounded
-  // cadence, keeping ~CommandChannel's join() bounded -- a bare blocking accept()/recv()
-  // couldn't be interrupted from another thread.
-  bool poll_readable(socket_t fd)
+#if defined(_WIN32)
+  using poll_fd = WSAPOLLFD;
+  constexpr short kPollRead = POLLRDNORM;
+#else
+  using poll_fd = pollfd;
+  constexpr short kPollRead = POLLIN;
+#endif
+
+  // Wait until any of `fds` is readable or ~200ms passes. The 200ms tick is load-bearing:
+  // it is what lets the reader thread re-check _running on a bounded cadence, keeping
+  // ~CommandChannel's join() bounded -- a bare blocking accept()/recv() could not be
+  // interrupted from another thread.
+  int poll_readable(poll_fd* fds, std::size_t count)
   {
 #if defined(_WIN32)
-    // POLLHUP/POLLERR must count as "readable": when the peer disconnects, WSAPoll
-    // reports POLLHUP on the dead socket WITHOUT POLLRDNORM, so testing POLLRDNORM
-    // alone never fires, recv() never runs to observe the EOF, and the reader thread
-    // ticks on the corpse forever -- serving exactly ONE connection per process
-    // lifetime. (Linux poll() reports EOF as POLLIN, which is why the POSIX path never
-    // showed it; both paths now treat hangup/error as readable so recv() can return
-    // 0/-1 and the loop can move on to the next accept.)
-    WSAPOLLFD p{fd, POLLRDNORM, 0};
-    return WSAPoll(&p, 1, 200) > 0 && (p.revents & (POLLRDNORM | POLLHUP | POLLERR));
+    return WSAPoll(fds, ULONG(count), 200);
 #else
-    pollfd p{fd, POLLIN, 0};
-    return ::poll(&p, 1, 200) > 0 && (p.revents & (POLLIN | POLLHUP | POLLERR));
+    return ::poll(fds, nfds_t(count), 200);
 #endif
+  }
+
+  // POLLHUP/POLLERR count as "readable": when the peer disconnects, WSAPoll reports POLLHUP
+  // on the dead socket WITHOUT POLLRDNORM, so testing POLLRDNORM alone never fires, recv()
+  // never runs to observe the EOF, and the reader ticks on the corpse forever. (Linux poll()
+  // reports EOF as POLLIN, which is why the POSIX path never showed it; both paths treat
+  // hangup/error as readable so recv() can return 0/-1 and the loop can retire the socket.)
+  bool poll_hit(const poll_fd& p)
+  {
+    return (p.revents & (kPollRead | POLLHUP | POLLERR)) != 0;
   }
 
   std::string socket_last_error_message()
@@ -74,6 +83,10 @@ namespace
 struct CommandChannel::Connection {
   std::uint64_t id;
   socket_t fd;
+  // Bytes received on this connection that do not yet end in a newline. Per-connection
+  // because two clients interleave freely now: one shared buffer would splice half a line
+  // from one controller onto half a line from another.
+  std::string buffer;
 };
 
 CommandChannel::CommandChannel(uint16_t port) : _running{true}
@@ -181,46 +194,62 @@ void CommandChannel::reader_loop(std::uintptr_t listen_fd_raw)
   socket_t listen_fd = socket_t(listen_fd_raw);
   std::uint64_t next_conn_id = 1;
 
-  // v0 concurrency model: single accepted connection served fully (read-to-EOF) before the
-  // next accept, matching the spec's line-in/line-out shape and the netcat/pytest test
-  // clients in sec 6 -- nothing in the spec asks for concurrent controllers. accept() and
-  // recv() both block only until _running flips or the peer disconnects/errors, so shutdown
-  // is bounded by at most one in-flight syscall.
+  // Concurrency model: the listen socket and every live connection are polled in ONE wait,
+  // so any number of controllers are served together (#29's "two simultaneous client
+  // connections both get replies"). A slow or idle client costs nothing but a slot in the
+  // poll set; it cannot delay another client's line or the ~200ms shutdown tick.
+  //
+  // Only this thread mutates _connections, so it can read the vector without the lock while
+  // it works; it takes the lock to add or retire an entry, which is all reply() needs to see
+  // a consistent list.
+  std::vector<poll_fd> fds;
+  std::vector<socket_t> polled;
+  char chunk[512];
   while (_running) {
-    if (!poll_readable(listen_fd)) {
+    fds.clear();
+    polled.clear();
+    fds.push_back(poll_fd{listen_fd, kPollRead, 0});
+    for (const auto& conn : *_connections) {
+      fds.push_back(poll_fd{conn.fd, kPollRead, 0});
+      polled.push_back(conn.fd);
+    }
+    if (poll_readable(fds.data(), fds.size()) <= 0) {
       continue;  // timeout tick: re-check _running (bounded-shutdown invariant)
     }
-    sockaddr_in peer{};
+
+    if (poll_hit(fds.front())) {
+      sockaddr_in peer{};
 #if defined(_WIN32)
-    int peer_len = sizeof(peer);
+      int peer_len = sizeof(peer);
 #else
-    socklen_t peer_len = sizeof(peer);
+      socklen_t peer_len = sizeof(peer);
 #endif
-    socket_t conn_fd =
-        accept(listen_fd, reinterpret_cast<sockaddr*>(&peer), &peer_len);
-    if (!_running) {
+      socket_t conn_fd = accept(listen_fd, reinterpret_cast<sockaddr*>(&peer), &peer_len);
+      if (!_running) {
+        if (conn_fd != kInvalidSocket) {
+          close_socket(conn_fd);
+        }
+        break;
+      }
       if (conn_fd != kInvalidSocket) {
-        close_socket(conn_fd);
+        std::lock_guard<std::mutex> lock{_mutex};
+        _connections->push_back(Connection{next_conn_id++, conn_fd, {}});
       }
-      break;
-    }
-    if (conn_fd == kInvalidSocket) {
-      continue;
     }
 
-    std::uint64_t conn_id = next_conn_id++;
-    {
-      std::lock_guard<std::mutex> lock{_mutex};
-      _connections->push_back(Connection{conn_id, conn_fd});
-    }
-
-    std::string buffer;
-    char chunk[512];
-    while (_running) {
-      if (!poll_readable(conn_fd)) {
-        continue;  // timeout tick: re-check _running (idle client must not pin shutdown)
+    // Readable connections, matched back by fd: the poll set was built from a snapshot, and
+    // an accept above may already have appended to _connections, so index-into-the-vector
+    // would be reading the wrong entry.
+    for (std::size_t i = 0; i < polled.size(); ++i) {
+      if (!poll_hit(fds[i + 1])) {
+        continue;
       }
-      auto n = recv(conn_fd, chunk,
+      auto it = std::find_if(_connections->begin(), _connections->end(),
+                             [fd = polled[i]](const Connection& c) { return c.fd == fd; });
+      if (it == _connections->end()) {
+        continue;
+      }
+      auto n = recv(it->fd, chunk,
 #if defined(_WIN32)
                     int(sizeof(chunk)),
 #else
@@ -228,32 +257,28 @@ void CommandChannel::reader_loop(std::uintptr_t listen_fd_raw)
 #endif
                     0);
       if (n <= 0) {
-        break;  // peer closed or error -- either way, this connection is done.
+        // Peer closed or errored -- either way this connection is done. Closed BEFORE it is
+        // erased, and erased under the lock, so reply() either finds a live fd or finds
+        // nothing; it can never be handed a recycled one.
+        close_socket(it->fd);
+        std::lock_guard<std::mutex> lock{_mutex};
+        _connections->erase(it);
+        continue;
       }
-      buffer.append(chunk, std::size_t(n));
+      it->buffer.append(chunk, std::size_t(n));
 
-      // Drain every complete newline-terminated line in the buffer; a partial trailing
-      // line waits for more bytes. CR is stripped so `nc`/telnet-style CRLF clients work
-      // without a special case.
+      // Drain every complete newline-terminated line; a partial trailing line waits for more
+      // bytes. CR is stripped so `nc`/telnet-style CRLF clients work without a special case.
       std::size_t pos;
-      while ((pos = buffer.find('\n')) != std::string::npos) {
-        std::string line = buffer.substr(0, pos);
-        buffer.erase(0, pos + 1);
+      while ((pos = it->buffer.find('\n')) != std::string::npos) {
+        std::string line = it->buffer.substr(0, pos);
+        it->buffer.erase(0, pos + 1);
         if (!line.empty() && line.back() == '\r') {
           line.pop_back();
         }
         std::lock_guard<std::mutex> lock{_mutex};
-        _queue.push_back(Command{conn_id, std::move(line)});
+        _queue.push_back(Command{it->id, std::move(line)});
       }
-    }
-
-    close_socket(conn_fd);
-    {
-      std::lock_guard<std::mutex> lock{_mutex};
-      auto& conns = *_connections;
-      conns.erase(std::remove_if(conns.begin(), conns.end(),
-                                 [conn_id](const Connection& c) { return c.id == conn_id; }),
-                 conns.end());
     }
   }
 
