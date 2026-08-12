@@ -27,7 +27,7 @@ namespace
   // the tightening is carried by the step count instead.
   //
   // Theme churn. `image alternate chance 0.5` (4.18) -- the hidden toggle flips at p=0.5 per
-  // pull, so every new display is a coin flip between concept and reward. Unlike `runtime`
+  // pull, so every new display is a coin flip between primary and secondary. Unlike `runtime`
   // (an independent re-roll each fire) this is a stateful walk, so the world holds and pivots
   // rather than shimmering, and a lower chance would hold it longer.
   //
@@ -56,38 +56,38 @@ namespace
 pattern accelerate for 2048f {
   every ramp 56f -> 12f steps 140 ease early -> cut {
     image alternate chance 0.5 zoom [0.4 * accelerate.progress + 0.1 * this.progress] origin (curve 0 -> 0.4 over accelerate) anim every 4th
-    word concept show 0..0.25 chance 0.5
+    word primary show 0..0.25 chance 0.5
   }
   spiral speed (curve 1 -> 4 over accelerate)
 })";
 
-  // 2 SLOW_FLASH -- a slow concept phase then a fast reward phase, the pair looped twice per
+  // 2 SLOW_FLASH -- a slow primary phase then a fast secondary phase, the pair looped twice per
   // visual like the original's RepeatCycler{2, slow->fast}. Slow images zoom over their own 64f
   // life and every 2nd one animates; the fast phase's zoom climbs across the WHOLE phase (the
   // original's index-driven creep), not per image -- at 8f per cut a per-image zoom would strobe.
   const char* kSlowFlash = R"(
 pattern slow_flash for 1536f loop 2 seq {
   pattern slow for 1024f {
-    every 64f { image concept zoom (curve 0 -> 0.5) anim every 2nd }
-    every 64f { caption concept }
+    every 64f { image primary zoom (curve 0 -> 0.5) anim every 2nd }
+    every 64f { caption primary }
     spiral speed 2
   }
   pattern fast for 512f {
-    every 8f  { image reward zoom (curve 0 -> 0.8 over fast) }
-    every 16f { word reward }
+    every 8f  { image secondary zoom (curve 0 -> 0.8 over fast) }
+    every 16f { word secondary }
     spiral speed 4
   }
 })";
 
-  // 3 SUB_TEXT -- a steady runtime image (every third animates) under a reward subtext stream.
+  // 3 SUB_TEXT -- a steady runtime image (every third animates) under a secondary subtext stream.
   const char* kSubText = R"(
 pattern sub_text for 1024f {
   every 64f { image runtime zoom (curve 0 -> 0.375) anim every 3rd }
-  every 32f { subtext reward }
+  every 32f { subtext secondary }
   spiral speed 4
 })";
 
-  // 4 FLASH_TEXT -- a continuous IMAGE crossfade: reward images dissolve one into the next via
+  // 4 FLASH_TEXT -- a continuous IMAGE crossfade: secondary images dissolve one into the next via
   // the copy handoff (cur -> prev). Each image zooms across two 64f halves: cur does 0->0.4,
   // then after the copy prev does 0.4->0.8 -- the original's exact range. (Do NOT run image zoom
   // near 1.0: zoom projects toward the near plane, and by ~0.9+ the mirror-tiled quad grid
@@ -101,11 +101,11 @@ pattern flash_text for 1024f {
     every 64f -> beat {
       copy cur -> prev
       draw prev          zoom (curve 0.4 -> 0.8)
-      image reward -> cur fade in zoom (curve 0 -> 0.4)
+      image secondary -> cur fade in zoom (curve 0 -> 0.4)
     }
-    every 64f { word reward }
+    every 64f { word secondary }
   }
-  every 32f { caption concept }
+  every 32f { caption primary }
   spiral speed 2
 })";
 
@@ -113,7 +113,7 @@ pattern flash_text for 1024f {
   const char* kSimple = R"(
 pattern simple for 2048f {
   every 64f { image runtime zoom (curve 0 -> 0.5) anim every 3rd }
-  every 32f { caption concept }
+  every 32f { caption primary }
   spiral speed 3
 })";
 
@@ -123,9 +123,9 @@ pattern simple for 2048f {
   // full-alpha layers just show whichever drew last. Lane a carries the animation accent.
   const char* kSuperParallel = R"(
 pattern super_parallel for 1152f {
-  every 96f            { image concept -> a zoom (curve 0 -> 0.875) anim every 2nd }
-  every 96f offset 32f { image concept -> b alpha 0.5 zoom (curve 0 -> 0.875) }
-  every 96f offset 64f { image reward  -> c alpha 0.33 zoom (curve 0 -> 0.875) }
+  every 96f            { image primary   -> a zoom (curve 0 -> 0.875) anim every 2nd }
+  every 96f offset 32f { image primary   -> b alpha 0.5 zoom (curve 0 -> 0.875) }
+  every 96f offset 64f { image secondary -> c alpha 0.33 zoom (curve 0 -> 0.875) }
   every 32f { word runtime }
   spiral speed 3
 })";
@@ -160,7 +160,7 @@ pattern super_parallel for 1152f {
   const char* kAnimation = R"(
 pattern animation for 1024f {
   every 64f { image runtime zoom (curve 0 -> 0.625) anim }
-  every 64f offset 48f { image reward -> still env in 8f hold 16f out 8f zoom (curve 0.5 -> 0.625) }
+  every 64f offset 48f { image secondary -> still env in 8f hold 16f out 8f zoom (curve 0.5 -> 0.625) }
   every 32f { caption runtime }
   spiral speed 3
 })";
@@ -179,7 +179,7 @@ pattern super_fast for 2048f {
     enter { anim runtime }
     burst { draw cur zoom 0.4 anim }
   }
-  every 8f { word concept chance 0.25 }
+  every 8f { word primary chance 0.25 }
   spiral speed 3
 })";
 }

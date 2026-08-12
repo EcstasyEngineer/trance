@@ -121,7 +121,7 @@ the `warp` parameters.
 2. **The grammar conveys intent.** You read a pattern top-down; every line is
    `<effect> <param> <modulator>`. The clock a curve rides is "the pattern I am written
    inside," which the indentation already shows. A simple pattern is narratable without a
-   manual (`image concept zoom (curve 0 -> 0.5)` = "draw concept, zoom from 0 to 0.5 over
+   manual (`image primary zoom (curve 0 -> 0.5)` = "draw primary, zoom from 0 to 0.5 over
    its life").
 
 3. **Everything compiles down (HARD INVARIANT).** Every construct reduces to today's
@@ -222,20 +222,20 @@ pattern NAME for <len> [seq | loop N] { <body> }
 ```
 (image | word | caption | subtext)  <content> [-> REG]  <param-mod>*   # -> REG: image only
 draw REG  <param-mod>*               # draw an existing image register without re-pulling
-content ::= concept | reward | runtime   # the bi-thematic alternate bool, + runtime — see §8
+content ::= primary | secondary | runtime   # the bi-thematic alternate bool, + runtime — see §8
 ```
 
 - **Lowering.** Two halves: (1) a schedule `Effect{Image, slot}` writes
-  `regs.images[REG] = get_image(alternate)` (`concept`→`Slot::Primary`,
-  `reward`→`Slot::Alternate`, `runtime`→`Slot::Runtime`, resolved to primary/alternate at
+  `regs.images[REG] = get_image(alternate)` (`primary`→`Slot::Primary`,
+  `secondary`→`Slot::Secondary`, `runtime`→`Slot::Runtime`, resolved to primary/secondary at
   FIRE time rather than parse time); (2) a `RenderStmt{Op::Image, image_reg=REG}` whose
   `alpha`/`origin`/`zoom` fields are the lowered modulator strings. `draw` emits only
   the draw half (no pull), so any register (e.g. `prev`) is drawable. `word`/`caption`/
   `subtext` take the same `content` vocabulary but have no `-> REG` (text has one live slot,
   §0.3) — see §4.13/EBNF §11 for the full draw-statement shape across all four verbs.
 - **Modder note.** Draws a picture. `-> REG` names the layer so `copy`/crossfade can reach
-  it; omit it for an auto-named layer. **Bi-thematic is a hard floor:** `concept`/`reward`
-  (plus `runtime`, which randomly rolls concept-vs-reward at each firing, `resolved_slot` in
+  it; omit it for an auto-named layer. **Bi-thematic is a hard floor:** `primary`/`secondary`
+  (plus `runtime`, which randomly rolls primary-vs-secondary at each firing, `resolved_slot` in
   `compiled_visual.cpp`) are the entire content vocabulary; a third theme does not lower (§8).
 
 ### 4.3 `zoom` / `fade` / `origin` / `alpha`/`brightness` — CURVE-DRIVE PARAMS (the unified class)
@@ -252,7 +252,7 @@ inside a pattern body is a parse error (`unknown statement 'zoom'`) — this cor
 draft prose that implied a standalone drive-effect statement.
 
 - **Lowering — pure `RenderStmt` param strings, NO runtime change.** Written on a draw
-  (e.g. `image concept zoom (curve 0 -> 0.5) fade in`):
+  (e.g. `image primary zoom (curve 0 -> 0.5) fade in`):
   - `zoom M`  ⇒ `RenderStmt.zoom  = lower(M)`
   - `origin M`⇒ `RenderStmt.origin= lower(M)`
   - `alpha M` / `brightness M` ⇒ `RenderStmt.alpha = lower(M)` (`brightness` is a literal
@@ -298,7 +298,7 @@ spiral [speed <mod>]
 
 ```
 drunk <intensity-mod> [on origin | zoom]     # used as a driver line, OR
-image concept origin (drunk <intensity-mod>) # used as a param modulator
+image primary origin (drunk <intensity-mod>) # used as a param modulator
 ```
 
 - **What it morphs.** By default `origin` (the zoom pivot, a wandering off-center stagger),
@@ -413,7 +413,7 @@ loop N { <body> }
 - **`offset Nf`** (after the optional `-> NAME`) delays the lane's start by N frames
   (lowers to an `OffsetCycler` wrapper) — the staggered parallel-lane idiom, e.g.
   `super_parallel`'s three image layers a third of a 96f cycle apart:
-  `every 96f offset 32f { image concept -> b alpha 0.5 zoom (curve 0 -> 0.875) }`.
+  `every 96f offset 32f { image primary -> b alpha 0.5 zoom (curve 0 -> 0.875) }`.
 
 ### 4.10 `every ramp A -> B steps N [ease] [-> NAME]` — SHIPPED sampled ramp cadence
 
@@ -563,7 +563,7 @@ rawexpr   ::= [ EXPR ]                  # this/self + in-scope clock names subst
 ### 4.14 `audio` — grammar-driven THEME audio (issue #23, SHIPPED)
 
 ```
-audio <content> [loop] [volume <mod>]   # content ::= concept | reward | runtime
+audio <content> [loop] [volume <mod>]   # content ::= primary | secondary | runtime
 audio stop
 ```
 
@@ -574,8 +574,8 @@ audio stop
   decides *when* and *how loud* to play it, never what it says. Themes own the audio pool
   exactly like the image/font pools; this primitive is what lets a modder reach it.
 - **Two nouns still apply.** `content` is the SAME bi-thematic vocabulary as `image`/`word` —
-  `concept` (primary theme), `reward` (alternate theme), `runtime` (rolled primary-vs-
-  alternate at FIRE time, not parse time — identical to `image runtime`, §4.2). `volume` is
+  `primary` (theme 0), `secondary` (theme 1), `runtime` (rolled primary-vs-
+  secondary at FIRE time, not parse time — identical to `image runtime`, §4.2). `volume` is
   an ORDINARY modulator (§4.13 above), not a bespoke keyword class: a literal, a
   `curve A -> B`, or a raw `[expr]`, riding the enclosing pattern's clock unless redirected
   with `over NAME`, same as zoom/fade/spiral-speed.
@@ -608,7 +608,7 @@ audio stop
       side — belt and braces, not a double-source-of-truth).
     - No `volume` param at all ⇒ engine keeps whatever volume was last set (same "no explicit
       write, no change" default every other param has). The channel's INITIAL volume is
-      **full (1.0)** — a bare `audio concept` is audible without any volume line. Written
+      **full (1.0)** — a bare `audio primary` is audible without any volume line. Written
       `volume 0` is a real mute (the parser distinguishes "absent" from "zero" via a
       rate sentinel; `pattern_ast.h` Effect::rate).
   - **`VisualRender` gained `set_theme_audio_volume` too** (dual-declared like
@@ -622,7 +622,7 @@ audio stop
 - **Volume scale note.** `audio volume M` is `0..1` (matches `Audio::set_theme_audio_volume`'s
   signature), NOT the `0..100` scale `AudioEvent.volume` (playlist audio) uses — the same
   scale mismatch `docs/audio.md`'s plumbing section already flags; intentional, not a bug.
-- **Modder note.** `audio mantra` (well, `audio concept`/`audio reward`) plays a spoken line
+- **Modder note.** `audio mantra` (well, `audio primary`/`audio secondary`) plays a spoken line
   from the theme's audio folder, timed by the SAME `every`/`beats`/`burst` cadence machinery
   that times a flash. `loop` keeps it going; `volume` fades it in/out like any other curve;
   `audio stop` cuts it. This is the whole reason theme audio pools exist: drop a folder of
@@ -727,13 +727,14 @@ line <content> <draw_param>* [chance P]      # identical to `word`, except the s
 ### 4.18 `alternate` — deterministic A/B theme ping-pong (issue #42, SHIPPED, parser-only)
 
 ```
-image alternate [chance P] <draw_param>*    # a CONTENT word, beside concept|reward|runtime
+image alternate [chance P] <draw_param>*    # a CONTENT word, beside primary|secondary|runtime
 anim alternate [chance P]                   # the standalone animation load
 ```
 
 - **What it is.** A fourth content word for `image` draws and the standalone `anim` load, giving
-  a draw **deterministic** A/B theme alternation instead of a pinned side (`concept`/`reward`)
-  or an independent re-roll per firing (`runtime`). The originals ping-ponged on a counter
+  a draw **deterministic** A/B theme alternation instead of a pinned side (`primary`/`secondary`)
+  or an independent re-roll per firing (`runtime`). **`alternate` is not `secondary`:**
+  `secondary` pins theme 1, `alternate` switches sides. The originals ping-ponged on a counter
   (`_alternate = !_alternate`); the runtime already supported it (`Effect::slot_reg` +
   `Kind::Toggle`), but no grammar reached it, so every port flattened to `runtime` or a pin.
 - **Two forms.**
@@ -757,7 +758,7 @@ anim alternate [chance P]                   # the standalone animation load
   step if a pattern ever needs it, and §4.7's rejected `set`/`inc`/`roll` surface stays closed.
 - **Bi-thematic floor untouched.** `alternate` still selects between exactly the two live theme
   slots (§8) — it changes *how* the side is chosen, not how many sides exist.
-- **Modder note.** `image concept` is always theme A. `image runtime` rolls a coin every time.
+- **Modder note.** `image primary` is always theme A. `image runtime` rolls a coin every time.
   `image alternate` goes A, B, A, B — and `image alternate chance 0.25` holds a side for a
   while before pivoting.
 
@@ -819,7 +820,7 @@ pattern xfade for beats 8 loop 8 {
     every beats 1 -> beat {             # per-beat handoff leaf, id = beat (`every LEN`, no parens)
       copy cur -> prev                  # stash last beat's image (Effect::Copy)
       draw prev          zoom (curve 0.5 -> 1.0)
-      image concept -> cur fade in zoom (curve 0.0 -> 0.5)
+      image primary -> cur fade in zoom (curve 0.0 -> 0.5)
     }
   }
 }
@@ -955,8 +956,8 @@ spiral type/width.
 | spiral **COLOR** a/b | SETTING | Program proto | blended shader uniforms; session concern |
 | spiral **DIRECTION** | SETTING | Program proto | global sign; grammar `speed` is magnitude |
 | `warp`/`drunk` amplitude/wavelength/speed | GRAMMAR curve | `RenderStmt.zoom/origin/speed` (`Op::Warp`), live | per-frame scalar, shipped (§4.6, supersedes §4.5's register-walk design) |
-| content theme (concept/reward) | GRAMMAR selector | the alternate bool | only content axis; 3+ themes do NOT lower |
-| theme audio **content** (concept/reward/runtime) | GRAMMAR selector | `Effect::Kind::Audio` slot (§4.14) | same alternate-bool axis as `image`, resolved at fire time |
+| content theme (primary/secondary) | GRAMMAR selector | the alternate bool | only content axis; 3+ themes do NOT lower |
+| theme audio **content** (primary/secondary/runtime) | GRAMMAR selector | `Effect::Kind::Audio` slot (§4.14) | same alternate-bool axis as `image`, resolved at fire time |
 | theme audio **volume** | GRAMMAR curve OR fire-once | `RenderStmt.speed` (`Op::AudioVolume`) or `Effect.rate` (§4.14) | literal folds to fire-once; curve/`[expr]` rides per-frame like spiral speed |
 | theme audio **pool contents** (which files) | SETTING | `Theme.audio_path` (proto, `docs/audio.md`) | which files exist is theme identity, not a grammar concern |
 | `global_fps`, font, theme weights | SETTING | Program/Theme proto | session/program identity |
@@ -1033,18 +1034,18 @@ deferred — the only genuinely open extension left).
 
 ```
 pattern hello for 240f {
-  image concept zoom (curve 0 -> 0.5)
+  image primary zoom (curve 0 -> 0.5)
 }
 ```
 Lowers to `One{ Action[Effect{Image,Primary,->auto}],
-RenderStmt{Image, zoom="(0 + 0.5*hello.progress)"} }`. One line: draw concept, zoom from 0
+RenderStmt{Image, zoom="(0 + 0.5*hello.progress)"} }`. One line: draw primary, zoom from 0
 to 0.5 over its 240f life.
 
 ### EX2 — one number as curve, fade, AND spiral speed (the unified class)
 
 ```
 pattern unified for 240f {
-  image concept zoom (curve 0 -> 0.5) fade inout
+  image primary zoom (curve 0 -> 0.5) fade inout
   spiral speed (curve 0.1 -> 1.0)
 }
 ```
@@ -1058,10 +1059,10 @@ modulator over `unified.progress`. The body is parallel, so all three co-run.
 ```
 pattern show for 480f seq {
   pattern flashA for 240f {
-    image concept zoom (curve 0 -> 0.3)            # rides flashA (resets at 240f)
+    image primary zoom (curve 0 -> 0.3)            # rides flashA (resets at 240f)
   }
   pattern flashB for 240f {
-    image reward  zoom (curve 0 -> 0.6 over show)  # rides the WHOLE 480f show clock
+    image secondary zoom (curve 0 -> 0.6 over show)  # rides the WHOLE 480f show clock
   }
 }
 ```
@@ -1080,7 +1081,7 @@ deleted.
 
 ```
 pattern stagger for 300f {
-  image concept zoom 0.5
+  image primary zoom 0.5
   drunk (curve 0 -> 0.3)
 }
 ```
@@ -1102,7 +1103,7 @@ pattern flash_text for beats 16 loop 16 {
     every beats 1 -> beat {
       copy cur -> prev
       draw prev          zoom (curve 0.5 -> 1.0)
-      image concept -> cur fade in zoom (curve 0.0 -> 0.5)
+      image primary -> cur fade in zoom (curve 0.0 -> 0.5)
     }
   }
 }
@@ -1118,8 +1119,8 @@ baked opacity ladder — every line the modder sees is
 ```
 pattern accelerate for 2772f {
   every ramp 56f -> 12f steps 120 ease early -> cut {
-    image concept zoom (curve 0 -> 0.5)
-    word concept chance 0.5
+    image primary zoom (curve 0 -> 0.5)
+    word primary chance 0.5
   }
   spiral speed (curve 1 -> 4 over accelerate)
 }
@@ -1144,7 +1145,7 @@ pattern super_fast for 2048f {
     enter { anim runtime }
     burst { draw cur zoom 0.4 anim }
   }
-  every 8f { word concept chance 0.25 }
+  every 8f { word primary chance 0.25 }
   spiral speed 3
 }
 ```
@@ -1163,22 +1164,22 @@ enclosing pattern's span) and moves `-> rapid` to right after `burst` (matching 
 
 ```
 pattern mantra_pulse for beats 16 {
-  every beats 4 { audio concept loop volume (curve 0.2 -> 0.8) }
-  every beats 1 { image concept zoom (curve 0 -> 0.4) }
+  every beats 4 { audio primary loop volume (curve 0.2 -> 0.8) }
+  every beats 1 { image primary zoom (curve 0 -> 0.4) }
   spiral speed 2
 }
 ```
 
 With an 8 Hz pulsed bed at 60 fps (`locked_period_frames = 8`, §"Beats" in
 `docs/authoring-v3-patterns.md`), this pattern runs 16*8 = 128 frames and re-fires `audio
-concept` every 4 beats (32f) — a fresh precanned mantra line pulled from the primary theme's
+primary` every 4 beats (32f) — a fresh precanned mantra line pulled from the primary theme's
 `audio_path` pool each time, looping, its volume ramping `0.2 -> 0.8` across each 32f window
 (a curve, so it lowers to a per-frame `RenderStmt{Op::AudioVolume}` — see §4.14). Meanwhile
 `every beats 1` flashes an image once per pulse, independent of the mantra cadence, so the
 visual beat and the (four-times-slower) mantra beat both lock to the SAME entrainment bed
-without one driving the other. Single-slot v0 means the SECOND `audio concept` firing (at
+without one driving the other. Single-slot v0 means the SECOND `audio primary` firing (at
 frame 32) replaces the first line outright — no crossfade/queue for audio, unlike the image
-crossfade shape (EX4). Swap `audio concept` for `audio stop` in a later phase to cut the
+crossfade shape (EX4). Swap `audio primary` for `audio stop` in a later phase to cut the
 mantra early without waiting for the pattern to end.
 
 ---
@@ -1270,7 +1271,7 @@ draw_stmt      ::= "image" ( content | alternate_content ) [ "-" ">" REG ]
                        `line` is `word` with Effect::split = SPLIT_LINE (§4.17) -- identical
                        in every other respect, including the Op::Text RenderStmt and its
                        0.75 origin/zoom defaults. *)
-content        ::= "concept" | "reward" | "runtime"   (* Slot::Primary / Alternate / Runtime;
+content        ::= "primary" | "secondary" | "runtime"   (* Slot::Primary / Secondary / Runtime;
                                                             "runtime" resolves the theme at
                                                             fire time, not parse time *)
 alternate_content

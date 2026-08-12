@@ -140,9 +140,11 @@ media, main), `src/trance/render` (ScreenRenderer + the OpenXR output), `src/com
   else sneaks new runtime magic in through the grammar. A construct that can't lower is flagged a
   REQUIRED RUNTIME EXTENSION, never faked.
 - **Bi-thematic engine.** ThemeBank holds exactly **two live themes** (primary + alternate);
-  every accessor is a `bool alternate`, not an index. The grammar exposes only `concept`
-  (theme 0) and `reward` (theme 1). 3+ simultaneous themes is a **decided non-goal**
-  (`docs/spec-grammar-v3.md` §9, "hard non-goals") — not deferred work.
+  every accessor below the grammar is a `bool alternate`, not an index. The grammar exposes
+  only `primary` (theme 0) and `secondary` (theme 1) — plus the unrelated `alternate` content
+  word, which ping-pongs a draw between the two sides rather than pinning one. 3+ simultaneous
+  themes is a **decided non-goal** (`docs/spec-grammar-v3.md` §9, "hard non-goals") — not
+  deferred work.
 - **Supersede, not parity.** The v3 grammar *improves on* the original 8 built-ins rather than
   matching them byte-for-byte ("same effect, not the same frames"). Do not add tests that freeze
   the originals' compiled-tree shape; parity-locking is what kept dragging the design back to

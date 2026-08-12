@@ -20,13 +20,13 @@ namespace
   pattern::Slot resolved_slot(const pattern::Effect& e, const pattern::Registers& regs)
   {
     if (!e.slot_reg.empty()) {
-      return scalar(regs, e.slot_reg) != 0 ? pattern::Slot::Alternate : pattern::Slot::Primary;
+      return scalar(regs, e.slot_reg) != 0 ? pattern::Slot::Secondary : pattern::Slot::Primary;
     }
     switch (e.slot) {
-    case pattern::Slot::Alternate:
-      return pattern::Slot::Alternate;
+    case pattern::Slot::Secondary:
+      return pattern::Slot::Secondary;
     case pattern::Slot::Runtime:
-      return random_chance() ? pattern::Slot::Alternate : pattern::Slot::Primary;
+      return random_chance() ? pattern::Slot::Secondary : pattern::Slot::Primary;
     default:
       return pattern::Slot::Primary;
     }
@@ -34,7 +34,7 @@ namespace
 
   bool slot_bool(const pattern::Effect& e, const pattern::Registers& regs)
   {
-    return resolved_slot(e, regs) == pattern::Slot::Alternate;
+    return resolved_slot(e, regs) == pattern::Slot::Secondary;
   }
 
   // `when` guard: compare a scalar register against a literal (or test truthiness).
@@ -66,13 +66,13 @@ namespace
     switch (e.kind) {
     case K::Image: {
       pattern::Slot slot = resolved_slot(e, regs);
-      regs.images[e.target] = api.get_image(slot == pattern::Slot::Alternate);
+      regs.images[e.target] = api.get_image(slot == pattern::Slot::Secondary);
       regs.image_slots[e.target] = slot;
       // Stamp the lane generation this was pulled at, so a theme swap can be detected
       // later and the register refreshed rather than left holding a dead theme's frame.
       // Presence of the entry is also what marks the register as a LIVE pull rather than
       // a `copy` snapshot (see Registers::image_gens).
-      regs.image_gens[e.target] = api.lane_generation(slot == pattern::Slot::Alternate);
+      regs.image_gens[e.target] = api.lane_generation(slot == pattern::Slot::Secondary);
       break;
     }
     case K::Text:
@@ -81,10 +81,10 @@ namespace
     case K::Anim:
       // Record the slot as well as loading it: the draw side reads regs.anim_slot to know
       // which streamer to pull the frame from. Without that the load and the draw disagree
-      // and every `anim` renders the primary streamer -- `anim reward` and the `alternate`
+      // and every `anim` renders the primary streamer -- `anim secondary` and the `alternate`
       // ping-pong were invisible on screen even though the load was correct.
       regs.anim_slot = resolved_slot(e, regs);
-      api.change_animation(regs.anim_slot == pattern::Slot::Alternate);
+      api.change_animation(regs.anim_slot == pattern::Slot::Secondary);
       break;
     case K::Themes:
       // Fire-and-forget by design: patterns request a swap, they don't depend on it
@@ -146,11 +146,11 @@ namespace
       api.set_spiral(static_cast<uint32_t>(e.ivalue), static_cast<uint32_t>(e.mod_literal));
       break;
     case K::Audio: {
-      // Resolve content (concept/reward/runtime) to a precanned path at FIRE time, exactly
-      // like Image resolves its slot -- `runtime` rolls concept-vs-reward per firing, not
+      // Resolve content (primary/secondary/runtime) to a precanned path at FIRE time, exactly
+      // like Image resolves its slot -- `runtime` rolls primary-vs-secondary per firing, not
       // once at parse time (resolved_slot handles all three uniformly).
       pattern::Slot slot = resolved_slot(e, regs);
-      const std::string& path = api.get_theme_audio(slot == pattern::Slot::Alternate);
+      const std::string& path = api.get_theme_audio(slot == pattern::Slot::Secondary);
       api.play_theme_audio(path, e.force);
       // A literal `volume` modulator (no curve/expr) is applied once here, at fire time;
       // a curve/expr volume instead rides the per-frame RenderStmt{Op::AudioVolume} the
@@ -226,7 +226,7 @@ void CompiledVisual::refresh_stale_registers(VisualControl& api)
     if (slot == _registers.image_slots.end()) {
       continue;
     }
-    const bool alternate = slot->second == pattern::Slot::Alternate;
+    const bool alternate = slot->second == pattern::Slot::Secondary;
     const uint32_t generation = api.lane_generation(alternate);
     if (gen->second == generation) {
       continue;

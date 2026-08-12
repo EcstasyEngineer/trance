@@ -788,11 +788,11 @@ void AppUi::draw_visuals_section(Director& director)
   if (ImGui::Button("+ New pattern")) {
     auto* added = program->add_custom_visual_pattern();
     added->set_name(unique_pattern_name(*program));
-    // Minimal valid v3 source: one pattern span with one cadence drawing a concept
+    // Minimal valid v3 source: one pattern span with one cadence drawing a primary
     // image. Named to match so `pattern NAME` and the proto name agree on sight
     // (Director carries the proto's name as authoritative either way).
     added->set_source_text("pattern " + added->name() + " for 1024f {\n"
-                           "  every 64f { image concept zoom (curve 0 -> 0.375) }\n"
+                           "  every 64f { image primary zoom (curve 0 -> 0.375) }\n"
                            "  spiral speed 2\n"
                            "}\n");
     added->set_random_weight(1);

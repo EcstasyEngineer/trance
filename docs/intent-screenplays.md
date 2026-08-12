@@ -58,7 +58,7 @@ Two more cross-cutting facts:
   `SPLIT_WORD`, `pattern_ast.h:59`); there is no surface for `SPLIT_LINE` (whole phrases) or
   `SPLIT_ONCE_ONLY` (the type-out stream). Five of the eight originals used `SPLIT_LINE`.
 - **No deterministic theme alternation.** Originals ping-pong primary/alternate on a counter
-  (`_alternate = !_alternate`). v3 content is `concept` | `reward` | `runtime` (random per
+  (`_alternate = !_alternate`). v3 content is `primary` | `secondary` | `runtime` (random per
   fire). The runtime already supports register-driven slots (`Effect.slot_reg`,
   `compiled_visual.cpp:22`) and `Toggle` — but no grammar reaches them.
 
@@ -76,7 +76,7 @@ Two more cross-cutting facts:
 > per pass: 2/4/8/16) the still is swapped for an **animation burst**. Text is a **line of
 > copy stabbed on for the first 8 frames of every other cut**, growing steadily larger as
 > the ride accelerates; at top speed it switches to **a fresh single word on every cut**,
-> shown the whole cut. Theme flips between concept and reward in four blocks as the speed
+> shown the whole cut. Theme flips between primary and secondary in four blocks as the speed
 > climbs.
 
 Key evidence:
@@ -95,8 +95,8 @@ Key evidence:
 
 ```
 every ramp 56f -> 12f steps 120 ease early -> cut {
-  image concept zoom (curve 0 -> 0.5)
-  word concept chance 0.5
+  image primary zoom (curve 0 -> 0.5)
+  word primary chance 0.5
 }
 spiral speed (curve 1 -> 4 over accelerate)
 ```
@@ -116,7 +116,7 @@ Drifts:
 3. **Text rhythm randomized and flattened.** Original: deterministic 8f stab every other
    cut, a **line** of text, scale growing 0.6→0.8 over the run, theme following the stage's
    alternation. v3: `chance 0.5` (random), full-cut duty, single **word**, constant 0.75,
-   concept only. The 8f-stab duty cycle is *not authorable* in v3 (no `when`/`show`
+   primary only. The 8f-stab duty cycle is *not authorable* in v3 (no `when`/`show`
    surface); the line split is not authorable; the growth is authorable (`zoom (curve ... over
    accelerate)`) but wasn't used.
 4. **Spiral speed rides time, not cut-rate.** With `ease early` the original's
@@ -134,7 +134,7 @@ Drifts:
 > Two-act structure, played twice. **Act 1 (slow, 16×64f):** one image per second-ish,
 > every *second* image animates, each zooms 0→0.5 over its life on top of a slow 0→0.25
 > lean-in. A strict **call-and-response** each 64f: first half shows the small caption,
-> second half swaps it for a **big line of text**. **Act 2 (fast, 32 cuts):** reward-theme
+> second half swaps it for a **big line of text**. **Act 2 (fast, 32 cuts):** secondary-theme
 > images strobe at 8f while the zoom **climbs stepwise across the whole act** (index/48);
 > a word **blinks** — 8 frames on, 8 frames off — slightly shrinking as the act peaks; the
 > caption stays on throughout. Spiral doubles speed (2→4) between acts.
@@ -154,17 +154,17 @@ Right: the seq two-phase × loop 2 shape; per-image zoom in slow; whole-phase zo
 fast (`over fast` — good call, the comment even explains why); anim every 2nd; spiral 2/4.
 
 Drifts:
-1. **The call-and-response is gone.** v3 slow phase has only `caption concept` painting
+1. **The call-and-response is gone.** v3 slow phase has only `caption primary` painting
    constantly. The big SPLIT_LINE text (the "response") doesn't exist, and the half-cycle
    alternation cannot be written (no `show`, no SPLIT_LINE).
-2. **Fast-phase word doesn't blink.** `every 16f { word reward }` paints continuously;
+2. **Fast-phase word doesn't blink.** `every 16f { word secondary }` paints continuously;
    original is a hard 8f on/off strobe with a shrink creep. Duty gap again.
 3. **Fast-phase caption dropped** (original renders small subtext through the whole fast
    act, orig:206-208); v3 fast phase has none — the caption vanishes during the payoff act.
 4. Slow-phase base lean-in (`.25f * slow_main->progress()` origin, orig:197-199) lost —
    authorable today via `origin (curve 0 -> 0.25 over slow)`.
-5. Slow-phase image theme: original concept (`get_image()`), v3 `concept` — match. Fast:
-   original alternate=true, v3 `reward` — match. (No drift; noted for completeness.)
+5. Slow-phase image theme: original primary (`get_image()`), v3 `primary` — match. Fast:
+   original alternate=true, v3 `secondary` — match. (No drift; noted for completeness.)
 
 ## 3. SUB_TEXT
 
@@ -189,7 +189,7 @@ Key evidence:
 
 ```
 every 64f { image runtime zoom (curve 0 -> 0.375) anim every 3rd }
-every 32f { subtext reward }
+every 32f { subtext secondary }
 spiral speed 4
 ```
 
@@ -198,7 +198,7 @@ spiral speed 4
    vocabulary has no v3 surface).
 2. **Theme alternation randomized**: `runtime` rolls per pull vs. strict A/B/A/B. The
    conditioning-style pairing (subtext theme follows the image's current theme,
-   `change_subtext(_alternate)`) is likewise lost — v3 pins `subtext reward`.
+   `change_subtext(_alternate)`) is likewise lost — v3 pins `subtext secondary`.
 3. **Escalation across wraps lost** (12→24→48f subtext slowdown). No v3 state survives a
    wrap except registers (which do persist — `[uncertain]` whether a counter-based
    emulation would survive the top-level One's wrap; registers are not reset on wrap per
@@ -240,12 +240,12 @@ Drifts:
 1. **The animated mode is gone** (no `anim` in the pattern). Half of the original's runs
    were a *video* dissolve chain; v3 is always stills. A per-activation coin flip has no v3
    surface (chance is per-fire, not per-pattern).
-2. **Bi-thematic ping-pong gone**: original alternates concept/reward every 128f (images
-   AND text); v3 pins `image reward` + `word reward` + `caption concept`. FlashText was the
-   most explicitly A/B-alternating visual of the eight.
+2. **Bi-thematic ping-pong gone**: original alternates primary/secondary every 128f (images
+   AND text); v3 pins `image secondary` + `word secondary` + `caption primary`. FlashText
+   was the most explicitly A/B-alternating visual of the eight.
 3. **Text: wrong cadence, wrong duty, wrong split, no creep.** Original: one SPLIT_LINE
    phrase per 128f, visible only the second 64f, shrinking as it holds. v3:
-   `every 64f { word reward }` — a new single word twice as often, painted 100% of the
+   `every 64f { word secondary }` — a new single word twice as often, painted 100% of the
    time, constant size.
 4. **Font churn lost** (`change_font(true)` per 64f → v3 fonts change only at wrap init).
    The "every phrase in a new face" texture is part of this visual's identity. No v3
@@ -259,13 +259,13 @@ Drifts:
 ### Intention screenplay (original)
 
 > The resting pose. One image per 64f zooming 0→0.5 over its life; every third image is
-> pulled from the reward theme, and (on a offset phase) every third showing animates. A
+> pulled from the secondary theme, and (on a offset phase) every third showing animates. A
 > **line** of text changes every 128f but is only visible during the **middle half** of
 > that cycle (frames 32–96) — it surfaces, holds, and sinks — riding the image's zoom.
 > Caption always on, refreshed every 32f.
 
 Key evidence:
-- Anim/theme interleave: `_image = get_image(_anim_cycle % 3 == 1); if (++_anim_cycle % 3 == 2) change_animation(false)` with double increment (orig:286-292) → reward image every
+- Anim/theme interleave: `_image = get_image(_anim_cycle % 3 == 1); if (++_anim_cycle % 3 == 2) change_animation(false)` with double increment (orig:286-292) → secondary image every
   3rd, animation every 3rd, phase-shifted.
 - Text window: `if (counter->index() == 1 || counter->index() == 2) render_text(.75, .75, .5*image->progress(), .5*image->progress())` (orig:319-321), SPLIT_LINE at 128f (orig:295).
 
@@ -273,14 +273,14 @@ Key evidence:
 
 ```
 every 64f { image runtime zoom (curve 0 -> 0.5) anim every 3rd }
-every 32f { caption concept }
+every 32f { caption primary }
 spiral speed 3
 ```
 
 1. **The big text layer is entirely gone.** Original has BOTH the 128f line-with-window and
    the caption; v3 kept only the caption. Same root cause: line split + window duty are
    unauthorable, so the port dropped the layer rather than paint a phrase permanently.
-2. `runtime` vs deterministic every-3rd-reward. Same alternation gap as elsewhere (here the
+2. `runtime` vs deterministic every-3rd-secondary. Same alternation gap as elsewhere (here the
    original is a 3-cycle, not a toggle).
 3. Caption origin 0.5 default vs original 0.25 (orig:318). Cosmetic.
 
@@ -307,9 +307,9 @@ Key evidence:
 ### v3 (`kSuperParallel`) and drift
 
 ```
-every 96f            { image concept -> a zoom (curve 0 -> 0.875) anim every 2nd }
-every 96f offset 32f { image concept -> b alpha 0.5 zoom (curve 0 -> 0.875) }
-every 96f offset 64f { image reward  -> c alpha 0.33 zoom (curve 0 -> 0.875) }
+every 96f            { image primary   -> a zoom (curve 0 -> 0.875) anim every 2nd }
+every 96f offset 32f { image primary   -> b alpha 0.5 zoom (curve 0 -> 0.875) }
+every 96f offset 64f { image secondary -> c alpha 0.33 zoom (curve 0 -> 0.875) }
 every 32f { word runtime }
 ```
 
@@ -331,7 +331,7 @@ every 32f { word runtime }
 ### Intention screenplay (original)
 
 > The animation **is** the subject: a full-screen moving layer runs continuously, zooming
-> 0→0.625 each 64f, its source alternating concept-anim / reward-anim every 64f. Above it,
+> 0→0.625 each 64f, its source alternating primary-anim / secondary-anim every 64f. Above it,
 > a still image **visits**: per 64f cycle it fades **in over 16f** (frames 48–64, zoom
 > drifting up), holds full through the cycle boundary, fades **out over 16f** (frames
 > 0–16), and then is **fully absent for 32 frames — the animation holds the stage alone**
@@ -362,7 +362,7 @@ Frames 16–47: **no still drawn at all** (32f hold for the animation). Text win
 
 ```
 every 64f { image runtime zoom (curve 0 -> 0.625) anim }
-every 64f offset 32f { image reward -> still fade inout zoom (curve 0.5 -> 0.625) }
+every 64f offset 32f { image secondary -> still fade inout zoom (curve 0.5 -> 0.625) }
 every 32f { caption runtime }
 ```
 
@@ -397,7 +397,7 @@ every 32f { caption runtime }
 > (25% duty, periodic). At random (1/12 per cut, 64f cooldown), the pattern **tears into an
 > animation burst** for 64–128f: the animation **zooms in continuously across the burst**
 > (0→~1), words go silent, and — crucially — entering a burst **flips the theme**, so each
-> burst is a pivot between concept-world and reward-world for all the cuts that follow.
+> burst is a pivot between primary-world and secondary-world for all the cuts that follow.
 
 Key evidence:
 - Pre-echo: `if (rapid->frame() >= rapid->length() - 4) render_image(_next, next_alpha, ...)`,
@@ -482,9 +482,9 @@ Reserve the v4 question; reopen it only if the extension list keeps growing past
 
 **E1. `show` — visibility window on any draw (the load-bearing one).**
 ```
-word concept show 0.5..1        # fraction of the enclosing clock
-image reward show 0f..8f        # frame-denominated, resolved against the clock's length
-word concept show [expr]        # raw condition escape
+word primary show 0.5..1      # fraction of the enclosing clock
+image secondary show 0f..8f   # frame-denominated, resolved against the clock's length
+word primary show [expr]      # raw condition escape
 ```
 Semantics: the draw paints only while the condition holds; content/effects still fire on
 their cadence. Lowering: `RenderStmt.when = "(clk.progress >= A) and (clk.progress < B)"`
@@ -496,8 +496,8 @@ Lightshow name: the gate/duty knob.
 **E2. `env` — attack/hold/release alpha envelope (supersedes bare `fade inout` where a hold
 is meant).**
 ```
-image reward -> still env in 16f hold 16f out 16f     # remainder of the clock = OFF (alpha 0)
-image concept env in 1/4 out 1/4                      # fractions allowed; no hold = triangle
+image secondary -> still env in 16f hold 16f out 16f  # remainder of the clock = OFF (alpha 0)
+image primary env in 1/4 out 1/4                      # fractions allowed; no hold = triangle
 ```
 Semantics: piecewise-linear alpha: rise over `in`, flat 1 over `hold`, fall over `out`,
 **0 for the remainder** — trapezoid-with-absence, the exact original Animation shape
@@ -531,7 +531,7 @@ the burst pivot without reopening §4.7's rejected `set/inc/roll` surface]**. Fl
 Restores S5. Bi-thematic invariant untouched (still the one alternate bool).
 
 **E5. `shadow` params on text draws (+ `font` cadence effect).**
-`word concept shadow zoom (curve 0 -> 0.5) shadow origin 0.2` → fills the existing
+`word primary shadow zoom (curve 0 -> 0.5) shadow origin 0.2` → fills the existing
 `RenderStmt.shadow_origin/shadow_zoom` (currently unreachable, default 0). And a standalone
 `font` statement (`font` / `font force`) lowering to `Effect{Kind::Font}` — the effect
 exists, no surface does. Both zero-runtime. Restores S9 (text depth-parallax riding the

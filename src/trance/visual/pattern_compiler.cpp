@@ -10,7 +10,7 @@ namespace
     switch (s) {
     case pattern::Slot::Primary:
       return ImageSlotHint::Primary;
-    case pattern::Slot::Alternate:
+    case pattern::Slot::Secondary:
       return ImageSlotHint::Alternate;
     case pattern::Slot::Runtime:
       return ImageSlotHint::Runtime;

@@ -240,10 +240,10 @@ namespace
 
   Slot content_to_slot(const std::string& w, std::size_t at)
   {
-    if (w == "concept") return Slot::Primary;
-    if (w == "reward") return Slot::Alternate;
+    if (w == "primary") return Slot::Primary;
+    if (w == "secondary") return Slot::Secondary;
     if (w == "runtime") return Slot::Runtime;
-    throw ParseError{"unknown content '" + w + "' (want concept|reward|runtime)", at};
+    throw ParseError{"unknown content '" + w + "' (want primary|secondary|runtime)", at};
   }
 
   // ---- parser ---------------------------------------------------------------
@@ -805,7 +805,7 @@ namespace
 
     // `audio <content> [loop] [volume <modulator>]` / `audio stop` -- PRECANNED theme audio
     // only (no TTS, ever). Two nouns still apply: `content` is the same bi-thematic
-    // vocabulary as `image`/`word` (concept/reward/runtime); `volume` is an ordinary
+    // vocabulary as `image`/`word` (primary|secondary|runtime); `volume` is an ordinary
     // modulator, not a bespoke keyword class. Lowers to Effect{Kind::Audio} (or AudioStop
     // for `audio stop`); a literal volume sets Effect::rate (fired once), a curve/[expr]
     // volume instead emits a RenderStmt{Op::AudioVolume} that rides the enclosing pattern's
@@ -898,8 +898,10 @@ namespace
       _c.expect('}');
     }
 
-    // E4 `alternate [chance P]` -- a CONTENT WORD (beside concept/reward/runtime) giving a
-    // draw DETERMINISTIC A/B theme ping-pong instead of a random or pinned side.
+    // E4 `alternate [chance P]` -- a CONTENT WORD (beside primary/secondary/runtime) giving a
+    // draw DETERMINISTIC A/B theme ping-pong instead of a random or pinned side. Note
+    // `alternate` (ping-pong between the two themes) and `secondary` (pin to theme 1) are
+    // different words meaning different things.
     //
     // Parser-only sugar: it mints a hidden scalar register private to this statement, emits an
     // `Effect{Kind::Toggle}` on it fired BEFORE the draw's own pull, and points the pull's
@@ -971,7 +973,7 @@ namespace
       if (content == "alternate") {
         if (kw != "image") {
           throw ParseError{"`alternate` content is available on `image` draws (and the standalone "
-                           "`anim`); " + kw + " takes concept|reward|runtime",
+                           "`anim`); " + kw + " takes primary|secondary|runtime",
                            cat};
         }
         alt_reg = parse_alternate(pre);

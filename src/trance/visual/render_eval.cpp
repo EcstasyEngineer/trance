@@ -32,7 +32,7 @@ namespace
     if (it == regs.image_slots.end()) {
       return VisualRender::ThemeSlot::None;
     }
-    return it->second == pattern::Slot::Alternate ? VisualRender::ThemeSlot::Alternate
+    return it->second == pattern::Slot::Secondary ? VisualRender::ThemeSlot::Alternate
                                                   : VisualRender::ThemeSlot::Primary;
   }
 }

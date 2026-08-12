@@ -17,7 +17,11 @@
 // wiring + action-log equivalence against the live visuals).
 namespace pattern
 {
-  enum class Slot { None, Primary, Alternate, Runtime };
+  // Which of the two live ThemeBank sides a content word selects. `Secondary` is theme 1;
+  // it is deliberately NOT spelled "Alternate", because the grammar's `alternate` content
+  // word means something else entirely (deterministic A/B ping-pong between the two sides).
+  // The ThemeBank/api boundary below this still speaks `bool alternate` by design.
+  enum class Slot { None, Primary, Secondary, Runtime };
 
   // One effect a leaf performs. The compiler turns an ordered effect list into a
   // single action lambda (see pattern_compiler / CompiledVisual).
@@ -95,14 +99,14 @@ namespace pattern
     // Image op animation. has_anim=false draws a still (render_image). Otherwise
     // render_animation_or_image with the type chosen each frame:
     //   anim_gate non-empty and evaluates to 0 -> NONE
-    //   else Registers::anim_slot == Alternate -> ANIM_ALTERNATE
+    //   else Registers::anim_slot == Secondary -> ANIM_ALTERNATE
     //   else -> ANIM
     // (syntax: `anim` / `anim every Nth`)
     //
     // WHICH theme the animation comes from is deliberately NOT a param here. It is
     // whatever the last Anim effect loaded (Registers::anim_slot), because the load is
-    // where the content word already lives -- `image reward ... anim`, `anim alternate`,
-    // a burst's `enter { anim reward }`. A second, independent selector on the draw could
+    // where the content word already lives -- `image secondary ... anim`, `anim alternate`,
+    // a burst's `enter { anim secondary }`. A second, independent selector on the draw could
     // only ever contradict the load and pull a frame from a streamer holding something
     // else. (An `anim alt [expr]` draw-side override was declared here once and never
     // parsed, which is exactly how the draw came to ignore the load entirely.)

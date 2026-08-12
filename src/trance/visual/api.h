@@ -39,7 +39,7 @@ public:
   virtual uint32_t lane_generation(bool alternate) const = 0;
   // Random pick from the active theme's precanned audio pool (ThemeBank::get_audio),
   // same shape as get_image -- the v3 `audio` effect resolves content
-  // (concept/reward/runtime) to a path with this before calling play_theme_audio.
+  // (primary/secondary/runtime) to a path with this before calling play_theme_audio.
   virtual const std::string& get_theme_audio(bool alternate = false) const = 0;
 
   virtual void rotate_spiral(float amount) = 0;

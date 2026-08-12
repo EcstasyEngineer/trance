@@ -283,9 +283,9 @@ namespace pattern
     if (!st.anim_gate.empty() && !eval_cond_expr(st.anim_gate, regs, nodes, root)) {
       return AnimDraw::Still;
     }
-    // Follow the LOAD, don't re-decide: the Anim effect already resolved concept vs reward
+    // Follow the LOAD, don't re-decide: the Anim effect already resolved primary vs secondary
     // (and rolled `runtime`) at fire time. See Registers::anim_slot.
-    return regs.anim_slot == Slot::Alternate ? AnimDraw::Alternate : AnimDraw::Primary;
+    return regs.anim_slot == Slot::Secondary ? AnimDraw::Alternate : AnimDraw::Primary;
   }
 
   // Run a pattern's data-driven render block for one frame: evaluate each statement's

@@ -22,8 +22,8 @@ V3 has two nouns and one rule:
 
 ```text
 pattern my_flash for 512f {
-  every 64f { image concept zoom (curve 0 -> 0.5) }
-  every 128f { word reward }
+  every 64f { image primary zoom (curve 0 -> 0.5) }
+  every 128f { word secondary }
   spiral speed 3
 }
 ```
@@ -33,15 +33,15 @@ patterns should run one after another:
 
 ```text
 pattern slow_then_fast for 768f seq {
-  pattern slow for 512f { every 64f { image concept zoom 0.5 } spiral speed 2 }
-  pattern fast for 256f { every 8f { image reward } spiral speed 4 }
+  pattern slow for 512f { every 64f { image primary zoom 0.5 } spiral speed 2 }
+  pattern fast for 256f { every 8f { image secondary } spiral speed 4 }
 }
 ```
 
 ## Content And Registers
 
-The engine is bi-thematic. `concept` reads the primary theme, `reward` reads the secondary
-theme, and `runtime` picks a side at fire time.
+The engine is bi-thematic. `primary` reads theme 0, `secondary` reads theme 1, and `runtime`
+picks a side at fire time.
 
 `image CONTENT -> REG` pulls an image into a register and draws it. `draw REG` draws an
 existing image register without pulling a new image. Registers are local to the nearest
@@ -55,7 +55,7 @@ pattern xfade for 512f {
     every 64f -> beat {
       copy cur -> prev
       draw prev          zoom (curve 0.5 -> 1.0)
-      image reward -> cur fade in zoom (curve 0 -> 0.5)
+      image secondary -> cur fade in zoom (curve 0 -> 0.5)
     }
   }
 }
@@ -87,7 +87,7 @@ length.
 
 ```text
 pattern pulse_flash for beats 8 {
-  every beats 1 { image concept zoom (curve 0 -> 0.5) }
+  every beats 1 { image primary zoom (curve 0 -> 0.5) }
 }
 ```
 
@@ -104,7 +104,7 @@ pattern xfade_on_beat for beats 8 {
     every beats 1 -> beat {
       copy cur -> prev
       draw prev          zoom (curve 0.5 -> 1.0)
-      image reward -> cur fade in zoom (curve 0 -> 0.5)
+      image secondary -> cur fade in zoom (curve 0 -> 0.5)
     }
   }
 }
@@ -141,14 +141,14 @@ for the ear instead of the eye.
 
 ```text
 pattern mantra_pulse for beats 16 {
-  every beats 4 { audio concept loop volume (curve 0.2 -> 0.8) }
-  every beats 1 { image concept zoom (curve 0 -> 0.4) }
+  every beats 4 { audio primary loop volume (curve 0.2 -> 0.8) }
+  every beats 1 { image primary zoom (curve 0 -> 0.4) }
   spiral speed 2
 }
 ```
 
-`audio concept` pulls a random precanned line from the primary theme's `audio_path` pool
-(exactly like `image concept` pulls a random image) and starts it playing on the engine's
+`audio primary` pulls a random precanned line from the primary theme's `audio_path` pool
+(exactly like `image primary` pulls a random image) and starts it playing on the engine's
 dedicated theme-audio channel. `loop` keeps it going for the rest of its `every beats 4`
 window; `volume (curve 0.2 -> 0.8)` fades it in across each 32-beat-frame span, riding the
 SAME curve machinery as `zoom`/`fade`/`spiral speed` -- there is no separate "audio curve"
@@ -168,7 +168,7 @@ audio stop
 ```
 
 **Content vocabulary.** `audio` takes the exact same bi-thematic content word as `image`/
-`word`: `concept` (primary theme), `reward` (alternate theme), or `runtime` (rolled at fire
+`word`: `primary` (theme 0), `secondary` (theme 1), or `runtime` (rolled at fire
 time). Unlike `get_font` (which falls back to a system font when a theme has no fonts of its
 own), a theme with an empty `audio_path` pool makes `get_audio` return an empty path; the
 engine then fails to open it and logs `couldn't load ` to stderr rather than crashing --
@@ -190,9 +190,9 @@ Write the window as a slice of the enclosing clock, in frames, or as a raw condi
 
 ```text
 every 64f -> beat {
-  image concept
-  word reward show 0f..8f      # an 8-frame stab at the top of each cut
-  line concept show 0.5..1     # the second half only
+  image primary
+  word secondary show 0f..8f   # an 8-frame stab at the top of each cut
+  line primary show 0.5..1     # the second half only
   caption runtime show [this.frame < 32]
 }
 ```
@@ -208,8 +208,8 @@ an instant and is never actually absent, so a layer beneath it never has the scr
 
 ```text
 every 64f -> beat {
-  image concept anim                            # the animation runs the whole cut
-  image reward -> still env in 16f hold 16f out 16f
+  image primary anim                            # the animation runs the whole cut
+  image secondary -> still env in 16f hold 16f out 16f
 }                                               # ...and the still is GONE for the last 16f
 ```
 
@@ -219,8 +219,9 @@ still has the absent tail. `in + hold + out` must fit the clock.
 **`line` -- whole phrases.** `word` puts one word on screen at a time; `line` puts the whole
 phrase up. Same content vocabulary, same params, same everything else.
 
-**`alternate` -- deterministic A/B.** `concept` pins theme A and `runtime` rolls a coin every
-firing. `alternate` ping-pongs A, B, A, B instead:
+**`alternate` -- deterministic A/B.** Not to be confused with `secondary`, which *pins* theme
+1: `alternate` is the word that makes a draw switch sides. `primary` pins theme A and
+`runtime` rolls a coin every firing. `alternate` ping-pongs A, B, A, B instead:
 
 ```text
 every 48f { image alternate zoom (curve 0 -> 0.4) }
@@ -235,12 +236,12 @@ It also works on the standalone animation load (`anim alternate`).
 ## Common Effects
 
 ```text
-image concept -> cur zoom (curve 0 -> 0.5) fade in
+image primary -> cur zoom (curve 0 -> 0.5) fade in
 image alternate chance 0.5 env in 16f hold 16f out 16f
 draw prev alpha 0.5 origin 0.25 zoom 0.75
-word reward show 0f..8f
-line concept show 0.5..1
-caption concept
+word secondary show 0f..8f
+line primary show 0.5..1
+caption primary
 subtext runtime
 spiral speed (curve 1 -> 4)
 warp amplitude (curve 0 -> 0.2) wavelength 0.15 speed 2

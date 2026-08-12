@@ -10,7 +10,7 @@
 
 Audio::Audio(const std::string& root_path)
 : _root_path{root_path}
-// Grammar audio starts at FULL volume: a bare `audio concept` with no volume
+// Grammar audio starts at FULL volume: a bare `audio primary` with no volume
 // modulator must be audible (the advertised `every beats N { audio mantra }`
 // shape). Patterns that want quieter starts write `volume`.
 , _theme_audio_channel{{}, 100, false, 0, 0, 0, {}}
