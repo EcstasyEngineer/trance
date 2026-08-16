@@ -365,11 +365,18 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
     // The swap is not instant and saying so is the point: the bank has to load the theme
     // before it can put it on a lane, so a controller that screenshots immediately would
     // otherwise read the old theme as a failed pin.
-    return command_protocol::format_ok(
-        names.size() == 1
-            ? "pinned " + names[0] + " to both live theme slots (takes a few seconds to load in)"
-            : "pinned " + names[0] + " and " + names[1] +
-                " to one live theme slot each (takes a few seconds to load in)");
+    const auto& pinned = themes.runtime_theme_pin();
+    if (pinned.size() == 1) {
+      return command_protocol::format_ok("pinned " + pinned[0] +
+                                         " to both live theme slots (takes a few seconds to load in)");
+    }
+    if (pinned.size() == 2) {
+      return command_protocol::format_ok("pinned " + pinned[0] + " and " + pinned[1] +
+                                         " to one live theme slot each (takes a few seconds to load in)");
+    }
+    return command_protocol::format_ok("pinned " + std::to_string(pinned.size()) +
+                                       " themes; the two live slots lottery among them "
+                                       "(takes a few seconds to load in)");
   }
   case Verb::kThemeUnpin: {
     const bool was_pinned = !themes.runtime_theme_pin().empty();

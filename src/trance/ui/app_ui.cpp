@@ -11,6 +11,7 @@
 #include <trance/visual/pattern_parser_v3.h>
 #include <algorithm>
 #include <cctype>
+#include <iostream>
 #include <cfloat>
 #include <cstdio>
 #include <string>
@@ -36,6 +37,8 @@ namespace
   // Sliders are 0..100 so a raw weight reads directly as "percent-ish" when the pool
   // sums to 100; the EFFECTIVE share label next to it is the honest number.
   const int kMaxRowWeight = 100;
+  // Wider than on/off/inh (32): "solo" clips at 32 in the default font.
+  const float kSoloButtonWidth = 44.f;
 
   const ImVec4 kActiveGreen{0.35f, 0.85f, 0.45f, 1.f};
   const ImVec4 kActiveGreenDim{0.20f, 0.45f, 0.25f, 1.f};
@@ -123,7 +126,7 @@ bool AppUi::wants_text_input() const
 }
 
 void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Audio& audio,
-                   const ThemeBank& themes)
+                   ThemeBank& themes)
 {
   if (!_initialized) {
     return;
@@ -216,7 +219,7 @@ void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Au
     draw_program_section();
   }
   if (ImGui::CollapsingHeader("Themes")) {
-    draw_themes_section();
+    draw_themes_section(themes);
   }
   if (ImGui::CollapsingHeader("Overlay")) {
     draw_overlay_section();
@@ -345,37 +348,28 @@ uint64_t AppUi::visual_pool_total(const trance_pb::Program& program)
   return total;
 }
 
-bool AppUi::any_visual_pinned(const trance_pb::Program& program)
+void AppUi::visual_solo_stats(const trance_pb::Program& program, uint32_t* solo_count,
+                              uint64_t* solo_total)
 {
+  uint32_t count = 0;
+  uint64_t total = 0;
   for (const auto& type : program.visual_type()) {
     if (type.pinned()) {
-      return true;
+      ++count;
+      total += type.random_weight() ? type.random_weight() : 1;
     }
   }
   for (const auto& pattern : program.custom_visual_pattern()) {
     if (pattern.pinned() && pattern.enabled()) {
-      return true;
+      ++count;
+      total += pattern.random_weight() ? pattern.random_weight() : 1;
     }
   }
-  return false;
-}
-
-void AppUi::clear_other_visual_pins(trance_pb::Program& program, bool is_custom, int builtin_index,
-                                    const std::string& custom_name)
-{
-  for (int i = 0; i < program.visual_type_size(); ++i) {
-    auto* config = program.mutable_visual_type(i);
-    // By ROW INDEX, not by type: nothing forbids two visual_type entries of the same
-    // type, and identifying by type would leave both of them pinned.
-    if (is_custom || i != builtin_index) {
-      config->set_pinned(false);
-    }
+  if (solo_count) {
+    *solo_count = count;
   }
-  for (int i = 0; i < program.custom_visual_pattern_size(); ++i) {
-    auto* pattern = program.mutable_custom_visual_pattern(i);
-    if (!is_custom || pattern->name() != custom_name) {
-      pattern->set_pinned(false);
-    }
+  if (solo_total) {
+    *solo_total = total;
   }
 }
 
@@ -390,7 +384,8 @@ std::string AppUi::visual_row_key(bool is_custom, int builtin_index, const std::
 AppUi::WeightRowResult AppUi::draw_weight_row(const char* label, const std::string& key,
                                               uint32_t* weight, bool* pinned, uint64_t pool_total,
                                               std::map<std::string, uint32_t>& stash,
-                                              const char* slider_tooltip, bool pool_pinned,
+                                              const char* slider_tooltip, uint32_t solo_count,
+                                              uint64_t solo_total,
                                               const std::function<void()>& after_pin)
 {
   WeightRowResult result;
@@ -431,8 +426,7 @@ AppUi::WeightRowResult AppUi::draw_weight_row(const char* label, const std::stri
   }
   ImGui::SameLine();
 
-  // Pin. Single-pin across the pool is the CALLER's job (it owns the sibling rows);
-  // this only reports the click.
+  // Solo. This only reports the click; the caller owns the set.
   if (pinned) {
     // Latched BEFORE the button: the click flips *pinned, so testing it again for the
     // pop would pop a push that never happened (or skip one that did) and corrupt
@@ -442,7 +436,7 @@ AppUi::WeightRowResult AppUi::draw_weight_row(const char* label, const std::stri
       ImGui::PushStyleColor(ImGuiCol_Button, kPinGold);
       ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.f, 0.f, 0.f, 1.f));
     }
-    if (ImGui::Button("pin", ImVec2(32.f, 0.f))) {
+    if (ImGui::Button("solo", ImVec2(kSoloButtonWidth, 0.f))) {
       *pinned = !*pinned;
       result.pin_changed = true;
     }
@@ -450,9 +444,10 @@ AppUi::WeightRowResult AppUi::draw_weight_row(const char* label, const std::stri
       ImGui::PopStyleColor(2);
     }
     if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("Pin: at most one per pool. Themes pin as always-resident (the\n"
-                        "weights then only pick the OTHER slot); visuals pin as\n"
-                        "force-this-one (the weight lottery is skipped).");
+      ImGui::SetTooltip("Solo: this row is in the live set. Mute is the on/off button.\n"
+                        "Themes: 0=rotation, 1=always-resident (weights pick the other\n"
+                        "slot), 2=those two slots, 3+=lottery among solos.\n"
+                        "Visuals: 0=lottery, 1=this one only, 2+=lottery among solos.");
     }
     ImGui::SameLine();
   }
@@ -518,12 +513,22 @@ AppUi::WeightRowResult AppUi::draw_weight_row(const char* label, const std::stri
   ImGui::SameLine();
 
   // The honest number: the raw weight above is only meaningful against the pool total.
-  // pool_total 0 means the caller told us a pin owns the pool outright -- the lottery
-  // is skipped, so the weights no longer describe anything and a percentage would lie.
-  if (pool_pinned) {
+  // One visual solo owns the pool outright (100%/0%). Several visual solos share a
+  // smaller pool (solo_total). Themes pass solo_count 0 so a single theme solo does
+  // not pretend the other live slot is gone.
+  if (solo_count == 1) {
     const bool this_row = pinned && *pinned;
     ImGui::TextColored(this_row ? kPinGold : ImGui::GetStyle().Colors[ImGuiCol_TextDisabled],
                        this_row ? " 100%%" : "   0%%");
+  } else if (solo_count >= 2 && solo_total) {
+    const bool this_row = pinned && *pinned;
+    if (this_row) {
+      const uint64_t share_w = *weight ? *weight : 1;
+      float share = 100.f * static_cast<float>(share_w) / static_cast<float>(solo_total);
+      ImGui::TextColored(kPinGold, "%5.1f%%", share);
+    } else {
+      ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "   0%%");
+    }
   } else if (pool_total) {
     float share = 100.f * static_cast<float>(*weight) / static_cast<float>(pool_total);
     ImGui::TextColored(accent ? kActiveGreen : ImGui::GetStyle().Colors[ImGuiCol_TextDisabled],
@@ -630,15 +635,15 @@ void AppUi::draw_visuals_section(Director& director)
   // has been round the houses and come back.
   auto& visual_stash = _visual_last_weight[program];
   const uint64_t pool_total = visual_pool_total(*program);
-  // A pinned visual owns the pool: change_visual returns it every time and never runs
-  // the lottery, so the rows show 100%/0% rather than a share of a draw that no
-  // longer happens. Sampled with pool_total, for the same stability reason.
-  const bool pool_pinned = any_visual_pinned(*program);
+  uint32_t solo_count = 0;
+  uint64_t solo_total = 0;
+  visual_solo_stats(*program, &solo_count, &solo_total);
   bool pool_changed = false;
   const char* kVisualSliderTooltip =
       "Selection weight, shared across ALL visuals -- built-ins and this\n"
       "program's custom patterns run one combined lottery. 0 = never picked.\n"
-      "A PINNED visual is forced: the lottery is skipped entirely.";
+      "A solo visual is the live set: one solo skips the lottery, several\n"
+      "solos lottery among themselves.";
 
   // The one fact this whole section was missing: which visual is on screen RIGHT NOW.
   // The lottery rows only say what CAN play; with a 3072-frame visual the current pick
@@ -681,18 +686,13 @@ void AppUi::draw_visuals_section(Director& director)
     // Empty label: the TreeNode below names the row, matching the Themes section's
     // layout (weight row, then the name as an expander holding the row's content).
     auto row = draw_weight_row("", visual_row_key(false, i, {}), &weight, &pinned, pool_total,
-                               visual_stash, kVisualSliderTooltip, pool_pinned);
+                               visual_stash, kVisualSliderTooltip, solo_count, solo_total);
     config->set_random_weight(weight);
     if (row.weight_changed) {
       pool_changed = true;
     }
     if (row.pin_changed) {
-      // Set before the sweep so the sweep can leave this one alone; clearing is
-      // unconditional the other way (unpinning just leaves the pool unpinned).
       config->set_pinned(pinned);
-      if (pinned) {
-        clear_other_visual_pins(*program, false, i, {});
-      }
       pool_changed = true;
     }
     ImGui::SameLine();
@@ -736,15 +736,14 @@ void AppUi::draw_visuals_section(Director& director)
     // materializes the row moves to its "b<index>" key next frame -- the orphaned
     // stash entry is cosmetic (the row is at 0 with nothing worth restoring).
     auto row = draw_weight_row("", "bt" + std::to_string(visual.type), &weight, &pinned,
-                               pool_total, visual_stash, kVisualSliderTooltip,
-                               pool_pinned);
+                               pool_total, visual_stash, kVisualSliderTooltip, solo_count,
+                               solo_total);
     if (row.weight_changed || row.pin_changed) {
       auto* added = program->add_visual_type();
       added->set_type(static_cast<trance_pb::Program::VisualType>(visual.type));
       added->set_random_weight(weight);
       if (row.pin_changed && pinned) {
         added->set_pinned(true);
-        clear_other_visual_pins(*program, false, program->visual_type_size() - 1, {});
       }
       pool_changed = true;
     }
@@ -768,9 +767,8 @@ void AppUi::draw_visuals_section(Director& director)
   }
   ImGui::PopID();
 
-  // The rescue validate_program does on reload is BUILT-IN weights only, and a pinned
-  // built-in suppresses it -- so warn on exactly that condition, not on the combined
-  // pool_total the percentages use.
+  // Warn only when reload would invent the default builtins. A live solo
+  // (builtin or enabled custom) suppresses that rescue.
   {
     uint64_t builtin_total = 0;
     bool builtin_pinned = false;
@@ -778,7 +776,11 @@ void AppUi::draw_visuals_section(Director& director)
       builtin_total += type.random_weight();
       builtin_pinned = builtin_pinned || type.pinned();
     }
-    if (!builtin_total && !builtin_pinned) {
+    bool custom_pinned = false;
+    for (const auto& pattern : program->custom_visual_pattern()) {
+      custom_pinned = custom_pinned || (pattern.pinned() && pattern.enabled());
+    }
+    if (!builtin_total && !builtin_pinned && !custom_pinned) {
       ImGui::TextColored(kWarnAmber, "all built-in weights 0 -- resets to defaults on reload");
     }
   }
@@ -834,8 +836,8 @@ void AppUi::draw_visuals_section(Director& director)
       bool pinned = pattern->pinned();
       // Empty label: the TreeNode below names the row (the Themes section's layout).
       auto row = draw_weight_row("", visual_row_key(true, 0, pattern->name()), &weight, &pinned,
-                                 pool_total, visual_stash, kVisualSliderTooltip,
-                                 pool_pinned);
+                                 pool_total, visual_stash, kVisualSliderTooltip, solo_count,
+                                 solo_total);
       // Only ever written on a real user edit. The pass-through case (drawing a
       // disabled pattern, which the row shows at 0) must not clobber the weight the
       // pattern was saved with, and must not switch it on just by being drawn.
@@ -858,9 +860,6 @@ void AppUi::draw_visuals_section(Director& director)
       // Pinning is only meaningful for a pattern that is actually in the lottery.
       if (row.pin_changed && pattern->enabled()) {
         pattern->set_pinned(pinned);
-        if (pinned) {
-          clear_other_visual_pins(*program, true, 0, pattern->name());
-        }
         pool_changed = true;
       }
     }
@@ -1229,7 +1228,7 @@ void AppUi::draw_media_preview(const std::string& path)
   ImGui::EndTooltip();
 }
 
-void AppUi::draw_themes_section()
+void AppUi::draw_themes_section(ThemeBank& themes)
 {
   // ThemeBank is built once at startup and has no live-rebuild path; image_path edits
   // are saved immediately like everything else but only take effect on the next
@@ -1249,6 +1248,15 @@ void AppUi::draw_themes_section()
   if (program) {
     for (const auto& theme : program->enabled_theme()) {
       theme_pool_total += theme.random_weight();
+    }
+  }
+  const bool runtime_solo = !themes.runtime_theme_pin().empty();
+  if (runtime_solo) {
+    ImGui::TextColored(kPinGold, "runtime solo (not saved)");
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("A controller set the live set over the command channel.\n"
+                        "solo toggles that overlay. Clearing the last one returns\n"
+                        "to the session's own pins. This does not autosave.");
     }
   }
 
@@ -1352,7 +1360,7 @@ void AppUi::draw_themes_section()
         ImGui::PushStyleColor(ImGuiCol_Button, kPinGold);
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.f, 0.f, 0.f, 1.f));
       }
-      // Same 32px as on/off and pin -- it is a third state toggle in that run, and the
+      // Same 32px as on/off -- it is a third state toggle in that run, and the
       // full word would push the theme name off a default-width panel. The tooltip
       // carries the meaning.
       if (ImGui::Button("inh", ImVec2(32.f, 0.f))) {
@@ -1404,19 +1412,23 @@ void AppUi::draw_themes_section()
       // enabled_theme row is weight 0 / unpinned by definition, so the row can draw
       // from those defaults and only commit an entry once the user actually acts.
       uint32_t weight = entry ? entry->random_weight() : 0;
-      bool pinned = entry && entry->pinned();
+      bool pinned = runtime_solo
+                        ? std::find(themes.runtime_theme_pin().begin(),
+                                    themes.runtime_theme_pin().end(),
+                                    name) != themes.runtime_theme_pin().end()
+                        : entry && entry->pinned();
       const uint32_t before_weight = weight;
       auto row = draw_weight_row("", "t" + name, &weight, &pinned, theme_pool_total,
                                  theme_stash,
                                  "Rotation weight: each theme swap picks the next theme with\n"
                                  "chance weight/total across enabled themes. 0 = never picked.\n"
-                                 "A PINNED theme stays resident even at weight 0 -- the weights\n"
-                                 "then only choose the other of the two live slots.\n"
+                                 "Solo is the live set: 1 stays resident (weights pick the\n"
+                                 "other slot), 2 are the pair, 3+ lottery among themselves.\n"
                                  "(The bank still only keeps its 4-slot window loaded.)",
-                                 // Themes never report pool_pinned: a pinned theme holds one
-                                 // of the two slots, it does not win the lottery for the other.
-                                 false, inheritable ? std::function<void()>{draw_inherit_button}
-                                                    : std::function<void()>{});
+                                 // Themes never pass a solo_count: one theme solo holds
+                                 // one slot, it does not own the other.
+                                 0, 0, inheritable ? std::function<void()>{draw_inherit_button}
+                                                   : std::function<void()>{});
       if (weight != before_weight) {
         ensure_entry()->set_random_weight(weight);
       }
@@ -1424,19 +1436,16 @@ void AppUi::draw_themes_section()
         changed = true;
       }
       if (row.pin_changed) {
-        ensure_entry()->set_pinned(pinned);
-        if (pinned) {
-          // Single pin per program, the rule validate_program enforces on load
-          // (session.cpp) -- setting one here clears the rest so the UI and the
-          // loader never disagree about which theme is pinned.
-          for (int i = 0; i < program->enabled_theme_size(); ++i) {
-            auto* other = program->mutable_enabled_theme(i);
-            if (other->theme_name() != name) {
-              other->set_pinned(false);
-            }
+        if (runtime_solo) {
+          // Toggle the overlay the buttons are showing, not the session proto.
+          auto err = themes.toggle_runtime_theme_pin(name);
+          if (!err.empty()) {
+            std::cerr << "theme solo: " << err << std::endl;
           }
+        } else {
+          ensure_entry()->set_pinned(pinned);
+          changed = true;
         }
-        changed = true;
       }
       ImGui::SameLine();
     }
@@ -1566,7 +1575,16 @@ void AppUi::draw_themes_section()
   // all-zero theme pool to "every theme at weight 1" on the next load -- so say so
   // rather than letting a deliberate all-off silently come back on.
   if (program && !theme_pool_total) {
-    ImGui::TextColored(kWarnAmber, "all weights 0 -- resets to defaults on reload");
+    bool any_pinned = false;
+    for (const auto& theme : program->enabled_theme()) {
+      if (theme.pinned()) {
+        any_pinned = true;
+        break;
+      }
+    }
+    if (!any_pinned) {
+      ImGui::TextColored(kWarnAmber, "all weights 0 -- resets to defaults on reload");
+    }
   }
 
   if (changed) {

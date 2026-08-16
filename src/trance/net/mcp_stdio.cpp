@@ -121,15 +121,14 @@ namespace
          "weight; 0 means it is not in the rotation but can still be pinned.",
          obj_schema(), [](const json&) { return std::string{"themes"}; }},
         {"theme_pin",
-         "Hold the session on specific themes instead of letting them rotate. One name "
-         "puts that theme on BOTH live theme slots; two names put one on each (the engine "
-         "holds exactly two live themes, so two is the maximum). Takes a few seconds to "
-         "become visible -- the bank has to load the theme in -- so do not read a "
-         "screenshot taken immediately as a failed pin. Released by theme_unpin. This does "
-         "not edit the session file.",
+         "Hold the session on a live set of themes (solo). One name puts that theme on "
+         "BOTH live slots; two names are the live pair; three or more lottery among "
+         "themselves for the two slots. Takes a few seconds to become visible -- the "
+         "bank has to load the theme in -- so do not read a screenshot taken immediately "
+         "as a failed pin. Released by theme_unpin. This does not edit the session file.",
          obj_schema({{"names",
                       {{"type", "string"},
-                       {"description", "one or two theme names, comma-separated"}}}},
+                       {"description", "one or more theme names, comma-separated"}}}},
                     {"names"}),
          [](const json& args) { return "theme pin " + str_arg(args, "names"); }},
         {"theme_unpin", "Release the theme pin: back to the program's own theme rotation.",

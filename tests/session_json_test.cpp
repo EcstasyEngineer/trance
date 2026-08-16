@@ -453,13 +453,11 @@ namespace
     check(pinned_keys == 2, "pinned is omitted when false (only the two true rows emit it)");
   }
 
-  // #34: validate_program enforces ONE pin across the whole visual pool -- built-in
-  // visual_type entries and custom patterns share a single selection lottery
-  // (director.cpp), so they share a single pin. Built-ins win over customs, matching
-  // the iteration order the enabled_theme pass uses.
-  void test_single_visual_pin_enforced()
+  // Solo set: validate_program keeps every enabled visual pin (the lottery among
+  // them is Director's job). NONE and disabled customs are still stripped.
+  void test_multiple_visual_pins_kept()
   {
-    auto root = scratch_root() / "visual_pin_single";
+    auto root = scratch_root() / "visual_pin_multi";
     std::filesystem::remove_all(root);
     write_file(root / "s.session.json", R"json({
       "format": "trance-session", "format_version": 1,
@@ -487,8 +485,38 @@ namespace
     for (const auto& p : program.custom_visual_pattern()) {
       if (p.pinned()) ++pins;
     }
-    check(pins == 1, "validate_program leaves exactly one pin across the visual pool");
-    check(program.visual_type(0).pinned(), "the first pin in iteration order is the one kept");
+    check(pins == 3, "validate_program keeps every enabled visual pin");
+    check(program.visual_type(0).pinned() && program.visual_type(1).pinned(),
+          "both built-in pins survive");
+    check(program.custom_visual_pattern(0).pinned(), "the custom pin survives");
+  }
+
+  void test_multiple_theme_pins_kept()
+  {
+    auto root = scratch_root() / "theme_pin_multi";
+    std::filesystem::remove_all(root);
+    write_file(root / "s.session.json", R"json({
+      "format": "trance-session", "format_version": 1,
+      "first_playlist_item": "main",
+      "playlist": { "main": { "standard": { "program": "p" } } },
+      "program_map": { "p": {
+        "enabled_theme": [
+          { "theme_name": "a", "random_weight": 1, "pinned": true },
+          { "theme_name": "b", "random_weight": 1, "pinned": true }
+        ]
+      } },
+      "theme_map": { "a": { "scan": "media/a" }, "b": { "scan": "media/b" } }
+    })json");
+    std::filesystem::create_directories(root / "media" / "a");
+    std::filesystem::create_directories(root / "media" / "b");
+
+    auto session = load_session((root / "s.session.json").string());
+    const auto& program = session.program_map().at("p");
+    int pins = 0;
+    for (const auto& theme : program.enabled_theme()) {
+      if (theme.pinned()) ++pins;
+    }
+    check(pins == 2, "validate_program keeps every theme pin");
   }
 
   // #34: a pin on a DISABLED custom pattern is dead -- rebuild_custom_patterns skips
@@ -554,6 +582,36 @@ namespace
 
   // #34: a PINNED built-in at weight 0 is the deliberate "only this one" state, so it
   // must survive the rescue that an unpinned all-zero pool triggers.
+  void test_pinned_custom_survives_zero_weight_rescue()
+  {
+    auto root = scratch_root() / "pinned_custom_zero";
+    std::filesystem::remove_all(root);
+    write_file(root / "s.session.json", R"json({
+      "format": "trance-session", "format_version": 1,
+      "first_playlist_item": "main",
+      "playlist": { "main": { "standard": { "program": "p" } } },
+      "program_map": { "p": {
+        "enabled_theme": [ { "theme_name": "all", "random_weight": 1 } ],
+        "visual_type": [ { "type": "slow_flash", "random_weight": 0 },
+                         { "type": "animation", "random_weight": 0 } ],
+        "custom_visual_pattern": [
+          { "name": "a", "file": "patterns/a.pattern", "random_weight": 1, "enabled": true,
+            "pinned": true } ]
+      } },
+      "theme_map": { "all": { "scan": "media" } }
+    })json");
+    write_file(root / "patterns" / "a.pattern", "# a\n");
+    std::filesystem::create_directories(root / "media");
+
+    auto session = load_session((root / "s.session.json").string());
+    const auto& program = session.program_map().at("p");
+    check(program.visual_type_size() == 2, "a custom solo suppresses the builtin rescue");
+    check(program.custom_visual_pattern_size() == 1 && program.custom_visual_pattern(0).pinned(),
+          "the custom pin survives");
+    check(program.visual_type(0).random_weight() == 0 && program.visual_type(1).random_weight() == 0,
+          "muted builtins are not rewritten to the defaults");
+  }
+
   void test_pinned_builtin_survives_zero_weight_rescue()
   {
     auto root = scratch_root() / "pinned_zero";
@@ -1237,9 +1295,11 @@ int main()
   test_system_json_round_trip();
   test_pattern_slug_assigned_on_save_without_sidecar();
   test_visual_pinned_round_trip();
-  test_single_visual_pin_enforced();
+  test_multiple_visual_pins_kept();
+  test_multiple_theme_pins_kept();
   test_pin_on_disabled_pattern_is_cleared();
   test_custom_weight_does_not_suppress_visual_default_rescue();
+  test_pinned_custom_survives_zero_weight_rescue();
   test_pinned_builtin_survives_zero_weight_rescue();
   test_pinned_none_visual_type_is_not_a_pin();
   test_scan_expands_to_root_relative_paths();

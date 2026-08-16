@@ -166,7 +166,7 @@ namespace command_protocol
       cmd.verb = Verb::kThemeUnpin;
     } else if (verb == "theme") {
       cmd.ok = false;
-      cmd.error = "usage: theme pin NAME[,NAME] | theme unpin (and `themes` to list)";
+      cmd.error = "usage: theme pin NAME[,NAME...] | theme unpin (and `themes` to list)";
       return cmd;
     } else if (verb == "visuals" && tokens.size() == 1) {
       cmd.verb = Verb::kVisuals;

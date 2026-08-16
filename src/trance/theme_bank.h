@@ -60,8 +60,8 @@ public:
     // The active program's rotation weight. 0 means the program does not have it in
     // rotation at all -- it can still be pinned.
     uint32_t weight;
-    // Held on a lane right now (one of the two live themes), and pinned right now (by the
-    // program's own pin or by a runtime pin).
+    // Held on a lane right now (one of the two live themes), and in the effective
+    // solo set right now (program pins, or the runtime overlay if one is set).
     bool live;
     bool pinned;
     // Has anything at all to put on screen. An undrawable theme is skipped at runtime (a
@@ -72,12 +72,17 @@ public:
   // Every theme the bank knows, name-sorted -- the answer to "what may I pin?", which
   // nothing but reading the session JSON off disk could give before.
   std::vector<ThemeListing> list_themes() const;
-  // Pin one or two themes (bi-thematic floor: one name puts that theme on BOTH lanes, two
-  // names put one on each). Returns "" on success, else why not -- an unknown or undrawable
-  // name, or more than two names. Rejected before anything changes, so a bad pin leaves the
-  // rotation exactly as it was.
+  // Set the runtime solo overlay to exactly these names (1 or more). One name puts
+  // that theme on both lanes; two names are the live pair; three or more lottery
+  // among the set for the two slots. Returns "" on success, else why not -- an
+  // unknown or undrawable name. Rejected before anything changes. Does not write
+  // the session proto.
   std::string set_runtime_theme_pin(const std::vector<std::string>& names);
-  // Release the pin: straight back to the program's own rotation.
+  // Add or remove one name from the runtime overlay (F2 solo while an overlay is
+  // live). Adding an unknown/undrawable name is refused. Clearing the last name
+  // releases the overlay back to the program's own pins.
+  std::string toggle_runtime_theme_pin(const std::string& name);
+  // Release the overlay: straight back to the program's own rotation.
   void clear_runtime_theme_pin();
   const std::vector<std::string>& runtime_theme_pin() const;
   // Caller-supplied words for every text draw, in place of the theme pools (`text pin`).
@@ -169,6 +174,7 @@ public:
     };
     std::array<Slot, 4> slots;
     std::vector<std::pair<std::string, uint32_t>> enabled_weights;
+    // Comma-joined effective solo set (program pins, or the runtime overlay).
     std::string pinned;
     uint32_t image_cache_size;
     uint32_t swaps_to_match;
@@ -286,11 +292,13 @@ private:
   void advance_theme();
   bool all_loaded() const;
   bool all_unloaded() const;
-  // Recomputes which themes are enabled, their rotation weights and which one is pinned,
-  // from the active program and then from the runtime pin on top of it. Called by
-  // set_program and by every runtime-pin change, so the two can never disagree about the
-  // selection state (the bug the obvious "just patch the fields here" shape would have).
+  // Recomputes which themes are enabled, their rotation weights and the effective
+  // solo set, from the active program and then from the runtime overlay on top of
+  // it. Called by set_program and by every runtime-pin change.
   void apply_theme_selection();
+  // Next theme index from the current solo set / weights. Isolated so advance_theme
+  // can stay a queue-shift plus a pick.
+  std::size_t pick_next_theme_index();
 
   // The still half of get_image: the tiered/flat shuffle over this theme's own RESIDENT
   // images, plus the recency bookkeeping a successful pick owes the other themes. Returns
@@ -357,13 +365,15 @@ private:
   // Maps theme name to index in theme vector.
   std::unordered_map<std::string, std::size_t> _theme_map;
   std::unordered_map<std::string, uint32_t> _enabled_theme_weights;
-  std::string _pinned_theme;
+  // Effective solo set after apply_theme_selection: program EnabledTheme.pinned
+  // rows, or the runtime overlay if one is set. Empty = weighted rotation.
+  std::vector<std::string> _pinned_themes;
   // The active program, kept so a runtime pin can be released back to ITS rotation rather
   // than to a guess. Null until the first set_program (the constructor takes a program but
   // builds the theme table from the session).
   const trance_pb::Program* _program = nullptr;
-  // `theme pin` (#59): 1 or 2 names, empty when unpinned. Applied on top of whatever the
-  // program says, by apply_theme_selection.
+  // `theme pin` (#59): 1+ names, empty when no overlay. Applied on top of whatever the
+  // program says, by apply_theme_selection. Does not write the proto.
   std::vector<std::string> _runtime_theme_pin;
   // `text pin` (#59): every text draw serves from these words instead of the theme pools.
   // Round-robin rather than shuffled -- "display exactly these words" wants each of them

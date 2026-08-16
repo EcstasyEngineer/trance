@@ -181,16 +181,15 @@ Loading:
 Content selection (added 2026-08-12, #59 — the visual side of the surface had *no* runtime
 control, which made a controller that cannot see the screen blind and mute at once):
 - **`themes`** — one line listing every theme in the session as `name:weight`, with markers
-  `*` pinned, `+` live on a lane right now, `!` nothing to draw. This is the "what may I
-  pin?" answer; before it, `status`'s four slots were a keyhole view of (in the session that
-  prompted the issue) 43 themes, and the names existed nowhere else a controller could read.
-- **`theme pin NAME[,NAME]`** / **`theme unpin`** — hold the session on one or two themes.
-  One name puts that theme on *both* lanes; two put one on each. Two is the ceiling because
-  the engine holds exactly two live themes and 3+ is a decided non-goal
-  (`spec-grammar-v3.md` §9), so a third name is a mistake rather than a request. Expressed
-  through the two levers `ThemeBank::advance_theme` already had — the pin and the rotation
-  weights — so no second selection path exists to disagree with the first. Not instant: the
-  bank must load the theme before it can put it on a lane.
+  `*` in the solo set, `+` live on a lane right now, `!` nothing to draw. This is the
+  "what may I pin?" answer; before it, `status`'s four slots were a keyhole view of (in
+  the session that prompted the issue) 43 themes, and the names existed nowhere else a
+  controller could read.
+- **`theme pin NAME[,NAME...]`** / **`theme unpin`** — solo a live set of themes. One name
+  puts that theme on *both* lanes; two names *are* the live pair; three or more lottery
+  among the set for the two slots (the engine still holds exactly two live themes —
+  extra names are the candidate set, not a third lane). Not instant: the bank must load
+  the theme before it can put it on a lane.
 - **`visuals`** — one line listing what `visual` accepts: the built-ins and the active
   program's custom patterns, as `name:weight` with `*` on the one playing, plus
   `forced=yes|no` so "the schedule chose this" is distinguishable from "someone pinned it".

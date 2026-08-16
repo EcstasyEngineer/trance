@@ -288,7 +288,12 @@ ThemeBank::DebugSnapshot ThemeBank::debug_snapshot() const
   for (const auto& pair : _enabled_theme_weights) {
     snapshot.enabled_weights.emplace_back(pair.first, pair.second);
   }
-  snapshot.pinned = _pinned_theme;
+  for (std::size_t i = 0; i < _pinned_themes.size(); ++i) {
+    if (i) {
+      snapshot.pinned += ",";
+    }
+    snapshot.pinned += _pinned_themes[i];
+  }
   snapshot.image_cache_size = _image_cache_size;
   snapshot.swaps_to_match = _swaps_to_match_theme;
   return snapshot;
@@ -305,7 +310,7 @@ void ThemeBank::apply_theme_selection()
 {
   const trance_pb::Program& program = *_program;
   _enabled_theme_weights.clear();
-  _pinned_theme.clear();
+  _pinned_themes.clear();
   for (auto& theme : _themes) {
     theme->enabled = false;
   }
@@ -326,7 +331,7 @@ void ThemeBank::apply_theme_selection()
       _enabled_theme_weights[theme.theme_name()] = theme.random_weight();
     }
     if (theme.pinned()) {
-      _pinned_theme = theme.theme_name();
+      _pinned_themes.push_back(theme.theme_name());
     }
     if (theme.random_weight() || theme.pinned()) {
       _themes[index_it->second]->enabled = true;
@@ -348,29 +353,23 @@ void ThemeBank::apply_theme_selection()
           : 1;
     }
   }
-  // Runtime pin (`theme pin`, #59) applied LAST, on top of everything the program said, and
-  // deliberately AFTER the tier refresh above: tier weights are about how an inherited pool
-  // splits internally, which a pin has no opinion about, so they keep reading the session's
-  // own numbers.
+  // Runtime overlay (`theme pin`, #59) applied LAST, on top of everything the program
+  // said, and deliberately AFTER the tier refresh above: tier weights are about how an
+  // inherited pool splits internally, which a solo has no opinion about, so they keep
+  // reading the session's own numbers. The overlay replaces the program's solo set and
+  // rotation weights; it does not write the proto.
   //
-  // Expressed entirely through the two levers advance_theme() already has -- the pin and the
-  // rotation weights -- so no new selection path exists to disagree with the old one:
-  //   one name  -> pinned, nothing else weighted. With no weights at all advance_theme
-  //                takes the pin every time, so BOTH lanes converge on it.
-  //   two names -> first pinned, second the only weighted theme. The pin is overridden
-  //                whenever the last pick was already the pinned theme, so the two
-  //                alternate and end up one per lane.
+  //   one name   -> that theme on both lanes (no roommate weights).
+  //   two names  -> those two ARE the live pair; they alternate.
+  //   three+     -> the two live slots lottery among the set.
   if (!_runtime_theme_pin.empty()) {
     _enabled_theme_weights.clear();
     for (auto& theme : _themes) {
       theme->enabled = false;
     }
-    _pinned_theme = _runtime_theme_pin.front();
-    for (std::size_t i = 0; i < _runtime_theme_pin.size(); ++i) {
-      _themes[_theme_map[_runtime_theme_pin[i]]]->enabled = true;
-      if (i > 0) {
-        _enabled_theme_weights[_runtime_theme_pin[i]] = 1;
-      }
+    _pinned_themes = _runtime_theme_pin;
+    for (const auto& name : _runtime_theme_pin) {
+      _themes[_theme_map[name]]->enabled = true;
     }
   }
   for (uint32_t i = 1; i < _active_themes.size(); ++i) {
@@ -379,16 +378,27 @@ void ThemeBank::apply_theme_selection()
       _swaps_to_match_theme = std::max(_swaps_to_match_theme, i);
     }
   }
-  if (!_pinned_theme.empty()) {
-    auto pinned_index = _theme_map[_pinned_theme];
-    uint32_t count = 0;
-    for (uint32_t i = 1; i < _active_themes.size(); ++i) {
-      if (_themes[pinned_index].get() == _active_themes[i]) {
-        ++count;
+  if (!_pinned_themes.empty()) {
+    std::unordered_set<std::string> solo(_pinned_themes.begin(), _pinned_themes.end());
+    if (_pinned_themes.size() == 1) {
+      auto pinned_index = _theme_map[_pinned_themes.front()];
+      uint32_t count = 0;
+      for (uint32_t i = 1; i < _active_themes.size(); ++i) {
+        if (_themes[pinned_index].get() == _active_themes[i]) {
+          ++count;
+        }
       }
-    }
-    if (count < 2) {
-      _swaps_to_match_theme = std::max(_swaps_to_match_theme, 3u);
+      if (count < 2) {
+        _swaps_to_match_theme = std::max(_swaps_to_match_theme, 3u);
+      }
+    } else {
+      const auto* primary = _active_themes[1].load();
+      const auto* alternate = _active_themes[2].load();
+      const bool both_solo = primary && alternate && solo.count(primary->name) &&
+                             solo.count(alternate->name);
+      if (!both_solo) {
+        _swaps_to_match_theme = std::max(_swaps_to_match_theme, 3u);
+      }
     }
   }
 }
@@ -405,7 +415,8 @@ std::vector<ThemeBank::ThemeListing> ThemeBank::list_themes() const
     auto weight = _enabled_theme_weights.find(theme->name);
     listing.weight = weight == _enabled_theme_weights.end() ? 0 : weight->second;
     listing.live = theme.get() == primary || theme.get() == alternate;
-    listing.pinned = theme->name == _pinned_theme;
+    listing.pinned = std::find(_pinned_themes.begin(), _pinned_themes.end(), theme->name) !=
+                     _pinned_themes.end();
     listing.drawable = theme->drawable;
     out.push_back(std::move(listing));
   }
@@ -421,12 +432,8 @@ std::string ThemeBank::set_runtime_theme_pin(const std::vector<std::string>& nam
   if (names.empty()) {
     return "no theme named";
   }
-  if (names.size() > 2) {
-    // Not an arbitrary cap: the engine holds exactly two live themes and every accessor
-    // below the grammar is a primary/alternate bool. 3+ simultaneous themes is a decided
-    // non-goal (docs/spec-grammar-v3.md sec 9), so a third name is a mistake, not a request.
-    return "at most two themes can be pinned (the engine holds exactly two live themes)";
-  }
+  std::vector<std::string> unique;
+  unique.reserve(names.size());
   for (const auto& name : names) {
     auto it = _theme_map.find(name);
     if (it == _theme_map.end()) {
@@ -435,10 +442,26 @@ std::string ThemeBank::set_runtime_theme_pin(const std::vector<std::string>& nam
     if (!_themes[it->second]->drawable) {
       return "theme '" + name + "' has nothing to draw (empty folder, or its media is missing)";
     }
+    if (std::find(unique.begin(), unique.end(), name) == unique.end()) {
+      unique.push_back(name);
+    }
   }
-  _runtime_theme_pin = names;
+  _runtime_theme_pin = std::move(unique);
   apply_theme_selection();
   return {};
+}
+
+std::string ThemeBank::toggle_runtime_theme_pin(const std::string& name)
+{
+  auto it = std::find(_runtime_theme_pin.begin(), _runtime_theme_pin.end(), name);
+  if (it != _runtime_theme_pin.end()) {
+    _runtime_theme_pin.erase(it);
+    apply_theme_selection();
+    return {};
+  }
+  auto next = _runtime_theme_pin;
+  next.push_back(name);
+  return set_runtime_theme_pin(next);
 }
 
 void ThemeBank::clear_runtime_theme_pin()
@@ -814,34 +837,86 @@ void ThemeBank::async_update()
   }
 }
 
-void ThemeBank::advance_theme()
+std::size_t ThemeBank::pick_next_theme_index()
 {
-  std::size_t random_theme_index = 0;
-  uint32_t total = 0;
-  for (const auto& pair : _enabled_theme_weights) {
-    total += pair.second;
-  }
-  if (!total) {
-    random_theme_index = random(_themes.size());
-  } else {
+  const std::string last =
+      _active_themes.back().load() ? _active_themes.back().load()->name : std::string{};
+
+  auto index_of = [this](const std::string& name) -> std::size_t {
+    auto it = _theme_map.find(name);
+    return it == _theme_map.end() ? 0 : it->second;
+  };
+
+  if (_pinned_themes.empty()) {
+    uint32_t total = 0;
+    for (const auto& pair : _enabled_theme_weights) {
+      total += pair.second;
+    }
+    if (!total) {
+      return random(_themes.size());
+    }
     auto r = random(total);
     uint32_t t = 0;
     for (const auto& pair : _enabled_theme_weights) {
       t += pair.second;
       if (r < t) {
-        random_theme_index = _theme_map[pair.first];
-        break;
-      };
+        return index_of(pair.first);
+      }
+    }
+    return 0;
+  }
+
+  if (_pinned_themes.size() == 1) {
+    const auto& solo = _pinned_themes.front();
+    uint32_t roommate_total = 0;
+    for (const auto& pair : _enabled_theme_weights) {
+      if (pair.first != solo) {
+        roommate_total += pair.second;
+      }
+    }
+    if (last != solo || !roommate_total) {
+      return index_of(solo);
+    }
+    auto r = random(roommate_total);
+    uint32_t t = 0;
+    for (const auto& pair : _enabled_theme_weights) {
+      if (pair.first == solo) {
+        continue;
+      }
+      t += pair.second;
+      if (r < t) {
+        return index_of(pair.first);
+      }
+    }
+    return index_of(solo);
+  }
+
+  if (_pinned_themes.size() == 2) {
+    if (last == _pinned_themes[0]) {
+      return index_of(_pinned_themes[1]);
+    }
+    if (last == _pinned_themes[1]) {
+      return index_of(_pinned_themes[0]);
+    }
+    return index_of(_pinned_themes[0]);
+  }
+
+  std::vector<std::string> choices;
+  choices.reserve(_pinned_themes.size());
+  for (const auto& name : _pinned_themes) {
+    if (name != last) {
+      choices.push_back(name);
     }
   }
-  // Override with pinned theme if last theme wasn't the pinned theme,
-  // or if there are no other weights.
-  if (!_pinned_theme.empty()) {
-    auto pinned_index = _theme_map[_pinned_theme];
-    if (!total || _themes[pinned_index].get() != _active_themes.back()) {
-      random_theme_index = pinned_index;
-    }
+  if (choices.empty()) {
+    choices = _pinned_themes;
   }
+  return index_of(choices[random(uint32_t(choices.size()))]);
+}
+
+void ThemeBank::advance_theme()
+{
+  std::size_t random_theme_index = pick_next_theme_index();
 
   for (std::size_t i = 0; 1 + i < _active_themes.size(); ++i) {
     _active_themes[i].store(_active_themes[1 + i].load());

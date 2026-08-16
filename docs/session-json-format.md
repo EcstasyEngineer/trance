@@ -173,17 +173,17 @@ unknown keys at the item's top level... they are only legal inside `standard`.
 | `enabled_theme` | array | `Program.enabled_theme` |
 | `enabled_theme[].theme_name` | string | `EnabledTheme.theme_name` |
 | `enabled_theme[].random_weight` | uint | `EnabledTheme.random_weight` |
-| `enabled_theme[].pinned` | bool; at most one true per program (`validate_program` enforces) | `EnabledTheme.pinned` |
+| `enabled_theme[].pinned` | bool; any number may be true (solo set) | `EnabledTheme.pinned` |
 | `visual_type` | array | `Program.visual_type` |
 | `visual_type[].type` | enum string, see §2.2 | `VisualTypeConfig.type` |
 | `visual_type[].random_weight` | uint | `VisualTypeConfig.random_weight` |
-| `visual_type[].pinned` | bool, omitted when false; at most one true across `visual_type` **and** `custom_visual_pattern` (`validate_program` enforces) | `VisualTypeConfig.pinned` |
+| `visual_type[].pinned` | bool, omitted when false; any number may be true (solo set, shared with custom patterns) | `VisualTypeConfig.pinned` |
 | `custom_visual_pattern` | array | `Program.custom_visual_pattern` |
 | `custom_visual_pattern[].name` | string, unique within the program (load error on duplicate) | `VisualPatternSource.name` — authoritative identity; NOT derived from the filename |
 | `custom_visual_pattern[].file` | string, root-relative path to a `*.pattern` file | file **content** → `VisualPatternSource.source_text` (see §4) |
 | `custom_visual_pattern[].random_weight` | uint | `VisualPatternSource.random_weight` |
 | `custom_visual_pattern[].enabled` | bool | `VisualPatternSource.enabled` |
-| `custom_visual_pattern[].pinned` | bool, omitted when false; shares the single-pin budget with `visual_type[].pinned`; cleared on a disabled pattern | `VisualPatternSource.pinned` |
+| `custom_visual_pattern[].pinned` | bool, omitted when false; member of the visual solo set; cleared on a disabled pattern | `VisualPatternSource.pinned` |
 | `global_fps` | uint, clamped 1–240 by validate | `Program.global_fps` |
 | `zoom_intensity` | float, clamped 0–1 | `Program.zoom_intensity` |
 | `spiral_colour_a` / `spiral_colour_b` | hex colour string | `Program.spiral_colour_a/b` |
@@ -235,16 +235,16 @@ Two behaviours worth stating because they are not derivable from the above:
   explicit choice from wanting that folder in rotation, so disabling it as a live theme
   must not silently empty it out of its descendants' pools.
 - Tier weighting governs the mix **within one theme's pool**, not what is on screen. The
-  engine keeps two themes live and a pinned theme holds only one of the two slots, so the
+  engine keeps two themes live; a single pinned theme holds one of the two slots, so the
   visible mix is the tier distribution composed with the ordinary theme rotation.
 
 Only `image_path` is tier-weighted. Animations, text and audio still draw flat from the
 merged pool.
 
-**`pinned` means different things per pool.** A pinned *theme* is always one of the two
-live themes — presence, not rotation share — so it stays resident even at weight 0 and
-the weights only choose the other slot. A pinned *visual* is force-this-one: selection
-skips the weight lottery entirely and always returns it (the `--visual` / `--pattern`
+**`pinned` is the solo set.** Themes: 0 = weighted rotation, 1 = always-resident (weights
+pick the other slot), 2 = those two *are* the live pair, 3+ = lottery among the set for
+the two slots. Visuals: 0 = lottery, 1 = force-this-one, 2+ = lottery among the set
+(the `--visual` / `--pattern`
 CLI overrides still win over a session pin, and a pin whose visual can't be compiled
 falls through to the normal lottery rather than freezing).
 

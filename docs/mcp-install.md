@@ -51,8 +51,8 @@ Add to `claude_desktop_config.json` (Settings → Developer → Edit Config):
 | `hide` / `show` | — | Silent running: window invisible, playback paused, audio muted, process alive. Idempotent. |
 | `overlay_on` / `overlay_off` | — | Click-through overlay mode on the running window. |
 | `overlay_opacity` | `opacity` 0..1 | Overlay opacity (clamped). |
-| `themes` | — | List every theme in the session: `name:weight` with `*` pinned, `+` live now, `!` nothing to draw. |
-| `theme_pin` | `names` (1–2, comma-separated) | Hold the session on those themes. One name → both theme slots; two → one each. Takes a few seconds to load in. |
+| `themes` | — | List every theme: `name:weight` with `*` in the solo set, `+` live now, `!` nothing to draw. |
+| `theme_pin` | `names` (1+, comma-separated) | Solo those themes. One name → both theme slots; two → the live pair; three+ → lottery among them for the two slots. Takes a few seconds to load in. |
 | `theme_unpin` | — | Back to the program's theme rotation. |
 | `visuals` | — | List the built-ins and the active program's custom patterns (`name:weight`, `*` = playing), plus `forced=yes/no`. |
 | `visual` | `name` | Force every visual selection to that built-in or custom pattern. |
@@ -91,6 +91,11 @@ Each of these cost real diagnostic time in a live session (#60):
   `err bed layer: no layer 1 (bed has 1)`. Read `bed_layers` first if you might want it back.
 - **A pin is not instant.** `theme_pin` has to wait for the bank to load the theme in, so a
   screenshot taken immediately still shows the old theme. That is loading, not failure.
+- **`theme_pin` is a solo overlay, not "always the primary".** One name → both live slots.
+  Two names → those two *are* the pair. Three or more → the two slots lottery among the
+  set. F2 shows the overlay as gold `solo` buttons and a "runtime solo (not saved)"
+  banner; clicking `solo` there toggles the overlay, not the session file. `on`/`off` is
+  mute (weight 0). Session `pinned` bits are the same solo set, persisted.
 - **Pinned text only shows where a visual draws text.** `text_pin` overrides the text
   *source*; it does not add text draws. Pair it with `visual sub_text` / `visual flash_text`
   if nothing appears.

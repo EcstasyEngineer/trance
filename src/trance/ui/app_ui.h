@@ -40,7 +40,7 @@
 // Weight rows (draw_weight_row, shared by Themes/Program/Visuals) are the one UI for
 // "how often does this get picked": an on/off button over the same stash the old
 // enable checkbox used, a 0..100 slider over the RAW random_weight, the row's
-// EFFECTIVE share of its pool as a percent, and a pin toggle. Two pools, matching the
+// EFFECTIVE share of its pool as a percent, and a solo toggle. Two pools, matching the
 // two lotteries: themes (enabled_theme) and visuals (built-in visual_type PLUS enabled
 // custom patterns -- Director::change_visual draws from both at once). Weight edits
 // fire on_program_change on RELEASE, not per drag tick: set_program re-parses every
@@ -179,7 +179,7 @@ public:
   // Builds this frame's UI (ImGui calls only -- no GL draw calls happen here; those
   // are issued by render()). No-op if !visible().
   void update(sf::RenderWindow& window, sf::Time dt, Director& director, Audio& audio,
-             const ThemeBank& themes);
+             ThemeBank& themes);
 
   // Issues ImGui's GL draw calls into `window`'s currently-bound buffer. Runs via
   // ScreenRenderer::set_ui_hook, after the frame's scene draw and before its display().
@@ -195,7 +195,7 @@ private:
   // active program is the built-in default.
   void draw_builtin_body(Director& director, uint32_t type, const char* blurb);
   void draw_program_section();
-  void draw_themes_section();
+  void draw_themes_section(ThemeBank& themes);
   // The theme named by `name`'s parent DIRECTORY, skipping directories that have no
   // theme of their own; "" when nothing is above it. Mirrors the loader's rule
   // (resolve_theme_inheritance, session_json.cpp) so the panel and the next load agree.
@@ -224,9 +224,10 @@ private:
   // puts its TreeNode there). `slider_tooltip` may be null; it hangs off the slider
   // specifically, which is why it is a parameter rather than an IsItemHovered() at the
   // call site -- by then IsItem* refers to the row's last widget, not the slider.
-  // `pool_pinned` says some row in this pool is pinned, so the lottery is skipped
-  // entirely: the row then shows a flat 100%/0% instead of a weight share that would
-  // describe a draw that never happens.
+  // `solo_count` is how many rows in this pool are pinned. 0: show weight/pool_total.
+  // 1: the exclusive case, 100%/0%. 2+: share among the solo set using solo_total
+  // (a 0-weight solo counts as 1 so it still has a share). Themes pass 0 so a
+  // single theme solo does not pretend to own the other live slot.
   //
   // Writes the new weight through `weight` / the new pin state through `pinned`, and
   // returns what changed so the caller can batch its _on_program_change(): weights
@@ -244,24 +245,18 @@ private:
   WeightRowResult draw_weight_row(const char* label, const std::string& key, uint32_t* weight,
                                   bool* pinned, uint64_t pool_total,
                                   std::map<std::string, uint32_t>& stash,
-                                  const char* slider_tooltip = nullptr, bool pool_pinned = false,
+                                  const char* slider_tooltip = nullptr, uint32_t solo_count = 0,
+                                  uint64_t solo_total = 0,
                                   const std::function<void()>& after_pin = {});
 
   // Sum of every weight in the visual pool: built-in visual_type entries PLUS
   // enabled custom patterns. They share one lottery (director.cpp's change_visual),
   // so they share one denominator for the percent labels.
   static uint64_t visual_pool_total(const trance_pb::Program& program);
-  // True when some visual owns the pool by pin -- Director then skips the lottery, so
-  // the rows' percent labels must read 100%/0% rather than a weight share.
-  static bool any_visual_pinned(const trance_pb::Program& program);
-  // Clear every visual pin except the one just set, whose identity is (`builtin_index`
-  // for a built-in row) or (`custom_name` for a custom row) -- exactly one of the two
-  // is meaningful, selected by `is_custom`. Mirrors the single-pin rule
-  // validate_program enforces on load (session.cpp) so the UI and the loader agree.
-  // Built-ins are identified by ROW INDEX because duplicate entries of one type are
-  // legal, and clearing by type would leave both of a duplicated pair pinned.
-  static void clear_other_visual_pins(trance_pb::Program& program, bool is_custom,
-                                      int builtin_index, const std::string& custom_name);
+  // How many visuals are in the solo set, and the denominator for their share
+  // labels (0-weight solos count as 1).
+  static void visual_solo_stats(const trance_pb::Program& program, uint32_t* solo_count,
+                                uint64_t* solo_total);
   // The stash/tween key for a visual row: "b<row index>" built-in, "c<name>" custom.
   static std::string visual_row_key(bool is_custom, int builtin_index,
                                     const std::string& custom_name);

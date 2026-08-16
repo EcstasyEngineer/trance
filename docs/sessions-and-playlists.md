@@ -20,7 +20,7 @@ key-by-key mapping). The four headline concepts:
   `font_path`, and `text_line`s. Paths are relative to the session's root
   directory.
 - **`Program`** (`:126`) — a selection of themes (`enabled_theme`, each with a
-  `random_weight`; one may be `pinned` to always be active) plus display settings:
+  `random_weight`; `pinned` is the solo set — any number, not just one) plus display settings:
   visual-type weights (`visual_type`), `global_fps`, `zoom_intensity`, spiral
   colours, text colours, the `entrainment` bed, and authorable
   `custom_visual_pattern`s.
@@ -92,8 +92,9 @@ active set can swap without a stall. The active set is a 4-slot queue —
 
 Selection is weighted-random via `Shuffler` (one per theme for image loading,
 image picking, animations, and text lines; `ThemeInfo`, `theme_bank.h`). The
-program's `enabled_theme` weights pick which themes become active; a `pinned`
-theme is always one of the two active, with the weights choosing only the other.
+program's `enabled_theme` weights pick which themes become active; `pinned` is the
+solo set (one = always-resident with weights picking the other slot; two = the live
+pair; more = lottery among them).
 The frame loop calls `change_themes()` when `swaps_to_match_theme()` reports a
 pending swap; `set_program` reweights the shuffler when the playlist switches
 programs.

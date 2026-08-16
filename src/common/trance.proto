@@ -119,9 +119,10 @@ message VisualPatternSource {
   // Disabled patterns are stored but not selected.
   bool enabled = 4;
 
-  // If pinned, this pattern is the only visual ever selected -- the weight
-  // lottery is skipped entirely. At most one visual (built-in VisualTypeConfig
-  // or custom pattern) can be pinned in a program.
+  // If pinned, this pattern is in the visual solo set. Zero pins: weighted
+  // lottery as usual. One pin: that visual is the only one selected. Two or
+  // more: the lottery runs among the pinned visuals only. A disabled pattern's
+  // pin is cleared by validate_program (it is not in the lottery).
   bool pinned = 5;
 }
 
@@ -146,9 +147,11 @@ message Program {
     // How frequently this theme will be selected relative to others.
     uint32 random_weight = 2;
 
-    // If pinned, this theme is always one of the two active themes, and
-    // the weights are used only for choosing the other theme. Only one
-    // theme can be pinned in a program.
+    // If pinned, this theme is in the theme solo set. Zero pins: weighted
+    // rotation. One pin: always-resident (weights pick the other live slot).
+    // Two pins: those two ARE the live pair. Three or more: the two live
+    // slots lottery among the pinned themes. Runtime `theme pin` is a
+    // separate overlay and does not write this bit.
     bool pinned = 3;
   }
 
@@ -160,9 +163,9 @@ message Program {
     // to others.
     uint32 random_weight = 2;
 
-    // If pinned, this visual type is the only visual ever selected -- the
-    // weight lottery is skipped entirely. At most one visual (built-in or
-    // custom VisualPatternSource) can be pinned in a program.
+    // If pinned, this visual type is in the visual solo set (same rules as
+    // VisualPatternSource.pinned). A pin on NONE is cleared: NONE is the
+    // enum zero and Director uses 0 to mean "no built-in".
     bool pinned = 3;
   }
 

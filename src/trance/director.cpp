@@ -149,12 +149,14 @@ void Director::rebuild_custom_patterns()
 {
   _custom_patterns.clear();
   _last_custom_index = -1;
-  _pinned_builtin_type = 0;
-  _pinned_custom_index = -1;
+  _pinned_visuals.clear();
   for (const auto& type : _program->visual_type()) {
-    if (type.pinned()) {
-      _pinned_builtin_type = static_cast<uint32_t>(type.type());
-      break;
+    if (type.pinned() && type.type() != trance_pb::Program_VisualType_NONE) {
+      PinnedVisual pin;
+      pin.is_custom = false;
+      pin.builtin_type = static_cast<uint32_t>(type.type());
+      pin.weight = type.random_weight() ? type.random_weight() : 1;
+      _pinned_visuals.push_back(pin);
     }
   }
   const uint32_t locked_frames = locked_period_frames(*_program);
@@ -183,8 +185,12 @@ void Director::rebuild_custom_patterns()
     // to parse never lands in _custom_patterns, so the pin has to follow the entry
     // that actually made it in. A pinned-but-unparseable pattern leaves the pin
     // unset and the program falls back to its normal shuffle.
-    if (src.pinned() && _pinned_builtin_type == 0) {
-      _pinned_custom_index = int(_custom_patterns.size());
+    if (src.pinned()) {
+      PinnedVisual pin;
+      pin.is_custom = true;
+      pin.custom_index = int(_custom_patterns.size());
+      pin.weight = src.random_weight() ? src.random_weight() : 1;
+      _pinned_visuals.push_back(pin);
     }
     _custom_patterns.push_back(std::move(parsed));
   }
@@ -622,36 +628,86 @@ void Director::change_visual(uint32_t length)
     return;
   }
 
-  // Program-level pin (the F2 panel's pin button, VisualTypeConfig/VisualPatternSource
-  // .pinned): same force semantics as the CLI overrides above, but sourced from the
-  // session rather than the command line, so the CLI still wins. Unlike the overrides
-  // this falls THROUGH to the lottery when the pinned visual isn't available (a type
-  // with no compiled built-in), rather than no-opping into a frozen screen.
-  if (_pinned_custom_index >= 0 && _pinned_custom_index < int(_custom_patterns.size())) {
-    if (_visual && _last_custom_index == _pinned_custom_index) {
-      _visual->reset();
-      return;
-    }
-    const auto& p = _custom_patterns[_pinned_custom_index];
-    _visual.reset(new CompiledVisual{*_visual_api, p.root, p.render_block});
-    _last_custom_index = _pinned_custom_index;
-    _custom_visual_name = p.name;
-    _last_visual_selection = trance_pb::Program_VisualType_NONE;
-    return;
-  }
-  if (_pinned_builtin_type) {
-    auto compiled = _builtin_compiled.find(_pinned_builtin_type);
-    if (compiled != _builtin_compiled.end()) {
-      if (_visual && _last_custom_index < 0 && _last_visual_selection == _pinned_builtin_type) {
+  // Program-level solo set (F2 / VisualTypeConfig / VisualPatternSource.pinned).
+  // CLI force still wins. One solo is exclusive (same as the old single pin). Two
+  // or more lottery among the set. A solo whose compiled source is missing is
+  // skipped rather than freezing the screen.
+  if (!_pinned_visuals.empty()) {
+    auto apply_pin = [this](const PinnedVisual& pin) {
+      if (pin.is_custom) {
+        if (pin.custom_index < 0 || pin.custom_index >= int(_custom_patterns.size())) {
+          return false;
+        }
+        if (_visual && _last_custom_index == pin.custom_index) {
+          _visual->reset();
+          return true;
+        }
+        const auto& p = _custom_patterns[pin.custom_index];
+        _visual.reset(new CompiledVisual{*_visual_api, p.root, p.render_block});
+        _last_custom_index = pin.custom_index;
+        _custom_visual_name = p.name;
+        _last_visual_selection = trance_pb::Program_VisualType_NONE;
+        return true;
+      }
+      auto compiled = _builtin_compiled.find(pin.builtin_type);
+      if (compiled == _builtin_compiled.end()) {
+        return false;
+      }
+      if (_visual && _last_custom_index < 0 && _last_visual_selection == pin.builtin_type) {
         _visual->reset();
-        return;
+        return true;
       }
       _last_custom_index = -1;
       _custom_visual_name.clear();
       _visual.reset(
           new CompiledVisual{*_visual_api, compiled->second.root, compiled->second.render_block});
-      _last_visual_selection = _pinned_builtin_type;
-      return;
+      _last_visual_selection = pin.builtin_type;
+      return true;
+    };
+
+    auto current_is = [this](const PinnedVisual& pin) {
+      if (pin.is_custom) {
+        return _visual && _last_custom_index == pin.custom_index;
+      }
+      return _visual && _last_custom_index < 0 && _last_visual_selection == pin.builtin_type;
+    };
+
+    if (_pinned_visuals.size() == 1) {
+      if (apply_pin(_pinned_visuals.front())) {
+        return;
+      }
+    } else {
+      bool included = false;
+      uint64_t solo_total = 0;
+      for (const auto& pin : _pinned_visuals) {
+        solo_total += pin.weight;
+        if (current_is(pin)) {
+          included = true;
+        }
+      }
+      const uint32_t fps = std::max(1u, program().global_fps());
+      const uint64_t authored = uint64_t(length) * kAuthoringFps / fps;
+      if (included && authored > 1024 && random(uint32_t(authored)) >= 1024) {
+        return;
+      }
+      if (solo_total) {
+        uint64_t r = random(solo_total);
+        uint64_t acc = 0;
+        bool applied = false;
+        for (const auto& pin : _pinned_visuals) {
+          acc += pin.weight;
+          if (r < acc) {
+            applied = apply_pin(pin);
+            break;
+          }
+        }
+        if (!applied) {
+          applied = apply_pin(_pinned_visuals.back());
+        }
+        if (applied) {
+          return;
+        }
+      }
     }
   }
 
