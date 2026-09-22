@@ -7,7 +7,9 @@
 > the cycler + effect + render-block runtime. The runtime extensions it needed are built:
 > curve-driven spiral speed, the `SpiralSet` selector, the wave warp shader, and (landed after
 > the original §9 estimate) the sampled ramp cadence and the `burst` surface (§13 is no longer
-> speculative — both shipped; see §4.10/§4.11). A later wave (issue #42) added four
+> speculative — both shipped; see §4.10/§4.11). Burst phase ownership and local clocks
+> subsequently repaired nested execution and SuperFast motion (#65; §4.11, §9 item 5).
+> Separately, issue #42 added four
 > **parser-only** vocabulary extensions — `show` (§4.15), `env` (§4.16), `line` (§4.17) and
 > `alternate` (§4.18) — which added nothing to §9: they reach `RenderStmt.when`/`alpha`,
 > `Effect::split` and `Effect::slot_reg`+`Toggle`, all of which already shipped and already ran
@@ -113,8 +115,9 @@ the `warp` parameters.
      the only one that shipped; `set`/`roll` as author-facing keywords never did, see §4.7).
    - **THE RULE** — every numeric an effect takes is a **MODULATOR**: a literal, a
      `curve`, or a raw `[expr]`. Every modulator implicitly reads `this.progress` — the
-     clock of the enclosing pattern — unless redirected with `over NAME` to an ancestor
-     pattern's clock. (`drunk`/`warp` and `beat` are NOT modulator kinds that plug into
+     clock of the nearest timed occurrence — unless redirected with `over NAME` to an
+     enclosing clock. Burst occurrences are timed; an indefinite base needs an explicit
+     timed cut or ancestor clock (§4.11). (`drunk`/`warp` and `beat` are NOT modulator kinds that plug into
      another param — `drunk`/`warp` are standalone driver statements and a bare `beat`
      modulator was never built; see §4.13.)
 
@@ -456,53 +459,66 @@ every ramp <N>f -> <N>f steps <N> [ease (linear | late | early)] [-> NAME] { <bo
   clock with `-> cut` (or similar) if you want per-cut modulators; otherwise it's fire-and-
   forget shape.
 
-### 4.11 `burst [-> NAME] period Nf chance 1/K cooldown Nf duration Amin..Amax { base {} burst {} }` — SHIPPED
+### 4.11 `burst` — phases own their nested work and local time
 
 ```
 burst [-> NAME] period <N>f chance 1/<N> cooldown <N>f duration <N>f[..<N>f] {
-  base  { <body> }
-  enter { <body> }   # optional: fires ONCE at each burst's start
-  burst { <body> }
+  base [-> NAME] { <body> }
+  enter { <body> }          # optional: once before each burst body's entry effects
+  burst [-> NAME] { <body> }
 }
 ```
 
-- **What it's for.** Surfaces the existing `BurstCycler`: a base loop, randomly interrupted
-  (roughly every `period` frames, `1/chance_den` odds per roll) by a bounded burst lasting
-  `duration_min..duration_max` frames, then a `cooldown` before the next roll is eligible.
-  This is the real, shipped answer to §13.1's "expose the existing burst/random cycler" —
-  the felt "rapid-cut base, then it suddenly plays an animation for a bit, then settles back
-  down" shape, built from the primitive instead of a baked FSM (`super_fast`'s
-  `SuperFastTick` is retired; see §0.5).
-  - `-> NAME` mints a stable node id so `NAME.index` (1 while the burst is active, else 0) is
-    readable from any render `[expr]` in scope, via the existing `NodeMap`/`resolve_ident`
-    path — no new plumbing.
-  - There is **no separate `length` keyword** — unlike the illustrative §13.1 sketch, the
-    burst's total length is the ENCLOSING pattern's span (like `every`'s implicit length; the
-    author never restates it).
-  - `chance 1/K` is written literally as `1/K` (the parser expects the `1` and the `/`
-    verbatim, then a denominator — `chance 1/24`, not `chance 0.04` or `chance 1 / 24`
-    with a bare fraction elsewhere).
-  - `duration Af` (a single fixed duration) or `duration Af..Bf` (a min..max range) are both
-    valid; `A..B` uses a literal `..` (two dots, no space required between them).
-  - **`enter { }`** (optional) fires once at each burst's START, before that tick's burst
-    action — one-shot setup like `anim runtime` (pick which animation this burst plays).
-    Effects that live in the per-tick `burst { }` block instead re-fire every `period`.
-  - **Draws are FSM-gated.** Render statements from the `base` block are additionally gated
-    on `NAME.index == 0` and those from `burst`/`enter` on `NAME.index >= 1`, so the base's
-    layers stop painting during a burst and vice versa. (Ungated, a burst-block
-    `image ... anim` painted its animation over the base cuts for the WHOLE pattern.)
-- **Lowering.** One `Node::Burst` (`n.burst_period/_chance_den/_cooldown/_dur_min/_dur_max`),
-  `base { }`'s statements ⇒ `Node.effects`, `burst { }`'s statements ⇹ `Node.burst_effects`.
-  Both blocks share the SAME enclosing pattern's clock scope — no separate clock/register
-  scope of their own, so a bare modulator inside either block still rides `this` untouched.
-  `base`/`burst` accept the same statement grammar as any cadence body (draws, `copy`, nested
-  `pattern`/`every`). `pattern_compiler.cpp` compiles `Node::Burst` by synthesizing two tiny
-  `Node`s (one per effect list) through the same `MakeAction` seam every other leaf uses, then
-  wraps them in a `BurstCycler`.
-- **Modder note.** Use this for "usually calm, occasionally spikes" — a rapid-cut or animated
-  burst dropped into an otherwise steady loop, with a cooldown so it doesn't spike back-to-
-  back. Name it `-> rapid` (or similar) if you want a render expr to know whether the burst is
-  currently firing.
+- **What it's for.** A base phase randomly interrupted by a finite burst, followed by a
+  cooldown before the next interruption is eligible. `period` controls the interruption
+  checks; it does **not** implicitly repeat statements in either branch. The controller's
+  total span remains the enclosing pattern's span; there is no separate `length` keyword.
+  `chance 1/K` and `duration Af` or `duration Af..Bf` retain their existing meanings.
+  Duration bounds and cooldown round up to whole `period` ticks; a ranged duration is
+  sampled in those ticks. Each of `base`, `burst` and `enter` may appear at most once.
+- **Entry and ownership.** Choose the burst duration once on entry. Bare effects in a
+  branch fire once when that branch starts; `enter` effects fire once before the burst
+  body's effects. Only the active branch advances its children or runs their effects.
+  Re-entering a branch starts a fresh occurrence at frame zero, including its nested
+  `every`/`pattern` schedules. Children stop when the branch ends, even partway through a
+  cut. Use `every Nf { ... }` when selections or other effects should repeat.
+  `enter` is entry setup, not a timed section: nested `every`, `pattern` or `burst`
+  schedules there are rejected with guidance to put them in the burst body.
+- **Local curves.** A bare curve in `burst` or `enter` follows that occurrence's sampled
+  burst duration. A curve inside `every 8f` follows its own eight-frame cut. Render
+  expressions still evaluate every frame; selecting media once does not freeze its zoom
+  or the animation's playback. Fractional `env` operands follow the sampled burst clock;
+  frame-valued envelope operands require a statically fixed clock length. Likewise,
+  `every ramp` needs a length known at compile time: put it in a fixed-duration burst
+  or an explicit timed child pattern, not directly in an indefinite base or a burst
+  whose duration varies.
+- **The base has no known endpoint.** Its interruption time has not been chosen in
+  advance, so base-local normalized progress and length are unavailable. Bare base curves
+  are rejected: put motion inside `every Nf`, or deliberately use `over` with a named
+  enclosing clock. Elapsed base `.frame` is available. The language does not invent a
+  percentage-complete for an indefinite phase.
+- **Names select clocks.** The outer `burst -> rapid` names the controller:
+  `rapid.index` remains 1 during bursts and 0 during base, and its clock covers the total
+  span. `burst -> held { ... }` names the burst occurrence, so an inner cut can use
+  `zoom (curve 0.1 -> 0.7 over held)` for motion across the whole burst. `base -> calm`
+  can name the base's elapsed clock, but does not give it a normalized duration. `enter`
+  shares the burst occurrence's clock; it does not create another timed section.
+- **Lowering.** `Node::Burst` owns base and burst phase subtrees. Entry setup precedes
+  the burst phase's direct effects. `PhaseCycler` supplies occurrence clocks and resets
+  the contained schedules on entry; nested nodes
+  are not hoisted into independently running siblings. Draws are gated by their containing
+  branch and nested schedule. Image/scalar registers keep their existing lexical pattern
+  scope; a phase is a timing boundary, not a new register namespace.
+- **Fallback.** A requested animation that resolves to a still follows the same clock and
+  zoom as the animation would; changing media kind does not change authored motion.
+
+**Migration from the earlier v3 burst semantics (#65).** Bare base/burst effects used to
+re-fire every `period`, and their curves followed the enclosing pattern. Write an explicit
+`every` to preserve that selection cadence, and `over PATTERN_NAME` to preserve a deliberate
+whole-pattern envelope. Nested branch schedules now start and stop with their branch,
+instead of continuing invisibly while it is inactive. Review custom session patterns using
+`burst`; SuperFast's built-in source is migrated below. Ordinary `for Nf`/parallel-LCM
+composition outside these branches is unchanged by this repair (the separate #63 question).
 
 ### 4.12 `look { }` / `chance` / `anim` — the other SETTINGS + lighter-randomness surfaces
 
@@ -1008,6 +1024,13 @@ landed, not as an open TODO list).
    like `rotate_spiral` so the per-frame curve path can reach it from `render_eval.cpp`); this
    extension is almost entirely schedule+lowering, not new engine capability.
 
+5. **Burst phase ownership and local clocks — SHIPPED, #65, §4.11.** `Node::Phase`
+   and `PhaseCycler` provide occurrence boundaries under `BurstCycler`. Branch subtrees
+   execute only while active and restart on entry. A burst samples its length once and
+   exposes that occurrence's local clock to its body and entry effects. The indefinite
+   base exposes elapsed time, not normalized progress. This is a scheduling/runtime change,
+   not merely curve sugar; it replaces hoisted children and implicit per-period effects.
+
 **The §4.15–§4.18 extensions (issue #42) added NOTHING to this list — that is the point of
 them.** `show`, `env`, `line` and `alternate` are all **parser-only sugar**: they lower entirely
 onto `RenderStmt.when`, `RenderStmt.alpha`, `Effect::split` and `Effect::slot_reg` +
@@ -1141,24 +1164,35 @@ sketch.
 ```
 pattern super_fast for 2048f {
   burst -> rapid period 8f chance 1/12 cooldown 64f duration 64f..128f {
-    base  { image runtime zoom 0.15 }
-    enter { anim runtime }
-    burst { draw cur zoom 0.4 anim }
+    base {
+      every 8f { image runtime zoom (curve 0.0625 -> 0.1875) }
+    }
+    burst { image runtime zoom (curve 0.1 -> 0.7) anim }
   }
   every 8f { word primary chance 0.25 }
   spiral speed 3
 }
 ```
-`base` cuts a still image every 8f; roughly every 8f there's a 1-in-12 roll to enter a
-64f..128f burst, then a 64f cooldown before the next roll is eligible. On entry the `enter`
-block picks the burst's animation ONCE (`anim runtime` — a standalone anim statement, no
-image pull); the per-tick `burst` block then just renders it (`draw cur ... anim`, a pure
-render). Base and burst draws are FSM-gated on `rapid.index` so exactly one side paints at
-any frame — an ungated always-anim burst draw painted one animation over the whole pattern
-(the "no cuts at all" regression). This is the real, shipped version of the pre-ship §13.1
-sketch — note the shipped syntax drops the sketch's `length 2048f` (redundant with the
-enclosing pattern's span) and moves `-> rapid` to right after `burst` (matching `every`'s
-`-> NAME` placement).
+The base selects a still every eight frames and zooms over each cut. Interruption checks
+also happen every eight frames; a successful 1-in-12 roll starts a 64–128f burst, followed
+by a 64f cooldown before another roll is eligible. Each burst selects its media once and
+zooms continuously over its own chosen duration. A fallback still receives that same zoom,
+so it keeps moving even though its pixels do not animate. A later burst starts its zoom
+again at 0.1. Frame sampling is half-open: the last displayed frame approaches the stated
+endpoint; it does not add an extra frame to reach it.
+
+No clock annotation is needed for either motion. To combine cuts with a longer envelope,
+name the branch and explicitly select its clock:
+
+```
+burst -> held {
+  every 8f { image runtime zoom (curve 0.1 -> 0.7 over held) }
+}
+```
+
+This second fragment replaces the inner `burst` body above, not the outer controller.
+The words remain in their existing independent lane; this repair does not change text,
+theme-pivot or pre-echo choices from the previous SuperFast port.
 
 ### EX9 — `audio` phase-locked to the entrainment bed (issue #23, THE beats showcase)
 
@@ -1234,11 +1268,15 @@ burst          ::= "burst" [ "->" NAME ]
                     (* `period` is mandatory; the other three are optional and may appear in
                        any order (a for(;;) loop over peeked keywords). No `length` keyword —
                        length is always the enclosing pattern's span. *)
-burst_block    ::= ( "base" | "burst" | "enter" ) "{" body "}"
-                    (* same statement grammar as any body; all blocks share the enclosing
-                       pattern's clock/register scope. `enter` effects fire once at burst
-                       start. Draws are FSM-gated: base => NAME.index == 0, burst/enter =>
-                       NAME.index >= 1. *)
+burst_block    ::= ( "base" | "burst" ) [ "->" NAME ] "{" body "}"
+                 | "enter" "{" body "}"
+                    (* Branches own their child schedules and restart on entry. Direct
+                       effects fire once on entry; `every` repeats explicitly. Enter runs
+                       before burst effects and shares its sampled-duration clock. The
+                       base has elapsed frame but no normalized progress/length. Enter
+                       rejects timed child schedules; place those in the burst body. Registers
+                       retain the enclosing pattern scope. Only the active branch executes
+                       and renders. See §4.11 for migration from earlier v3 behavior. *)
 
 (* ---- warp/drunk (parse_statement, kw=="warp"||"drunk") — SHIPPED, §4.6, supersedes §4.5 ---- *)
 warp_stmt      ::= "warp" ( "amplitude" modulator | "wavelength" modulator

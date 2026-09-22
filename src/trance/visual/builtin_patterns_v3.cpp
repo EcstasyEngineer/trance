@@ -165,19 +165,17 @@ pattern animation for 1024f {
   spiral speed 3
 })";
 
-  // 8 SUPER_FAST -- rapid 8f current/next cuts, occasionally interrupted by a short random
-  // ANIMATED burst with a cooldown (13.1). The burst picks its animation ONCE on
-  // entry (`enter { anim runtime }`) and then just renders it (`draw cur ... anim` -- a pure
-  // render, no per-period re-roll); base cuts stay still images. Base and burst draws are
-  // FSM-gated (rapid.index) so the burst's animation only paints during a burst -- an ungated
-  // always-anim draw here painted one animation over the entire pattern, which is the "no cuts
-  // at all, just one animation playing" regression. Word accent on its own chance cadence.
+  // 8 SUPER_FAST -- rapid 8f image cuts with a local zoom pop, interrupted by
+  // 64..128f animated holds. A hold selects once and zooms continuously across its
+  // own sampled lifetime, so a still fallback moves too. The phase owns its child
+  // clocks; inactive cuts do not advance/select behind the held image.
   const char* kSuperFast = R"(
 pattern super_fast for 2048f {
   burst -> rapid period 8f chance 1/12 cooldown 64f duration 64f..128f {
-    base  { image runtime zoom 0.15 }
-    enter { anim runtime }
-    burst { draw cur zoom 0.4 anim }
+    base {
+      every 8f { image runtime zoom (curve 0.0625 -> 0.1875) }
+    }
+    burst { image runtime zoom (curve 0.1 -> 0.7) anim }
   }
   every 8f { word primary chance 0.25 }
   spiral speed 3

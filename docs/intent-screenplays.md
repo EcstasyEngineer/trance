@@ -16,14 +16,15 @@
 > | **E3 `line`** — whole-phrase text verb | **Shipped** (§4.17). The optional `spell` follow-up was **not** built. |
 > | **E4 `alternate`** — deterministic A/B ping-pong | **Shipped** (§4.18), statement-scoped only; `alternate as NAME` was **not** built. |
 > | **E5 `shadow` params + `font` cadence effect** | **Not built.** |
-> | **E6 burst-progress export** — the one runtime extension | **Not built.** |
+> | **E6 burst-progress export** — the proposed runtime extension | **Superseded by shipped phase ownership/local clocks (#65, §4.11).** No special `burst_progress` syntax. |
 >
 > Re-authored built-ins: **`animation`** (the anchor — its still layer is now a real
 > trapezoid, 8f in / 17f hold / 8f out / 33f absent, ground-truthed by dumping compiled
 > per-frame alpha; 16/16/16 legs cannot fit a 64f clock, so the ramps were traded down to
 > preserve the full absence hole) and **`accelerate`** (2048f total, 140-step up-ramp,
 > 50% per-image theme swap via `alternate chance 0.5`, restored whole-run lean-in and
-> `anim every 4th`).
+> `anim every 4th`). **`super_fast`** subsequently regained per-cut zoom and a continuous
+> burst-local zoom envelope (#65). Its text/theme/pre-echo decisions are unchanged.
 >
 > **The other six built-ins' text lanes have not been re-authored.** That is what this
 > document is still *for*: §1–§8's screenplays are derived from the original `visual.cpp`
@@ -411,21 +412,24 @@ Key evidence:
 
 ### v3 (`kSuperFast`) and drift
 
-The burst FSM shape itself (period 8f, chance 1/12, cooldown 64f→8 ticks, duration
-64..128f) is a faithful port — the §4.11 surface works, including `enter { anim runtime }`
-one-shot animation pick and index-gating.
+**Updated after #65.** The interruption shape remains period 8f, chance 1/12,
+cooldown 64f and duration 64..128f. Base and burst now own their nested schedules and
+restart them on entry. The repaired source makes the base's eight-frame cuts explicit;
+its burst selects media once and uses the sampled occurrence's clock for zoom.
 
-Drifts:
+Remaining drift and repaired motion:
+
 1. **Hard cuts — the pre-echo dissolve is gone.** Authorable today (pull into `next`, copy
    to `cur`, draw `next` with `alpha [max(0, (this.progress - 0.5) * 2)]`-style tail ramp)
    but wasn't attempted.
-2. **`zoom 0.15` constant** — no per-cut zoom pop. The file's own header comment ("a
-   constant zoom is a static magnification... zoom modulators here are curve rides, never
-   constants") is violated by its own 8th pattern.
-3. **Burst zoom crescendo lost** (`draw cur zoom 0.4 anim` flat vs 0→1 ramp across the
-   burst). NOT authorable today: nothing exports burst-elapsed — `BurstCycler::index()` is
-   only 0/1, and the burst duration is rolled at runtime. This is the one drift in the
-   whole set that genuinely needs a **runtime extension**.
+2. **Per-cut zoom restored:** `every 8f { image runtime zoom (curve 0.0625 -> 0.1875) }`.
+   The earlier constant `zoom 0.15` made each still static between selections.
+3. **Burst motion restored:** `burst { image runtime zoom (curve 0.1 -> 0.7) anim }`.
+   The earlier constant `zoom 0.4` left a fallback still visibly frozen. The curve now
+   follows the sampled burst duration and starts afresh on each entry, for animations
+   and fallback stills alike. This restores continuous movement, not the original's exact
+   timer-dependent magnification. A named branch lets inner cuts deliberately follow the
+   longer envelope with `over NAME`; no special burst-progress expression is needed.
 4. **Theme pivot on burst lost**: `image runtime` re-rolls every cut; original holds one
    theme between bursts and flips at each burst. Needs deterministic toggle (see verdict).
 5. Words keep firing during bursts (the `every 8f word` lane is outside the burst's
@@ -449,7 +453,7 @@ argument for building them, not as the current state of the grammar.
 | S5 | Deterministic A/B theme alternation (and burst theme pivot) | sub_text, flash_text, accelerate, animation, super_fast | **No** — runtime has `slot_reg`+`Toggle`, no syntax |
 | S6 | Whole-run lean-in under per-cut envelopes (origin creep) | accelerate, slow_flash, super_parallel | **Yes** — `origin (curve ... over PATTERN)`; ports just didn't |
 | S7 | Dropped animation modes (accelerate bursts, flash_text coin-flip runs, super_parallel always-anim lane) | accelerate, flash_text, super_parallel | Partly (`anim`, `anim every Nth`); per-activation coin flip: no |
-| S8 | Burst-progress-driven params (crescendo) | super_fast | **No** — runtime extension needed |
+| S8 | Burst-progress-driven params (crescendo) | super_fast | **Yes** — burst-local curves and owned branch schedules shipped in #65 |
 | S9 | Text shadow riding image zoom; font churn; caption origins | most | **No** shadow/font surface (fields exist in RenderStmt/Effect) |
 | S10 | Cross-wrap escalation (sub_text slowdown) | sub_text | No author surface for `inc`; registers do persist across wraps |
 
@@ -537,13 +541,15 @@ Restores S5. Bi-thematic invariant untouched (still the one alternate bool).
 exists, no surface does. Both zero-runtime. Restores S9 (text depth-parallax riding the
 image zoom; flash_text's font churn).
 
-**E6. Burst progress export — the one RUNTIME extension (named per §9 discipline).**
-`BurstCycler` gains `burst_frame()`/`burst_length()` (elapsed ticks × period, and the
-rolled duration × period); `resolve_ident` exposes them as `NAME.burst_progress` (0 outside
-a burst). Cost: two getters + one resolver case; no new node types, no scheduling change.
-Unlocks `burst { draw cur zoom (curve 0 -> 1 over rapid.burst) anim }`-style crescendos
-(exact syntax: just let `[rapid.burst_progress]` be readable from any expr — no new
-modulator kind needed). Restores S8.
+**E6. Burst progress export — superseded by the #65 phase ownership repair.**
+The original proposal added `NAME.burst_progress` getters without changing scheduling.
+That would have left nested selectors running while their branch was inactive, and forced
+an author to remember a special clock expression. The shipped repair instead gives each
+burst occurrence a local clock and owns/resets its child schedules. Bare curves follow
+that occurrence; nested timed cuts follow their own clock, with `over NAME` for an
+explicit longer envelope. Indefinite base phases require a timed cut or an explicit
+ancestor for normalized curves. See spec §4.11 for syntax and migration, including the
+change from implicit per-period effects to entry-once effects.
 
 Explicitly NOT proposed: a solo keyword (S4 lowers to E1 `show` on the solo lane + alpha
 `[expr]`s on siblings; if the rewritten super_parallel source proves unreadable, revisit a
@@ -584,7 +590,8 @@ the six built-ins other than `animation` and `accelerate`, plus items 6, 7 and 8
    flash_text 128f theme flip, animation's anim alternation, super_fast burst pivot.
 6. **E5 `shadow` + `font`** (parser-only) — **not built**: text depth-parallax everywhere the originals
    passed image zoom as shadow args; flash_text font churn.
-7. **E6 burst progress** (runtime, small) — **not built**: super_fast burst zoom crescendo.
+7. **E6 burst progress** — **superseded by #65**: owned branch schedules and local burst
+   clocks now supply SuperFast's zoom crescendo (§4.11), rather than a special getter.
 8. Leftovers, explicitly deprioritized: sub_text type-out (`spell`, E3 follow-up) and
    cross-wrap slowdown; flash_text per-activation animated mode; animation clean
    intro/outro bookends; flash_text spiral-never-changes opt-out. Each is real but small;

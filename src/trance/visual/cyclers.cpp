@@ -425,79 +425,120 @@ void OffsetCycler::advance_to_offset()
   }
 }
 
-BurstCycler::BurstCycler(const Params& params, std::function<void()> base,
-                         std::function<void()> burst, std::function<void()> enter)
-: _params{params}
-, _base{std::move(base)}
-, _burst{std::move(burst)}
-, _enter{std::move(enter)}
-, _position{0}
-, _in_burst{false}
-, _burst_remaining{0}
-, _cooldown{0}
+PhaseCycler::PhaseCycler(uint32_t length, std::function<void()> entry,
+                         std::vector<Cycler*> children)
+: _length{length}, _entry{std::move(entry)}
+{
+  for (auto* child : children) _children.emplace_back(child);
+  activate(false);
+}
+
+uint32_t PhaseCycler::length() const { return _length; }
+uint32_t PhaseCycler::position() const { return _position; }
+
+void PhaseCycler::reset()
+{
+  _position = 0;
+  for (auto& child : _children) child->reset();
+  activate(false);
+}
+
+void PhaseCycler::restart(uint32_t length)
+{
+  reset();
+  _length = length;
+  activate(true);
+}
+
+void PhaseCycler::activate(bool active)
+{
+  Cycler::activate(active);
+  for (auto& child : _children) child->activate(active);
+}
+
+void PhaseCycler::advance(bool trigger_actions)
+{
+  // The owner schedules advancement. active() describes the last rendered frame
+  // and may still be false when a sequence hands execution to this phase.
+  if (complete()) return;
+  if (trigger_actions && !_position && _entry) _entry();
+  for (auto& child : _children) child->advance(trigger_actions);
+  ++_position;
+}
+
+std::vector<const Cycler*> PhaseCycler::children() const
+{
+  std::vector<const Cycler*> result;
+  for (const auto& child : _children) result.push_back(child.get());
+  return result;
+}
+
+BurstCycler::BurstCycler(const Params& params, PhaseCycler* base, PhaseCycler* burst)
+: _params{params}, _base{base}, _burst{burst}
 {
 }
 
-uint32_t BurstCycler::length() const
-{
-  return _params.length;
-}
-
-uint32_t BurstCycler::position() const
-{
-  return _position;
-}
+uint32_t BurstCycler::length() const { return _params.length; }
+uint32_t BurstCycler::position() const { return _position; }
+uint32_t BurstCycler::index() const { return _in_burst ? 1 : 0; }
 
 void BurstCycler::reset()
 {
   _position = 0;
   _in_burst = false;
-  _burst_remaining = 0;
+  _started = false;
   _cooldown = 0;
+  _base->reset();
+  _burst->reset();
 }
 
-uint32_t BurstCycler::index() const
+void BurstCycler::activate(bool active)
 {
-  return _in_burst ? 1 : 0;
+  Cycler::activate(active);
+  _base->activate(active && _started && !_in_burst);
+  _burst->activate(active && _in_burst);
+}
+
+std::vector<const Cycler*> BurstCycler::children() const
+{
+  return {_base.get(), _burst.get()};
 }
 
 void BurstCycler::advance(bool trigger_actions)
 {
-  if (complete()) {
-    reset();
+  if (complete()) reset();
+  // Offset pre-roll / schedule-only inspection must not consume randomness or
+  // execute hidden branch effects. The next real activation starts its children.
+  if (!trigger_actions) {
+    _base->activate(false);
+    _burst->activate(false);
+    if (_params.length) ++_position;
+    return;
   }
-  // Act on each period boundary. With trigger_actions off (a schedule-only walk) the
-  // FSM never runs, so the node is just a fixed-length timer.
-  if (trigger_actions && _params.period && _position % _params.period == 0) {
-    if (_cooldown) {
-      --_cooldown;
-    }
-    if (_in_burst) {
-      if (_burst) {
-        _burst();
-      }
-      if (_burst_remaining && --_burst_remaining == 0) {
-        _in_burst = false;
-        _cooldown = _params.cooldown;
-      }
-    } else if (_params.chance_den && !_cooldown && random_chance(_params.chance_den)) {
+
+  const bool exited = _in_burst && _burst->complete();
+  if (exited) {
+    _in_burst = false;
+    _cooldown = _params.cooldown;
+    _burst->activate(false);
+    _base->restart(_params.length - _position);
+  }
+  if (_params.period && _position % _params.period == 0 && !_in_burst) {
+    // Preserve the controller's cooldown/roll cadence. Even with zero cooldown,
+    // exiting a burst gives the base one period before another roll.
+    if (!exited && _cooldown) --_cooldown;
+    if (!exited && !_cooldown && _params.chance_den && random_chance(_params.chance_den)) {
+      const uint32_t ticks = _params.dur_min + (_params.dur_max > _params.dur_min
+          ? random(_params.dur_max - _params.dur_min + 1) : 0);
       _in_burst = true;
-      _burst_remaining = _params.dur_min
-          + (_params.dur_max > _params.dur_min ? random(_params.dur_max - _params.dur_min + 1) : 0);
-      if (!_burst_remaining) {
-        _burst_remaining = 1;
-      }
-      if (_enter) {
-        _enter();
-      }
-      if (_burst) {
-        _burst();
-      }
-    } else if (_base) {
-      _base();
+      _base->activate(false);
+      _burst->restart(ticks * _params.period);
     }
   }
-  if (_params.length) {
-    ++_position;
-  }
+  if (!_started && !_in_burst) _base->restart(_params.length - _position);
+  _started = true;
+  auto& phase = _in_burst ? _burst : _base;
+  phase->activate(true);
+  phase->advance();
+  if (_params.length) ++_position;
 }

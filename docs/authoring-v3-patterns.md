@@ -18,7 +18,7 @@ V3 has two nouns and one rule:
 - An effect line draws, drives, or mutates state: `image`, `draw`, `word`, `caption`,
   `subtext`, `spiral`, `warp`, `copy`, and the small scalar ops.
 - Every numeric value is a modulator: a literal, `curve A -> B`, or raw `[expr]`. It rides the
-  enclosing pattern's clock unless redirected with `over NAME`.
+  nearest timed occurrence's clock unless redirected with `over NAME`.
 
 ```text
 pattern my_flash for 512f {
@@ -37,6 +37,43 @@ pattern slow_then_fast for 768f seq {
   pattern fast for 256f { every 8f { image secondary } spiral speed 4 }
 }
 ```
+
+## A nested section starts its own time
+
+A burst is a timed interruption. Its body starts at local frame zero, and its curve lasts
+for the duration chosen for that occurrence:
+
+```text
+pattern cuts_and_holds for 2048f {
+  burst period 8f chance 1/12 cooldown 64f duration 64f..128f {
+    base {
+      every 8f { image runtime zoom (curve 0.0625 -> 0.1875) }
+    }
+    burst { image runtime zoom (curve 0.1 -> 0.7) anim }
+  }
+}
+```
+
+Read it as “cut every eight frames until interrupted; then hold one animation and zoom
+through the hold.” If no animation is available, its fallback still gets the same motion.
+Only the active branch runs. Returning to the base starts a fresh cut; returning to the
+burst starts a fresh hold. Nested work stops when its branch stops.
+
+The base has no known ending, so it cannot know its percentage complete. Put its motion
+inside a timed cut as above; a bare base `curve` is rejected. For a deliberate whole-show
+curve, write `over cuts_and_holds`. To carry a burst-wide envelope across shorter cuts,
+name the branch `burst -> held { ... }` and use `over held` inside those cuts. The outer
+`burst -> controller period ...` names the controller's whole span, a different clock.
+
+**Custom-pattern migration (#65):** direct base/burst effects now fire once on entry.
+Use `every Nf` for repeated selections; `period` only sets interruption-check cadence.
+`enter { ... }` remains optional setup before burst entry effects and shares the burst
+clock. Timed children belong in the burst body; putting them in `enter` is an error.
+Branch children restart on entry and no longer run invisibly in the other phase.
+Frame-valued `env` operands and `every ramp` need a statically known length; use a
+fixed-duration burst or a timed child pattern when those forms are needed. The full
+contract is in
+[spec §4.11](spec-grammar-v3.md#411-burst--phases-own-their-nested-work-and-local-time).
 
 ## Content And Registers
 

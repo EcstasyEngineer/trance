@@ -255,46 +255,61 @@ private:
   uint32_t _position;
 };
 
-// A base loop randomly interrupted by a bounded burst, then a cooldown -- the narrow,
-// purpose-named replacement for a general state machine (see SUPER_FAST). It acts
-// every `period` frames over a fixed total `length`; `index()` is 1 during a burst so
-// a render preset can react. The two behaviours are supplied as callables (the base
-// loop and the burst), mirroring the rest of the action-via-callback design.
+// A timed activation. Entry effects fire once; child clocks run only while this
+// phase is advanced. The owner supplies the duration on each restart, so a curve
+// sees the sampled lifetime through the ordinary frame/progress interface.
+class PhaseCycler : public Cycler
+{
+public:
+  PhaseCycler(uint32_t length, std::function<void()> entry, std::vector<Cycler*> children);
+  uint32_t length() const override;
+  uint32_t position() const override;
+  void reset() override;
+  void restart(uint32_t length);
+  void advance(bool trigger_actions = true) override;
+  void activate(bool active) override;
+  const char* type_name() const override { return "Phase"; }
+  std::vector<const Cycler*> children() const override;
+
+private:
+  uint32_t _length;
+  uint32_t _position = 0;
+  std::function<void()> _entry;
+  std::vector<std::unique_ptr<Cycler>> _children;
+};
+
+// A base phase interrupted by a sampled-duration phase. Only the active phase
+// advances. index() remains the controller's 0/1 state; its progress spans the
+// enclosing pattern. Child Phase clocks measure their own activations.
 class BurstCycler : public Cycler
 {
 public:
   struct Params {
-    uint32_t length;       // total frames
-    uint32_t period;       // act every N frames
-    uint32_t chance_den;   // per-tick burst chance = 1/chance_den (0 = never)
-    uint32_t cooldown;     // ticks of no-burst after one ends
-    uint32_t dur_min;      // burst duration in ticks, inclusive range
+    uint32_t length;
+    uint32_t period;
+    uint32_t chance_den;  // 0 = never
+    uint32_t cooldown;    // period ticks after burst exit
+    uint32_t dur_min;     // inclusive duration range in period ticks
     uint32_t dur_max;
   };
-  // `enter` (optional) fires once at each burst's start, before that tick's burst
-  // action -- the `enter { }` grammar block (one-shot setup, e.g. change-animation).
-  BurstCycler(const Params& params, std::function<void()> base, std::function<void()> burst,
-              std::function<void()> enter = {});
-
+  BurstCycler(const Params& params, PhaseCycler* base, PhaseCycler* burst);
   uint32_t length() const override;
   uint32_t position() const override;
   void reset() override;
   void advance(bool trigger_actions = true) override;
-  uint32_t index() const override;  // 1 during a burst, else 0
-  const char* type_name() const override
-  {
-    return "Burst";
-  }
+  void activate(bool active) override;
+  uint32_t index() const override;
+  const char* type_name() const override { return "Burst"; }
+  std::vector<const Cycler*> children() const override;
 
 private:
   Params _params;
-  std::function<void()> _base;
-  std::function<void()> _burst;
-  std::function<void()> _enter;
-  uint32_t _position;
-  bool _in_burst;
-  uint32_t _burst_remaining;
-  uint32_t _cooldown;
+  std::unique_ptr<PhaseCycler> _base;
+  std::unique_ptr<PhaseCycler> _burst;
+  uint32_t _position = 0;
+  bool _in_burst = false;
+  bool _started = false;
+  uint32_t _cooldown = 0;
 };
 
 #endif

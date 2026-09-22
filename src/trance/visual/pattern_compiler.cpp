@@ -77,23 +77,19 @@ namespace
     case Node::Type::Off:
       c = new OffsetCycler{n.count, compile_impl(n.children.at(0), make_action, node_map)};
       break;
+    case Node::Type::Phase: {
+      std::vector<Cycler*> kids;
+      compile_children(kids);
+      auto entry = make_action ? make_action(n) : std::function<void()>{};
+      c = new PhaseCycler{n.length, std::move(entry), std::move(kids)};
+      break;
+    }
     case Node::Type::Burst: {
-      // Reuse the action seam: the base and burst behaviours are just two effect
-      // lists, so synthesise a Node for each and run them through make_action.
-      pattern::Node base_node;
-      base_node.effects = n.effects;
-      pattern::Node burst_node;
-      burst_node.effects = n.burst_effects;
-      pattern::Node enter_node;
-      enter_node.effects = n.burst_enter_effects;
-      std::function<void()> base = make_action ? make_action(base_node) : std::function<void()>{};
-      std::function<void()> burst =
-          make_action ? make_action(burst_node) : std::function<void()>{};
-      std::function<void()> enter =
-          make_action ? make_action(enter_node) : std::function<void()>{};
-      BurstCycler::Params p{n.length,        n.burst_period,  n.burst_chance_den,
+      auto* base = static_cast<PhaseCycler*>(compile_impl(n.children.at(0), make_action, node_map));
+      auto* burst = static_cast<PhaseCycler*>(compile_impl(n.children.at(1), make_action, node_map));
+      BurstCycler::Params p{n.length, n.burst_period, n.burst_chance_den,
                             n.burst_cooldown, n.burst_dur_min, n.burst_dur_max};
-      c = new BurstCycler{p, base, burst, enter};
+      c = new BurstCycler{p, base, burst};
       break;
     }
     }

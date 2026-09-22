@@ -7,9 +7,21 @@
 # The grammar's lean proof runs INSIDE the product binary: `trance --lint` parses,
 # lowers, compiles and expr-evaluates all 8 built-ins (main.cpp run_lint). No GL
 # context is created on the lint path, so a bare CI runner can execute it. No
-# parallel grammar test target exists -- the product exe IS the harness, and
+# redundant parser-only test target exists -- the product exe IS the harness, and
 # `trance --lint some.session` gives pattern authors the same check.
 add_test(NAME grammar_lint COMMAND trance --lint)
+
+# Burst/phase state is internal and unreachable from --lint: assert child effects,
+# activation, re-entry and local-clock render values across real frame advances.
+add_executable(phase_execution_test
+  ${CMAKE_SOURCE_DIR}/src/trance/visual/pattern_parser_v3.cpp
+  ${CMAKE_SOURCE_DIR}/src/trance/visual/pattern_compiler.cpp
+  ${CMAKE_SOURCE_DIR}/src/trance/visual/cyclers.cpp
+  ${CMAKE_SOURCE_DIR}/src/trance/visual/builtin_patterns_v3.cpp
+  phase_execution_test.cpp)
+target_include_directories(phase_execution_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(phase_execution_test PRIVATE trance_options)
+add_test(NAME phase_execution_test COMMAND phase_execution_test)
 
 # Playlist stack machine test. Headless but links common_lib for the proto types the
 # playlist map is made of.

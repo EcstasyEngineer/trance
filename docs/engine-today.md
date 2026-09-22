@@ -89,13 +89,23 @@ in plain words:
 | **Sequence** | Run its children one after another. |
 | **Repeat** | Run one child N times. |
 | **Offset** | Run one child, but phase-shifted by K frames. |
-| **Burst** | A base loop randomly interrupted by a short burst, then a cooldown. (The one concession to "a little state.") |
+| **Phase** | Owns an occurrence: fires entry effects once, then advances its children while active. Restarting resets local time and child schedules. |
+| **Burst** | Interrupts a base phase with a sampled-duration burst, then cooldown. Only the active branch executes; re-entry resets its child schedules. |
 
 So "slow flashes then fast flashes" is literally a Sequence of two sub-trees; "three
 images at once" is a Parallel of three; "speed up" is a Sequence of Repeat blocks whose
 counters shrink. **Lengths are exact integers** — a Sequence's length is the sum of its
 children, a Parallel's is their least-common-multiple, etc. There is no call stack at
 runtime; the tree's positions are the whole state.
+
+A burst branch is an occurrence, not merely a visibility gate. It selects media and fires
+other direct effects once on entry, then advances only its own children. `enter` setup
+runs before the burst body's entry effects. A child cut restarts with its branch and is
+clipped when that branch ends. The burst's sampled length supplies local progress for
+curves; the base has elapsed time but no known endpoint, so repeating base motion belongs
+inside an explicit `every Nf`. Naming a branch allows a nested cut to use its parent's
+longer envelope with `over NAME`. This phase ownership is a runtime extension (#65),
+not a change to ordinary Sequence/Parallel length composition above.
 
 ## 4. What a leaf can do: effects
 

@@ -128,7 +128,7 @@ namespace pattern
 
   struct Node
   {
-    enum class Type { Action, Seq, Par, One, Rep, Off, Burst };
+    enum class Type { Action, Seq, Par, One, Rep, Off, Phase, Burst };
     Type type = Type::Action;
 
     // Stable id (optional) so a render preset can address this node through the
@@ -152,20 +152,16 @@ namespace pattern
     // children[0].
     uint32_t count = 0;
 
-    // Burst (Type::Burst): a base loop (effects) randomly interrupted by a bounded
-    // burst (burst_effects). `length` is the total; these are the burst params.
-    // burst_enter_effects fire ONCE at each burst's start (the `enter { }` block) --
-    // for one-shot setup like picking the burst's animation, which would re-randomize
-    // every period if it lived in the per-tick burst block.
+    // Phase: owns a bounded activation clock, entry effects and child schedules.
+    // Burst owns children[0] (base phase) and children[1] (sampled-duration phase).
+    // Its length is the controller's enclosing span; duration/cooldown are period ticks.
     uint32_t burst_period = 0;
     uint32_t burst_chance_den = 0;
     uint32_t burst_cooldown = 0;
     uint32_t burst_dur_min = 0;
     uint32_t burst_dur_max = 0;
-    std::vector<Effect> burst_effects;
-    std::vector<Effect> burst_enter_effects;
 
-    // Seq / Par / One children; Rep / Off use children[0].
+    // Seq / Par / One / Phase children; Rep / Off use children[0].
     std::vector<Node> children;
   };
 

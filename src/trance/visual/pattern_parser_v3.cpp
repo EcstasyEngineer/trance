@@ -284,7 +284,7 @@ namespace
     // `len` is the scope's span in frames (0 = unknown), carried so the frame-denominated
     // forms of `show`/`env` (E1/E2) can normalize against the enclosing clock's length and
     // reject a window that overruns it -- a compile-time read, no runtime change.
-    struct Scope { std::string name; std::string cid; uint32_t len = 0; };
+    struct Scope { std::string name; std::string cid; uint32_t len = 0; bool phase = false; };
     std::vector<Scope> _clocks;
     // Register scopes (patterns ONLY): bare reg names qualify against the top.
     std::vector<Scope> _regs;
@@ -1174,6 +1174,9 @@ namespace
     Node parse_ramp_cadence(uint32_t span)
     {
       expect_word("ramp");
+      if (!_clocks.empty() && _clocks.back().phase && !_clocks.back().len)
+        throw ParseError{"ramp cadence needs a fixed duration: put it in a timed pattern "
+                         "or use a fixed burst duration", _c.pos()};
       const std::size_t aat = _c.pos();
       const float a = _c.number_lit();
       _c.expect('f');
@@ -1313,7 +1316,8 @@ namespace
         _c.word();
         offset = parse_len();
       }
-      if (span != 0 && span % len != 0) {
+      const bool phase_child = !_clocks.empty() && _clocks.back().phase;
+      if (span != 0 && span % len != 0 && !phase_child) {
         _warnings.push_back(loc(lat) + ": cadence " + std::to_string(len) +
                             " does not divide span " + std::to_string(span));
       }
@@ -1330,7 +1334,8 @@ namespace
       Node leaf = action(len, std::move(leaf_effects));
       apply_image_hint(leaf, leaf.effects);
       leaf.id = cid;
-      Node node = (span != 0 && len != 0) ? repeat(span / len, std::move(leaf)) : std::move(leaf);
+      Node node = (!phase_child && span != 0 && len != 0)
+          ? repeat(span / len, std::move(leaf)) : std::move(leaf);
       if (offset) {
         Node off;
         off.type = Node::Type::Off;
@@ -1346,17 +1351,10 @@ namespace
       return node;
     }
 
-    // `burst [-> NAME] period Nf chance 1/K cooldown Nf duration Amin..Amax { base {..} burst {..} }`
-    // -- surfaces the existing BurstCycler (spec-grammar-v3.md 13.1): a base loop
-    // randomly interrupted by a bounded burst, then a cooldown. Lowers to exactly one
-    // Node::Burst; `length` is the enclosing pattern's span (like `every`, no separate `length`
-    // keyword -- the runtime field is filled from `span`, not restated by the author). `base` and
-    // `burst` are each a tiny statement list (draws/state only, same statement grammar as a
-    // cadence body); their effects go straight to Node::burst_effects / Node::effects, with no
-    // separate clock/register scope of their own -- both sides fire on the SAME enclosing
-    // pattern's clock, so a bare modulator inside either block still rides `this` untouched. The
-    // optional `-> NAME` mints a stable node id so `NAME.index` (1 during a burst, else 0) is
-    // readable from render exprs via the existing NodeMap/resolve_ident path -- no new plumbing.
+    // The controller chooses the active phase. Each phase owns its entry effects,
+    // nested schedules and local clock; nothing is hoisted into parallel siblings.
+    // A burst has a sampled lifetime. A base has only elapsed time until interrupted:
+    // normalized base movement must live in a timed child or name an ancestor.
     Node parse_burst(uint32_t span)
     {
       expect_word("burst");
@@ -1415,50 +1413,86 @@ namespace
       // not 64 ticks (512 frames), which is how the first shipped version behaved.
       auto to_ticks = [&](uint32_t frames) -> uint32_t {
         if (frames == 0) return 0;
-        const uint32_t ticks = (frames + period - 1) / period;
+        const uint32_t ticks = frames / period + (frames % period != 0 ? 1u : 0u);
         return ticks ? ticks : 1;
       };
       cooldown = to_ticks(cooldown);
       dur_min = to_ticks(dur_min);
       dur_max = to_ticks(dur_max);
 
-      _clocks.push_back({clkname, cid, span});
+      dur_min = std::max(1u, dur_min);
+      dur_max = std::max(dur_min, dur_max);
+      if (uint64_t(dur_max) * period > uint64_t(UINT32_MAX))
+        throw ParseError{"burst duration rounded to its period exceeds the frame limit", _c.pos()};
+      const uint32_t max_frames = dur_max * period;
 
-      std::vector<Effect> base_effects, burst_effects, enter_effects;
-      std::vector<Node> nested;  // `pattern`/`every` inside base/burst blocks, run alongside
+      Node base, burst;
+      base.type = burst.type = Node::Type::Phase;
+      base.id = new_id();
+      burst.id = new_id();
+      base.length = span;
+      burst.length = max_frames;
+      base.phase = "base";
+      burst.phase = "burst";
+      std::vector<Effect> enter_effects;
+      _clocks.push_back({clkname, cid, span});  // named controller: existing index/total clock
+      bool saw_base = false, saw_burst = false, saw_enter = false;
       _c.expect('{');
-      bool saw_base = false, saw_burst = false;
       while (_c.peek_char() != '}') {
         const std::size_t bat = _c.pos();
         const std::string bw = _c.word();
-        std::vector<Effect>& target = bw == "base"    ? (saw_base = true, base_effects)
-                                      : bw == "burst" ? (saw_burst = true, burst_effects)
-                                      : bw == "enter"
-                                          ? enter_effects
-                                          : throw ParseError{
-                                                "expected 'base', 'burst' or 'enter' block", bat};
+        if (bw != "base" && bw != "burst" && bw != "enter")
+          throw ParseError{"expected 'base', 'burst' or 'enter' block", bat};
+        bool& seen = bw == "base" ? saw_base : bw == "burst" ? saw_burst : saw_enter;
+        if (seen) throw ParseError{"duplicate '" + bw + "' block", bat};
+        seen = true;
+        Node& phase = bw == "base" ? base : burst;
+        std::string name;
+        if (_c.accept('-')) {
+          _c.expect('>');
+          if (bw == "enter") throw ParseError{"enter is an event, not a named timed phase", bat};
+          name = _c.word();
+          phase.phase = name;
+        }
+        const uint32_t known_length = bw != "base" && dur_min == dur_max ? max_frames : 0;
+        _clocks.push_back({name, phase.id, known_length, true});
         const std::size_t render_before = _render.size();
+        std::vector<Node> entered_children;
+        auto& effects = bw == "enter" ? enter_effects : phase.effects;
+        auto& children = bw == "enter" ? entered_children : phase.children;
         _c.expect('{');
         while (_c.peek_char() != '}') {
-          parse_statement(span, target, nested);
+          parse_statement(bw == "base" ? span : max_frames, effects, children);
         }
         _c.expect('}');
-        // Gate this block's draws on the burst FSM's state (NAME.index: 1 during a
-        // burst, else 0), so base draws stop painting during a burst and vice versa.
-        // Without this, a burst-block `image ... anim` paints its animation over the
-        // base cuts EVERY frame of the whole pattern (push_render's pattern-active gate
-        // alone can't tell the two blocks apart). `enter` draws count as burst-side.
-        const std::string gate = cid + (bw == "base" ? ".index == 0" : ".index >= 1");
+        _clocks.pop_back();
+        if (!entered_children.empty())
+          throw ParseError{"enter runs once; put timed children in the burst block", bat};
         for (std::size_t ri = render_before; ri < _render.size(); ++ri) {
           auto& rs = _render[ri];
+          if (bw == "base") {
+            // A base episode has no known end. Reject normalization rather than
+            // silently binding its curve to the controller's full pattern span.
+            for (const auto* expr : {&rs.alpha, &rs.origin, &rs.zoom, &rs.shadow_origin,
+                                    &rs.shadow_zoom, &rs.speed, &rs.when, &rs.anim_gate}) {
+              if (expr->find(base.id + ".progress") != std::string::npos ||
+                  expr->find(base.id + ".length") != std::string::npos)
+                throw ParseError{"base has no fixed duration: use every Nf for local curves "
+                                 "or over a named parent", bat};
+            }
+          }
+          const std::string gate = phase.id + ".active";
           rs.when = rs.when.empty() ? gate : ("(" + rs.when + ") and " + gate);
         }
       }
       _c.expect('}');
-      if (!saw_base && !saw_burst)
-        _warnings.push_back(loc(_c.pos()) + ": burst has neither a `base` nor a `burst` block");
-
       _clocks.pop_back();
+      if (!saw_base && !saw_burst)
+        _warnings.push_back(loc(_c.pos()) + ": burst has neither a base nor a burst block");
+      // Entry events precede the burst body's once-per-occurrence selection.
+      burst.effects.insert(burst.effects.begin(), enter_effects.begin(), enter_effects.end());
+      apply_image_hint(base, base.effects);
+      apply_image_hint(burst, burst.effects);
 
       Node n;
       n.type = Node::Type::Burst;
@@ -1469,30 +1503,10 @@ namespace
       n.burst_cooldown = cooldown;
       n.burst_dur_min = dur_min;
       n.burst_dur_max = dur_max;
-      n.effects = std::move(base_effects);
-      n.burst_effects = std::move(burst_effects);
-      n.burst_enter_effects = std::move(enter_effects);
-      // One combined hint across base+burst (apply_image_hint recomputes from scratch each
-      // call, so two separate calls would let the second silently clobber the first instead of
-      // merging -- pass both lists' effects together like any other single-effects-list node).
-      std::vector<Effect> both = n.effects;
-      both.insert(both.end(), n.burst_effects.begin(), n.burst_effects.end());
-      apply_image_hint(n, both);
-
-      // Wrap in a no-op Rep(1, ...), same convention `parse_cadence` uses: an enclosing pattern
-      // with exactly one child collapses onto it and stamps ITS OWN id over the child's, which
-      // would silently clobber the burst's minted id (and strand any `over NAME`/`this` expr
-      // already baked into this body's render strings, pointing at an id nothing registers).
-      // Keeping the id'd Burst node one level below an unid'd wrapper is what lets the
-      // collapse's overwrite land somewhere harmless instead.
-      Node wrapped = repeat(1, std::move(n));
-      if (nested.empty()) {
-        return wrapped;
-      }
-      std::vector<Node> par;
-      par.push_back(std::move(wrapped));
-      for (auto& nn : nested) par.push_back(std::move(nn));
-      return group(Node::Type::Par, std::move(par));
+      n.children.push_back(std::move(base));
+      n.children.push_back(std::move(burst));
+      // Protect the controller id when an enclosing pattern collapses its only child.
+      return repeat(1, std::move(n));
     }
 
     // A full `pattern NAME for LEN [seq|loop N] { body }`.
