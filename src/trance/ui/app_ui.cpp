@@ -108,6 +108,11 @@ bool AppUi::init(sf::RenderWindow& window)
   }
   _initialized = ImGui::SFML::Init(window);
   _init_failed = !_initialized;
+  if (_initialized) {
+    _window_focused = window.hasFocus();
+    ImGui::SFML::ProcessEvent(window, _window_focused
+        ? sf::Event{sf::Event::FocusGained{}} : sf::Event{sf::Event::FocusLost{}});
+  }
   return _initialized;
 }
 
@@ -117,6 +122,11 @@ void AppUi::process_event(sf::RenderWindow& window, const sf::Event& event)
     return;
   }
   ImGui::SFML::ProcessEvent(window, event);
+  if (event.is<sf::Event::FocusGained>()) {
+    _window_focused = true;
+  } else if (event.is<sf::Event::FocusLost>()) {
+    _window_focused = false;
+  }
 }
 
 bool AppUi::wants_text_input() const
@@ -130,6 +140,16 @@ void AppUi::update(sf::RenderWindow& window, sf::Time dt, Director& director, Au
 {
   if (!_initialized) {
     return;
+  }
+  // imgui-SFML gates all input on an event-driven focus latch. Startup's
+  // create/hide/show events can leave it stale even when the OS window is focused;
+  // F2 still works in main.cpp, but the panel then ignores hover and clicks until
+  // another focus transition. Reconcile after draining events, without requesting
+  // OS focus or repeatedly injecting an unchanged focus event.
+  const bool focused = window.hasFocus();
+  if (focused != _window_focused) {
+    process_event(window, focused
+        ? sf::Event{sf::Event::FocusGained{}} : sf::Event{sf::Event::FocusLost{}});
   }
   ImGui::SFML::Update(window, dt);
   _frame_started = true;

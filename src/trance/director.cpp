@@ -13,6 +13,7 @@
 #include <trance/visual/visual.h>
 #include <algorithm>
 #include <cstdio>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -200,6 +201,7 @@ void Director::update()
 {
   _visual_api->update();
   _visual->cycler()->advance();
+  log_playback_state();
   if (_visual->cycler()->complete()) {
     change_visual(_visual->cycler()->length());
   }
@@ -307,6 +309,9 @@ std::string Director::force_pattern_from_source(const std::string& source, const
   parsed.render_block = std::move(v3.render_block);
   _forced_pattern.reset(new pattern::Parsed{std::move(parsed)});
   _forced_builtin_type = 0;
+  // A new source must rebuild even when the previous force was also custom
+  // index zero; that index describes selection, not the source's identity.
+  _last_custom_index = -1;
   change_visual(0);
   return {};
 }
@@ -592,6 +597,105 @@ void Director::render_text(const Font& font, const std::string& text, bool large
 }
 
 void Director::change_visual(uint32_t length)
+{
+  const Visual* previous = _visual.get();
+  select_visual(length);
+  if (_visual.get() == previous && _visual && _visual->cycler()->position() &&
+      !_visual->cycler()->complete()) {
+    return;  // Reaffirming an existing force did not start another traversal.
+  }
+  if (_visual.get() != previous) {
+    _progress_nodes.clear();
+    if (_visual) cache_progress_nodes(_visual->cycler(), {});
+    _progress_name = _progress_nodes.empty() ? "(unnamed)" : _progress_nodes.front().path;
+  } else {
+    for (auto& node : _progress_nodes) {
+      node.active = false;
+      node.position = 0;
+    }
+  }
+  _progress_new_traversal = true;
+}
+
+void Director::cache_progress_nodes(const Cycler* clock, const std::string& parent)
+{
+  if (!clock) return;
+  std::string path = parent;
+  if (!clock->phase().empty()) {
+    if (!path.empty()) path += '/';
+    path += clock->phase();
+    _progress_nodes.push_back({clock, path});
+  }
+  for (const auto* child : clock->children()) cache_progress_nodes(child, path);
+}
+
+void Director::log_playback_state()
+{
+  // Theme snapshots copy names and cache statistics, so take one only when a
+  // live lane changes, rather than on every frame or every visual selection.
+  const uint32_t primary = _themes.lane_generation(false);
+  const uint32_t secondary = _themes.lane_generation(true);
+  if (!_progress_themes_seen || primary != _progress_theme_generations[0] ||
+      secondary != _progress_theme_generations[1]) {
+    const auto snapshot = _themes.debug_snapshot();
+    std::ostringstream out;
+    out << "themes: primary=" << std::quoted(snapshot.slots[1].name)
+        << " secondary=" << std::quoted(snapshot.slots[2].name) << '\n';
+    std::cerr << out.str();
+    _progress_themes_seen = true;
+    _progress_theme_generations[0] = primary;
+    _progress_theme_generations[1] = secondary;
+  }
+
+  if (_progress_new_traversal) {
+    ++_progress_traversal;
+    ++_progress_pending_traversals;
+    _progress_new_traversal = false;
+  }
+  bool changed = false;
+  for (auto& node : _progress_nodes) {
+    const bool active = node.clock->active();
+    const uint32_t position = node.clock->position();
+    changed = changed || active != node.active ||
+        (active && node.active && position < node.position);
+    node.active = active;
+    node.position = position;
+  }
+  if (changed) ++_progress_pending_transitions;
+  if (!_progress_pending_transitions && !_progress_pending_traversals) return;
+
+  // Rapid sections are summarized, not dumped once per content tick. Traversal
+  // counts remain exact even for an unusually short pattern. Ordinary pattern
+  // starts and nested section changes each get their own newline.
+  const auto now = std::chrono::steady_clock::now();
+  if (now < _next_progress_log) return;
+  _next_progress_log = now + std::chrono::milliseconds(250);
+  std::ostringstream out;
+  out << (_progress_pending_traversals ? "pattern " : "  phase ") << _progress_name
+      << " #" << _progress_traversal;
+  if (_progress_pending_traversals > 1) {
+    out << " (+" << _progress_pending_traversals << " traversals)";
+  }
+  if (_progress_pending_transitions > 1) {
+    out << " (" << _progress_pending_transitions << " transitions)";
+  }
+  out << ": ";
+  std::size_t active_count = 0;
+  for (const auto& node : _progress_nodes) {
+    if (!node.active) continue;
+    if (active_count++ >= 8) continue;
+    if (active_count > 1) out << " | ";
+    out << node.path << ' ' << node.position << '/' << node.clock->length() << 'f';
+  }
+  if (!active_count) out << "complete";
+  if (active_count > 8) out << " | +" << active_count - 8 << " active sections";
+  out << '\n';
+  std::cerr << out.str();
+  _progress_pending_traversals = 0;
+  _progress_pending_transitions = 0;
+}
+
+void Director::select_visual(uint32_t length)
 {
   // --visual / --pattern override (main.cpp): every selection returns the forced
   // built-in or custom pattern, bypassing the weighted shuffle below entirely. Still
@@ -1165,7 +1269,7 @@ void Director::draw_debug_overlay() const
     const auto& slot = snap.slots[std::size_t(i)];
     out << "  " << (theme_on_screen[i] ? "*" : " ") << debug_theme_slot_name(i) << " : '"
         << (slot.valid ? slot.name : "(empty)") << "'  " << slot.loaded << "/" << slot.total
-        << " img  " << slot.animations << " anim"
+        << " img  " << slot.failed << " failed  " << slot.animations << " anim"
         << (slot.valid && !slot.total && slot.animations ? "  (all-animation theme)" : "")
         << "\n";
   }

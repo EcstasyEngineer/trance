@@ -64,9 +64,9 @@ void VisualApiImpl::update()
   ++_switch_themes;
 }
 
-Image VisualApiImpl::get_image(bool alternate) const
+Image VisualApiImpl::get_image(bool alternate, bool* from_current_theme) const
 {
-  return _themes.get_image(alternate);
+  return _themes.get_image(alternate, from_current_theme);
 }
 
 Image VisualApiImpl::get_current_theme_image(bool alternate) const

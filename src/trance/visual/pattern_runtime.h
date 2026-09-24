@@ -12,7 +12,7 @@ namespace pattern
   // render evaluator. `images` are the named image slots an Image/Copy effect writes
   // (e.g. "current"); `image_slots` stores the concrete source theme for the same
   // register so render-time debug can say which theme is actually on screen; `scalars`
-  // are the named bool/int registers the state effects (set/inc/toggle/roll/pulse)
+  // are the named bool/int registers the state effects (set/toggle/roll/pulse)
   // maintain.
   struct Registers
   {

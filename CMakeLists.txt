@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(trance CXX)
+project(trance VERSION 0.5.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -199,6 +199,8 @@ add_executable(trance
   src/trance/visual/pattern_parser_v3.cpp
   src/trance/visual/render_eval.cpp
   src/trance/visual/visual.cpp)
+
+target_compile_definitions(trance PRIVATE TRANCE_VERSION="${PROJECT_VERSION}")
 
 target_link_libraries(trance PRIVATE
   common_lib

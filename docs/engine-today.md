@@ -1,187 +1,164 @@
-# What the visual engine actually does today (plain-English)
+# Visual runtime model
 
-No jargon, no "lanes/voices/cadence." This is the ground truth the v3 intent grammar
-must compile down to. If a proposed intent can't be expressed in the terms below, it
-can't run — so this doc is the contract every later design depends on.
+The v3 language lowers to a schedule tree plus an ordered render block. The
+schedule chooses media and updates state. The render block reads that state and
+draws it. A new language feature must have a concrete lowering to those parts,
+or explicitly require a runtime change.
 
----
+The [language reference](spec-grammar-v3.md) defines syntax;
+[visuals.md](visuals.md) maps the implementation. This page explains the model.
 
-## 1. What the program is
+## Schedule, state, rendering
 
-Trance plays **fullscreen, rhythmic, flashing visuals** (images, text, spirals,
-animations) timed to the frame, alongside a synthesized **entrainment audio bed**
-(binaural/isochronic tones). The intent is psychovisual: rhythm, repetition, and
-pairing aimed at a hypnosis-adjacent effect. Everything is deterministic integer
-frame math — there is no real-time clock, no physics, no randomness except where the
-pattern explicitly rolls a die.
+`pattern_parser_v3.cpp` produces `pattern::Node` and `pattern::RenderStmt` data.
+`pattern_compiler.cpp` turns nodes into `Cycler` objects. `CompiledVisual`
+connects the nodes' ordered effects to `VisualControl` and owns their registers.
+`render_eval.cpp` evaluates the render statements against current clocks and
+registers, then calls `VisualRender`.
 
-## 2. The only things that can appear on screen
+Selecting an image and drawing an image are separate operations. An image
+effect captures a selection into a register when its schedule fires. A render
+statement can then draw that register every frame with changing zoom or opacity,
+without selecting a different image. `show` hides a draw; it does not stop that
+draw's selection schedule.
 
-The engine has a **fixed, small vocabulary of draw operations** (`VisualControl` /
-`VisualRender` in `api.h`). This is the floor. Nothing can be shown that isn't one of:
+The runtime can select images, animations, text, fonts and themes; control theme
+audio; and draw images, text, captions, subtext and spirals with supported numeric
+parameters. Warp and theme-audio volume also have render-time parameters. Scalar
+effects support bounded internal state such as chance flags, alternating sides,
+and every-Nth accents. These IR operations are not all public grammar verbs.
 
-- **An image** — pulled from a **theme** (see §5). Can be drawn as a still, or as its
-  **animated** form (a gif/webm). "Animation" is not a separate thing — it's just
-  "draw this image slot as its moving version instead of a still."
-  - Still-vs-animated is a **preference, not a partition, and never black**. A theme is
-    whatever files its folder holds: a folder of nothing but gifs has zero stills, and a
-    folder of nothing but jpegs has zero gifs. So `image` on an all-gif theme draws its
-    gif, `anim` on a stills-only theme draws its still, and either falling short repeats
-    the lane's last good frame. A draw op can only produce nothing when its lane has
-    shown nothing at all yet. The pattern author asks for the *look*; which kind of file
-    a given folder happens to contain is not something they can know.
-  - And a substituted animation **still animates**. An `image` effect captures one `Image`
-    into a register and the render block redraws that captured value for the rest of the
-    cut — correct for a still, a freeze-frame for a gif. So when a register's lane holds
-    an animation-only theme, the renderer re-reads the lane's live frame at draw time
-    rather than the captured one (`VisualApiImpl::render_image`). Without it, one theme
-    looked animated under a pattern drawing `anim` and like a stuck photograph under a
-    pattern drawing plain `image`.
-  - A captured register whose lane has **changed theme** is refreshed. `ThemeBank` bumps a
-    per-lane generation in `advance_theme` (the only place lane occupancy changes, so every
-    swap path is covered — including the playlist's own, which never runs a pattern
-    effect), and `CompiledVisual::refresh_stale_registers` re-pulls once per generation.
-    Otherwise a frame of an unloaded theme sits on screen until its effect happens to fire
-    again — and since `Image` is ref-counted it stays perfectly valid, so it displays
-    cleanly rather than failing visibly.
-    - Refreshed **once, at the update seam, not per draw**: `get_image` runs the selection
-      shuffle on every call, so re-pulling per draw would hand a still register a different
-      random image every frame (and a different one per eye in stereo).
-    - `copy` snapshots are **never** auto-refreshed. A copy is a picture of a past state —
-      that is the whole of how crossfade works — so refreshing it would rewrite the
-      outgoing frame and turn old→new into new→new.
-    - The refresh uses `get_current_theme_image`, not `get_image`. The never-black fallback
-      returns the *previous* theme's frame and `Image::operator bool()` cannot tell it from
-      a real pick; accepting one and stamping it current would mark the register up to date
-      while it still held the dead theme's image, and it would never retry — reinstating
-      the very bug. An empty answer means "keep drawing, try again next frame".
-  - An animation's **own frames run on its own clock**: each frame is shown for the
-    duration its file specifies (a GIF's per-frame delay, a WebM's default duration /
-    frame rate / block timestamps), independent of `global_fps` and of whatever the
-    pattern driving it is doing. What the grammar controls is *which* animation is on
-    screen and *when it is swapped* — not how fast it plays. (`AsyncStreamer::advance_frame`
-    banks 1/global_fps of content time per tick and advances when the current frame's
-    delay is paid off; `Streamer::frame_delay_seconds` carries the per-frame timing, which
-    the ring buffer holds alongside each decoded frame. Before this, every animation
-    played at a flat 15fps regardless of how it was authored.)
-- **Text** — big foreground words, split by word / line / once.
-- **Subtext** — a secondary scrolling text line.
-- **Small text** — small caption text.
-- **A spiral** — the rotating background; you can change its type/width and rotate it.
-- **A font change**, and a **theme change** (swap which images/words are in play).
+## Clocks and ownership
 
-Each draw op takes a few numbers: **alpha** (opacity), **origin** and **zoom** (size /
-position of the zoom), and for text a shadow origin/zoom. That's the entire painter's
-palette. Any intent ("overload," "conditioning") must ultimately become some
-combination of these ops with these numbers, over time.
+A cycler has a length, position, active flag, and children. On each content tick,
+the root advances the parts of the tree it owns. After the first advance,
+`frame == 0`; `progress == frame / length`. A finite N-frame occurrence therefore
+visits `0, 1/N, ..., (N-1)/N`, not an extra endpoint frame at 1.
 
-## 3. How timing works: a tree of frame-counters
-
-The schedule is a **tree**, and every node is just **a counter that counts frames**.
-Advancing the whole tree one frame at a time *is* playback. The node types (`cyclers.h`),
-in plain words:
-
-| Node | What it does |
+| Node | Scheduling rule |
 |---|---|
-| **Action** (leaf) | The only node that *does* anything. Fires its effects on frame 0 of every N frames (N=1 = every frame). |
-| **One-shot** | Run its children together, once. Lasts as long as its longest child. |
-| **Parallel** | Run its children together, on repeat. |
-| **Sequence** | Run its children one after another. |
-| **Repeat** | Run one child N times. |
-| **Offset** | Run one child, but phase-shifted by K frames. |
-| **Phase** | Owns an occurrence: fires entry effects once, then advances its children while active. Restarting resets local time and child schedules. |
-| **Burst** | Interrupts a base phase with a sampled-duration burst, then cooldown. Only the active branch executes; re-entry resets its child schedules. |
+| `Action` | Fire ordered effects on frame zero of each period. |
+| `OneShot` | Advance unfinished children together; duration is their maximum length. |
+| `Parallel` | Advance children together, allowing repeats; duration is their least common multiple. |
+| `Sequence` | Advance one child at a time; duration is the sum of child lengths. |
+| `Repeat` | Repeat one child a fixed number of times. |
+| `Offset` | Start a child at a phase offset; pre-roll suppresses effects. |
+| `Phase` | Run entry effects once and advance owned child schedules during a bounded occurrence. |
+| `Burst` | Choose between a base phase and a sampled-duration phase; advance only the chosen branch. |
 
-So "slow flashes then fast flashes" is literally a Sequence of two sub-trees; "three
-images at once" is a Parallel of three; "speed up" is a Sequence of Repeat blocks whose
-counters shrink. **Lengths are exact integers** — a Sequence's length is the sum of its
-children, a Parallel's is their least-common-multiple, etc. There is no call stack at
-runtime; the tree's positions are the whole state.
+Language scopes and runtime nodes are related but distinct. Clock names resolve
+lexically while parsing; compiled node IDs identify the clocks read by render
+expressions. A child may read an ancestor without sharing that ancestor's
+scheduling state.
 
-A burst branch is an occurrence, not merely a visibility gate. It selects media and fires
-other direct effects once on entry, then advances only its own children. `enter` setup
-runs before the burst body's entry effects. A child cut restarts with its branch and is
-clipped when that branch ends. The burst's sampled length supplies local progress for
-curves; the base has elapsed time but no known endpoint, so repeating base motion belongs
-inside an explicit `every Nf`. Naming a branch allows a nested cut to use its parent's
-longer envelope with `over NAME`. This phase ownership is a runtime extension (#65),
-not a change to ordinary Sequence/Parallel length composition above.
+A `pattern ... for Nf` owns exactly N frames per iteration. Its children run
+inside that lifetime and restart with it. An `every Nf` body with nested schedules
+likewise owns those children for each N-frame occurrence; ramp segments own their
+sampled segment lengths. Simple effect-only cadences can compile to action leaves
+without an extra wrapper. A sequence changes the order of children without
+extending the enclosing pattern's lifetime.
 
-## 4. What a leaf can do: effects
+For example, `pattern scene for 25f { every 8f { image primary } }` selects at
+frames 0, 8, 16 and 24. The last cut is clipped after one frame when the scene
+ends. The declared scene lasts 25 frames rather than being rounded down to three
+complete cuts. A cadence longer than its parent can still fire once and be
+clipped. Clock IDs remain distinct even when a scope contains only one child.
 
-When an Action leaf fires, it runs an ordered list of **effects**. Two kinds:
+A scene can also have a slow overall approach while images change every
+8 frames. The image's local curve restarts each cut; an expression reading
+`scene.progress`, or a curve using `over scene`, follows the larger scene.
+This already works across named enclosing scopes. There is no need for a new
+parent-timer feature to express a long envelope over short cuts.
 
-- **Draw effects** — call one of the §2 ops (show an image, fire text, rotate the spiral…).
-- **Scalar/register ops** — the *only* mutable memory the language has. There are no real
-  variables. A tiny set exists purely to fake the few stateful built-ins: `set`, `inc`,
-  `toggle`, a captured random `roll` (e.g. "pick 2, 4, or 8 once"), a `pulse` counter
-  ("raise a flag every Nth fire"), `copy` (hand one image to another), and a single
-  guard `when` ("do this only if register == N").
+Clock access is read-only. `over NAME` selects which progress a curve reads; it
+does not reset the parent, change its speed, or replace the child's lifetime.
+Those would be separate features with different scheduling consequences.
 
-This register machinery is deliberately small. It exists because readable visual recipes need
-bounded state such as "every third image" or "copy the last image before pulling the next one."
+## Burst phases and the SuperFast repair
 
-## 5. Themes, and the biggest limit
+A burst controller checks its probability on period boundaries. Durations and
+cooldowns are authored in frames, rounded up to whole controller periods. On
+entry, one duration is sampled and retained for that occurrence.
 
-Images and words come from **themes**. At any moment the engine holds a small set of
-"live" themes in slots, but the pattern language can only address **two**: **primary**
-and **alternate** (plus "runtime" = whatever was last pulled, and "random"). That binary
-is a hard limit baked into the data model. **Anything that wants 3+ themes at once — which
-is exactly what associative conditioning across multiple concept-themes would need — is
-impossible today** without a real change to the theme bank, the loader, and the draw API.
-This is the single most important runtime limitation to know.
+- Direct branch effects fire once on entry. `enter` effects run before the
+  burst body's direct effects.
+- A branch owns its nested schedules. Inactive branches neither advance those
+  schedules nor make their media selections.
+- Re-entry resets child schedule positions. A child still running when the
+  branch ends is cut off at that boundary.
+- The burst's default curve clock is its sampled local duration. An explicit
+  timed child has its own clock and can use a named ancestor with `over NAME`.
+- The base can be interrupted by a random decision, so it has no known
+  normalized endpoint. Put repeating motion inside `every Nf`, use elapsed
+  frames, or explicitly name a finite ancestor. Bare base progress/length
+  expressions are rejected.
 
-A theme's content is **strictly its own** (plus whatever it explicitly inherits, folded in
-at load time — `docs/session-json-format.md` §3.3). ThemeBank checks that explicitly at the
-point of selection rather than trusting `Shuffler`, which encodes membership as a priority
-level and silently widens to the whole session's pool when a theme has nothing above the
-base level — a theme with no gifs of its own would otherwise draw every other theme's
-(`ThemeInfo::animation_members` / `image_members`; regression test: `theme_bank_test`
-case 4).
+A nested burst controller inside an indefinite base or sampled-duration branch
+also lacks a fixed enclosing length. Its controller `.progress`/`.length`
+cannot be used as a substitute for the owning phase's sampled clock. Use the
+named phase for that envelope; controller `.frame`/`.index` remain available.
 
-Those two rules are a pair and must stay one: **content isolation says where a frame may
-come from, the never-black fallback says what to draw when the preferred kind isn't
-there.** Shipping the first without the second is what turned a cross-theme gif leak into
-black screens — most themes in a real corpus are stills-only, so every `anim` draw landing
-on one had been quietly borrowing a stranger's gif, and closing that off left nothing
-behind it. `theme_bank_test` case 4 asserts both directions, and asserts the leak by the
-fixture's image WIDTH rather than by emptiness precisely so that "it drew something" can
-never again be mistaken for "it drew the right thing".
+SuperFast uses an 8-frame local zoom for rapid cuts and a separate 64-128-frame
+zoom for the held burst image. The hold selects media once and changes its
+transform throughout the hold. Consequently a still substituted for a missing
+animation also moves. The correction concerns owned execution and local clocks,
+as well as authored curves; it is larger than merely counting another timer.
 
-## 6. The render block: "what's drawn," separately from "when"
+Schedule reset does not imply clearing every piece of visual state. Registers
+belong to the compiled visual, and selector flags/counters have their own
+lifetime. Do not assume that re-entering a branch wipes stored images or every
+hidden scalar. Tests should state which state must restart.
 
-Recently the engine split into two halves:
+## Content and registers
 
-- **The schedule** (§3–4) decides *when* things happen and writes registers.
-- **The render block** decides *what is actually painted each frame*. It's a short list
-  of draw statements (`image`, `text`, `subtext`, `small_text`, `spiral`), each with an
-  optional condition and number expressions for alpha/zoom/origin. Those expressions are
-  evaluated **every frame** against the live counters and registers (e.g. "zoom =
-  0.4 × how-far-through-this-ramp-we-are"). Run by `render_eval.cpp`.
+The live theme interface has two sides: `primary` and `secondary`. The grammar's
+`alternate` content selector toggles between those sides; it does not name a
+third theme. A program can rotate through many themes over time.
 
-This is the part that's already "data, not code," and it's the natural lowering target
-for v3's render shapes.
+`ThemeBank` selects from each theme's own content, including explicitly inherited
+content. Still/animation requests are preferences: when that kind is unavailable,
+the bank can use the other kind, then keep the side's last good frame. A theme
+with nothing available and no previous frame can still draw nothing.
+Failed decodes are excluded from cache capacity and reported separately in F1.
+A selection miss checks actual resident content before falling back, and a
+cache replacement must load successfully before its outgoing image is removed.
 
-## 7. The contract for v3 (the compile-down invariant)
+Image registers also record their source side and its generation. When a theme
+changes, `CompiledVisual::refresh_stale_registers()` retries a current-theme pick
+on the first render pass until it succeeds. Initial empty captures and captures
+served from an old last-good fallback also retry, without waiting for another
+theme change or scheduled image effect. A `copy` register is a snapshot and
+is excluded from that automatic refresh, preserving the outgoing image in a
+crossfade.
 
-Whatever the intent grammar looks like, the compiler must turn each pattern into:
+An animation-only theme is read through its live animation frame when drawn,
+so capturing an image does not freeze it permanently. Animation frame delays
+come from the file. The current animation selector is shared runtime state,
+not a separate independent video player for every named image register.
 
-1. **A schedule tree** of the §3 node types, whose leaves fire
-2. **effects** from the §4 vocabulary (draw ops + the register ops), feeding
-3. **a render block** of §6 draw statements.
+Image registers are scoped to patterns. Cadences supply clock scopes without
+creating new image-register scopes, except sampled ramp segments, which currently
+have their own register scopes. Text is shared renderer state rather than
+an image-like text register file, so independent text crossfades are not
+available simply by copying an image recipe.
 
-…all bottoming out in the §2 painter's palette and the §5 (currently binary) theme model.
+## Playback and presentation
 
-That's the whole machine. v3 is a **friendlier front-end** that lowers to this — and
-**must** lower to this (or to a deliberately-chosen extension of it, e.g. theme-index,
-which is a real runtime project, not just parser work). An intent that can't be reduced
-to "a counter tree firing these draw ops, painted by these statements" is, today,
-unbuildable. Keep that test in hand for every idea: *what counter tree and what draw
-statements would this become?*
+Pattern counters use integer content ticks at `global_fps`; the application still
+has wall-clock timing, audio timing, and display pacing. See
+[architecture.md](architecture.md#timing-and-execution-ownership) for the split.
 
----
+Rendering may evaluate the same pattern for two eyes and a desktop output.
+Those evaluations must not run the schedule again. Accumulating render state
+such as spiral phase and warp time is advanced once using the frame's playback
+elapsed time. Content selection resolved for the frame is reused across output
+passes.
 
-*Source of truth: `src/trance/visual/api.h` (draw ops), `cyclers.h` (node types),
-`pattern_ast.h` / `pattern_parser_v3.h` (effects + grammar), `render_eval.h` (render block),
-`builtin_patterns_v3.cpp` (the 8 patterns as they exist). For the as-built developer
-reference (with file/line detail) see `visuals.md`; this doc is the conceptual floor.*
+## What verification establishes
+
+`--lint` checks parsing/compilation and samples expression evaluation; it does
+not establish execution correctness. `phase_execution_test` advances actual
+compiled schedules and checks phase entry, clipping, restart, clocks and
+SuperFast transforms with a lightweight effect recorder. It does not run real
+media decoding or GL drawing. These are regression tests, not a formal proof
+of all legal programs. See [coverage and limits](architecture-maturity.md).

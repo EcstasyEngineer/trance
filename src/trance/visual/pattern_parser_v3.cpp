@@ -11,11 +11,10 @@
 #include <utility>
 #include <vector>
 
-// v3 grammar lowering. See docs/spec-grammar-v3.md. The parser turns the two-nouns/one-rule
-// surface into the existing pattern::Node tree + RenderStmt block: patterns nest onto
-// Seq/Par/Rep cyclers, draws become Image/Text effects + render statements, modulators become
-// render [expr] strings reading a pattern's minted clock id, and registers are lexically
-// pattern-scoped via compile-time name qualification.
+// v3 grammar lowering; see docs/spec-grammar-v3.md. The parser builds a pattern::Node
+// tree and RenderStmt block. Timed occurrences own nested schedules; effects select
+// media and update state; render expressions read named clocks and registers.
+// Registers are lexically pattern-scoped through compile-time name qualification.
 namespace
 {
   using pattern::Effect;
@@ -35,7 +34,7 @@ namespace
   public:
     explicit Cursor(const std::string& src) : _src(src) {}
     std::size_t pos() const { return _i; }
-    // Rewind/jump to a previously-recorded position. Used by the ramp cadence (13.2) to
+    // Rewind/jump to a previously-recorded position. Used by the ramp cadence to
     // re-parse one captured body span once per sampled segment, instead of duplicating the
     // statement-parsing switch or deep-copying an AST.
     void seek(std::size_t p) { _i = p; }
@@ -326,6 +325,20 @@ namespace
     // resolve frame-denominated windows against the clock they ride.
     uint32_t this_len() const { return _clocks.empty() ? 0u : _clocks.back().len; }
 
+    void reject_normalized_clock(const std::string& cid, std::size_t render_begin,
+                                 const std::string& message, std::size_t at) const
+    {
+      for (std::size_t ri = render_begin; ri < _render.size(); ++ri) {
+        const auto& rs = _render[ri];
+        for (const auto* expr : {&rs.alpha, &rs.origin, &rs.zoom, &rs.shadow_origin,
+                                &rs.shadow_zoom, &rs.speed, &rs.when, &rs.anim_gate}) {
+          if (expr->find(cid + ".progress") != std::string::npos ||
+              expr->find(cid + ".length") != std::string::npos)
+            throw ParseError{message, at};
+        }
+      }
+    }
+
     // Resolve `over NAME` (or `this` when over_name empty) to a minted clock id.
     std::string resolve_clock(const std::string& over_name, std::size_t at)
     {
@@ -340,7 +353,7 @@ namespace
 
     // Qualify a register reference. Bare `name` -> "<enclosing-pattern-cid>$name". Qualified
     // "Pat.name" -> "<Pat-cid>$name" (Pat resolved in the register-scope stack). This is the
-    // whole of the lexical-scoping mechanism (spec-grammar-v3.md 0.6) -- compile-time string
+    // whole of the lexical-scoping mechanism -- compile-time string
     // transformation, no runtime change.
     std::string qualify_reg(const std::string& ref, std::size_t at)
     {
@@ -641,7 +654,7 @@ namespace
     // `hold` gives a triangle; the remainder is a true ABSENCE (alpha exactly 0), which is what
     // distinguishes `env` from `fade inout`'s whole-clock triangle.
     //
-    // Parser-only sugar of the SAME class as `fade in/out/inout` (§4.3): it lowers to one
+    // Like `fade in/out/inout`, this lowers to one
     // compile-time alpha [expr] built from nested min/max over `this.progress`, all of which
     // render_eval's evaluator already implements. Zero runtime change.
     //
@@ -809,7 +822,7 @@ namespace
     // modulator, not a bespoke keyword class. Lowers to Effect{Kind::Audio} (or AudioStop
     // for `audio stop`); a literal volume sets Effect::rate (fired once), a curve/[expr]
     // volume instead emits a RenderStmt{Op::AudioVolume} that rides the enclosing pattern's
-    // clock every frame, exactly like `spiral speed`. Single-slot v0 (docs/audio.md): a
+    // clock every frame, exactly like `spiral speed`. The single channel (docs/audio.md): a
     // second `audio` fire replaces whatever grammar audio was already playing, the same
     // shape as the single live text slot.
     void parse_audio(std::vector<Effect>& sink)
@@ -842,8 +855,7 @@ namespace
         float literal = 0.f;
         if (is_bare_literal(mod, literal)) {
           // A constant volume needs no per-frame render machinery: set it once at fire
-          // time (Effect::rate), same "constant folds to a fire-time value" shape §4.3
-          // documents for the shared curve-drive param class.
+          // time (Effect::rate); a curve emits a per-frame render expression instead.
           e.rate = literal;
         } else {
           RenderStmt rs;
@@ -1010,7 +1022,7 @@ namespace
 
       // word / line / caption / subtext: the text path. (Text content is a single live slot, not
       // a register, so text cannot crossfade/stash today -- that is the one deferred runtime
-      // extension; see docs/spec-grammar-v3.md Ext#4.)
+      // extension; see docs/spec-grammar-v3.md.)
       Effect::Kind ek = (kw == "word" || kw == "line") ? Effect::Kind::Text
                         : kw == "subtext"              ? Effect::Kind::Subtext
                                                        : Effect::Kind::SmallSub;
@@ -1103,8 +1115,8 @@ namespace
       return roll;
     }
 
-    // Sample N integer segment durations from A->B along an ease curve, compile-time only
-    // (spec-grammar-v3.md 13.2 / Extension #3), SCALED so the segments sum to exactly `span`
+    // Sample N integer segment durations from A->B along an ease curve at compile time,
+    // scaled so the segments sum to exactly `span`
     // (the invariant is "sum equals the span the ramp occupies" -- A/B set the ramp's SHAPE,
     // not an absolute frame budget of their own, same as a `curve A -> B` always normalizes
     // against a 0..1 clock regardless of the clock's length). Reuses the exact ease formulas
@@ -1161,10 +1173,10 @@ namespace
     }
 
     // `every ramp A -> B steps N [ease linear|late] [-> NAME] { body }` -- compile-time sampled
-    // ramp cadence (spec-grammar-v3.md 13.2, Extension #3). Samples N fixed-length segment
-    // durations from A..B along the ease curve, then lowers to a plain Seq of N Action leaves
-    // that each re-run the same body-effects/render-stmts, mirroring how `every Nf` builds its
-    // per-beat leaf -- NO live/dynamic cycler length, no compiler/cycler change. Each segment
+    // ramp cadence. Samples N fixed-length segment
+    // durations from A..B along the ease curve, then lowers to a Seq of bounded occurrences
+    // that each re-run the same body-effects/render-stmts. A segment with nested schedules
+    // owns them just like an ordinary cadence; a leaf-only segment remains an Action. Each segment
     // gets its own minted id (NAME_00, NAME_01, ... if named, else anonymous _nK ids) and its
     // own register-scope push so `push_render`'s existing `.active`-gate mechanism (the same one
     // that already isolates sibling nested patterns, see EX3) makes only the currently-firing
@@ -1255,17 +1267,12 @@ namespace
         _clocks.pop_back();
         _regs.pop_back();
 
-        Node leaf = action(len, std::move(leaf_effects));
-        apply_image_hint(leaf, leaf.effects);
-        leaf.id = cid;
-        if (nested.empty()) {
-          segs.push_back(std::move(leaf));
-        } else {
-          std::vector<Node> par;
-          par.push_back(std::move(leaf));
-          for (auto& n : nested) par.push_back(std::move(n));
-          segs.push_back(group(Node::Type::Par, std::move(par)));
-        }
+        Node segment = action(len, std::move(leaf_effects));
+        if (!nested.empty()) segment.type = Node::Type::Phase;
+        segment.children = std::move(nested);
+        apply_image_hint(segment, segment.effects);
+        segment.id = cid;
+        segs.push_back(std::move(segment));
       }
       _c.seek(body_close);
       _c.expect('}');
@@ -1293,9 +1300,9 @@ namespace
       }
     }
 
-    // `every LEN [-> NAME] { body }` -> Rep(span/LEN, Action(LEN, body-effects)). Opens a CLOCK
-    // scope (so modulators inside ride the per-beat clock) but NOT a register scope.
-    // Also dispatches `every ramp A -> B steps N ...` (13.2) to parse_ramp_cadence.
+    // `every LEN [-> NAME] { body }` repeats a bounded occurrence until its owner ends.
+    // Nested schedules restart each occurrence. Opens a CLOCK scope but NOT a register scope.
+    // Also dispatches `every ramp A -> B steps N ...` to parse_ramp_cadence.
     Node parse_cadence(uint32_t span)
     {
       expect_word("every");
@@ -1316,14 +1323,9 @@ namespace
         _c.word();
         offset = parse_len();
       }
-      const bool phase_child = !_clocks.empty() && _clocks.back().phase;
-      if (span != 0 && span % len != 0 && !phase_child) {
-        _warnings.push_back(loc(lat) + ": cadence " + std::to_string(len) +
-                            " does not divide span " + std::to_string(span));
-      }
       _clocks.push_back({clkname, cid, len});
       std::vector<Effect> leaf_effects;
-      std::vector<Node> nested;  // nested patterns inside a cadence are uncommon; supported anyway
+      std::vector<Node> nested;
       _c.expect('{');
       while (_c.peek_char() != '}') {
         parse_statement(len, leaf_effects, nested);
@@ -1331,22 +1333,17 @@ namespace
       _c.expect('}');
       _clocks.pop_back();
 
-      Node leaf = action(len, std::move(leaf_effects));
-      apply_image_hint(leaf, leaf.effects);
-      leaf.id = cid;
-      Node node = (!phase_child && span != 0 && len != 0)
-          ? repeat(span / len, std::move(leaf)) : std::move(leaf);
+      Node node = action(len, std::move(leaf_effects));
+      if (!nested.empty()) node.type = Node::Type::Phase;
+      node.children = std::move(nested);
+      apply_image_hint(node, node.effects);
+      node.id = cid;
       if (offset) {
         Node off;
         off.type = Node::Type::Off;
         off.count = offset;
         off.children.push_back(std::move(node));
         node = std::move(off);
-      }
-      // Fold any nested-pattern subtrees beside the cadence leaf (run in parallel).
-      if (!nested.empty()) {
-        nested.insert(nested.begin(), std::move(node));
-        return group(Node::Type::Par, std::move(nested));
       }
       return node;
     }
@@ -1357,6 +1354,9 @@ namespace
     // normalized base movement must live in a timed child or name an ancestor.
     Node parse_burst(uint32_t span)
     {
+      const std::size_t at = _c.pos();
+      const std::size_t controller_render_begin = _render.size();
+      const bool fixed_controller_span = this_len() != 0;
       expect_word("burst");
       std::string clkname;
       const std::string cid = new_id();
@@ -1468,25 +1468,23 @@ namespace
         _clocks.pop_back();
         if (!entered_children.empty())
           throw ParseError{"enter runs once; put timed children in the burst block", bat};
+        if (bw == "base")
+          reject_normalized_clock(base.id, render_before,
+              "base has no fixed duration: use every Nf for local curves or over a named parent", bat);
         for (std::size_t ri = render_before; ri < _render.size(); ++ri) {
           auto& rs = _render[ri];
-          if (bw == "base") {
-            // A base episode has no known end. Reject normalization rather than
-            // silently binding its curve to the controller's full pattern span.
-            for (const auto* expr : {&rs.alpha, &rs.origin, &rs.zoom, &rs.shadow_origin,
-                                    &rs.shadow_zoom, &rs.speed, &rs.when, &rs.anim_gate}) {
-              if (expr->find(base.id + ".progress") != std::string::npos ||
-                  expr->find(base.id + ".length") != std::string::npos)
-                throw ParseError{"base has no fixed duration: use every Nf for local curves "
-                                 "or over a named parent", bat};
-            }
-          }
           const std::string gate = phase.id + ".active";
           rs.when = rs.when.empty() ? gate : ("(" + rs.when + ") and " + gate);
         }
       }
       _c.expect('}');
       _clocks.pop_back();
+      // A nested controller under an indefinite base or sampled burst is cut off
+      // by its owner. Its static maximum is not that occurrence's actual duration.
+      if (!fixed_controller_span)
+        reject_normalized_clock(cid, controller_render_begin,
+            "burst controller has no fixed enclosing duration: use a timed child "
+            "or the enclosing occurrence's clock", at);
       if (!saw_base && !saw_burst)
         _warnings.push_back(loc(_c.pos()) + ": burst has neither a base nor a burst block");
       // Entry events precede the burst body's once-per-occurrence selection.
@@ -1505,8 +1503,7 @@ namespace
       n.burst_dur_max = dur_max;
       n.children.push_back(std::move(base));
       n.children.push_back(std::move(burst));
-      // Protect the controller id when an enclosing pattern collapses its only child.
-      return repeat(1, std::move(n));
+      return n;
     }
 
     // A full `pattern NAME for LEN [seq|loop N] { body }`.
@@ -1528,6 +1525,9 @@ namespace
         else break;
       }
       if (len == 0) throw ParseError{"pattern length must be > 0", nat};
+      if (loops == 0) throw ParseError{"pattern loop count must be > 0", nat};
+      if (uint64_t(len) * loops > uint64_t(UINT32_MAX))
+        throw ParseError{"pattern duration with loops exceeds the frame limit", nat};
 
       const std::string cid = new_id();
       _clocks.push_back({name, cid, len});
@@ -1544,20 +1544,19 @@ namespace
       _clocks.pop_back();
       _regs.pop_back();
 
-      if (!bare.empty()) {
-        Node a = action(len, std::move(bare));
-        apply_image_hint(a, a.effects);
-        children.push_back(std::move(a));
-      }
-      if (children.empty()) {
-        // An empty pattern still needs a body that spans LEN so its clock is well-defined.
-        children.push_back(action(len));
-      }
-
-      Node body = (children.size() == 1) ? std::move(children.front())
-                                         : group(seq ? Node::Type::Seq : Node::Type::Par,
-                                                 std::move(children));
-      body.id = cid;       // the pattern clock (per-iteration when looped)
+      // The declared span is authoritative, independent of child lengths. Preserve
+      // every child's id and reset its schedule at each pattern occurrence.
+      Node body;
+      body.type = Node::Type::Phase;
+      body.sequence = seq;
+      body.length = len;
+      body.effects = std::move(bare);
+      apply_image_hint(body, body.effects);
+      if (seq && !children.empty())
+        body.children.push_back(group(Node::Type::Seq, std::move(children)));
+      else
+        body.children = std::move(children);
+      body.id = cid;
       body.phase = name;   // overlay label
       if (loops > 1) return repeat(loops, std::move(body));
       return body;

@@ -322,6 +322,7 @@ private:
 
   bool _visible = false;
   bool _initialized = false;
+  bool _window_focused = false;  // Last focus state delivered to imgui-SFML.
   bool _init_failed = false;
   bool _quit_requested = false;
   // An ImGui frame is open (update() ran, render() hasn't) -- pairs Update/Render.

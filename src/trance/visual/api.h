@@ -30,7 +30,9 @@ public:
     SPLIT_ONCE_ONLY = 4,
   };
 
-  virtual Image get_image(bool alternate = false) const = 0;
+  // Optional provenance is false for a last-good fallback or an empty result.
+  virtual Image get_image(bool alternate = false,
+                          bool* from_current_theme = nullptr) const = 0;
   // ThemeBank::get_current_theme_image / lane_generation -- together, "is this captured
   // image still from the theme on that lane, and if not, give me one that is (or nothing,
   // so I know to try again)". Used by CompiledVisual to refresh registers across a theme
@@ -131,7 +133,8 @@ public:
                 const trance_pb::System& system, uint32_t height_pixels);
   void update();
 
-  Image get_image(bool alternate = false) const override;
+  Image get_image(bool alternate = false,
+                  bool* from_current_theme = nullptr) const override;
   Image get_current_theme_image(bool alternate) const override;
   uint32_t lane_generation(bool alternate) const override;
   const std::string& get_theme_audio(bool alternate = false) const override;

@@ -1,13 +1,10 @@
 #include <trance/visual/builtin_patterns.h>
 
-// The 8 built-ins authored in the v3 intent grammar (docs/spec-grammar-v3.md): two nouns
-// (pattern, effect) and one rule (every numeric is a modulator riding the enclosing pattern's
-// clock). Patterns nest; crossfade EMERGES from copy + cur/prev + source-over fade-in (no baked
-// keyword); spiral speed / zoom / fade are one curve-drivable class; super_fast uses randomness
-// primitives instead of a hand-rolled FSM. These are faithful-in-feel, not frame-identical, to
-// the pre-grammar hand-written visuals, whose key texture is that EVERY image zooms over its
-// own on-screen life -- so zoom modulators here are `curve` rides on the pulling cadence's
-// clock, never constants (a constant zoom is a static magnification).
+// The eight built-ins use the same v3 language as custom patterns. Curves read
+// the nearest timed occurrence, or an explicitly named ancestor. Local motion
+// and whole-scene envelopes remain independent. Crossfades use image registers
+// and source-over blending; bursts use owned phases. These recipes preserve
+// visual intent without requiring frame-identical legacy behavior.
 namespace
 {
   // 1 ACCELERATE -- the up-ramp: one continuous accelerating cadence that titrates HARD into a
@@ -94,7 +91,7 @@ pattern sub_text for 1024f {
   // degenerates into a garbled magnified mosaic -- the "jigsaw" regression this range fixes.)
   // The old layer is drawn first and the new layer fades in above it, matching the original
   // source-over blend without a baked crossfade keyword. Word + caption accents. (A true
-  // text-on-text dissolve needs the deferred text-register extension, Ext#4.)
+  // text-on-text dissolve would need text registers, which are not implemented.)
   const char* kFlashText = R"(
 pattern flash_text for 1024f {
   pattern life for 128f loop 8 {

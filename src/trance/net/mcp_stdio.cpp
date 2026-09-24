@@ -12,7 +12,7 @@ namespace
   using nlohmann::json;
 
   const char* kProtocolVersionFallback = "2024-11-05";
-  const char* kServerVersion = "0.4.0";
+  const char* kServerVersion = TRANCE_VERSION;
 
   json obj_schema(json properties = json::object(), json required = json::array())
   {

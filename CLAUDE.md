@@ -1,171 +1,110 @@
-# CLAUDE.md
+# Working in this repository
 
-Guidance for working in this repo. Read it before making changes.
+Trance is a C++17/SFML 3 visual media player with JSON sessions, a v3 pattern
+language, an ImGui editor, audio/entrainment, desktop overlays, TCP commands,
+MCP over stdio, and an optional OpenXR output. There is one product executable
+and one renderer/window. Read the [architecture](docs/architecture.md) for the
+code map and the [README](README.md) for user-facing setup.
 
-## What trance is
+## Working rules
 
-A fullscreen visual hypnosis / media player (C++17, SFML 3). It plays **sessions**
-(`*.session.json`, spec in `docs/session-json-format.md`; legacy protobuf `.session` files
-auto-migrate to JSON on load) that drive a stream of timed visuals — flashing images/text,
-spirals, animations — over audio with optional binaural/isochronic entrainment beds and
-theme audio. Also: a click-through `--overlay` mode (X11 and Win32), an
-ImGui F2 in-app UI, a system tray icon (Windows) + global Shift+F11 hide-everything hotkey, and a
-`--command_port` line-protocol control channel. (The legacy wxWidgets **creator** editor has
-been deleted; the F2 panel plus hand-edited JSON is the editing story.)
+- Priorities are fast, small, and easy to use. Prefer a small general mechanism
+  to a special case for one built-in pattern.
+- Follow the supported CMake presets. Do not add bespoke build scripts or new
+  build configurations; the configurations are Debug and Release.
+- This single-developer repository normally works on `master`. Do not invent a
+  branch/review workflow unless the user requests one.
+- Keep new MSVC code warning-clean: the project uses `/W3 /WX`. Linux uses
+  `-Wall -Wextra` without global `-Werror`.
+- Use file and function names in docs instead of drifting source line numbers.
+  Separate implemented behavior from ideas and historical design notes.
+- Treat comments and old specs as evidence to check against code. Update the
+  relevant current reference when behavior changes; do not append another
+  contradictory status paragraph to an obsolete plan.
 
-There is **one renderer** (`ScreenRenderer`), and it owns the single visible window and its
-GL context. A VR headset is an optional OpenXR **output** of that renderer, not an
-alternative to it: a background probe attaches one whenever it appears and any XR failure
-detaches without ending the run, so a frame is up to three passes (left eye, right eye,
-then always the desktop). There is no VR mode, no renderer selection, and no configuration
-item for either — plan and rationale in `docs/spec-xr-unified.md`. Unverified on real
-hardware until that spec's §5 QA matrix runs.
+## Build and checks
 
-The loaded session file is **live state, not a document**: the F2 panel autosaves every
-committed edit back to it (no Save button), and `System > Export` is the only way to write
-a session somewhere else. Both savers write through a temp file + rename. Consequence to
-keep in mind when hand-editing: `_`-prefixed comment keys do not survive an autosave, so a
-commented session should not be opened for tweaking in F2.
+Set `VCPKG_ROOT` to a vcpkg checkout. The manifest/toolchain restores dependencies.
 
-## Build & run
-
-Dependencies are restored by **vcpkg manifest mode** (`vcpkg.json`) via the toolchain file;
-nothing is vendored. Set `VCPKG_ROOT` to your vcpkg checkout first.
-
-```sh
-# Configure (per CMakePresets.json)
-cmake --preset windows-msvc          # Windows: VS 2026, x64-windows-static-md
-cmake --preset linux-gcc             # Linux/WSL: Ninja, Release
-
-# Build (multi-config on Windows; pick Release or Debug)
-cmake --build --preset windows-release        # or windows-debug
-cmake --build --preset linux-release          # or linux-debug
-
-# Run (realtime windowed; needs a real GPU — software GL won't do)
-./build/windows-msvc/Release/trance.exe "C:\path\to\some.session"
-
-# Bundle a clean distributable (trance.exe alone -- there are no DLLs to ship)
-cmake --install build/windows-msvc --config Release --prefix dist
-```
-
-There are exactly two build configurations: **Debug** and **Release**. Do not add bespoke
-build scripts to the repo root — the CMake presets are the only supported path.
-
-### Tests
-
-Headless, no SFML/protobuf, run via ctest:
-
-```sh
+```powershell
 cmake --preset windows-msvc -DTRANCE_BUILD_TESTS=ON
 cmake --build --preset windows-release
 ctest --test-dir build/windows-msvc -C Release --output-on-failure
+.\build\windows-msvc\Release\trance.exe --lint
 ```
 
-Five ctest entries: `grammar_lint` (runs `trance --lint` — the product binary parses,
-lowers, compiles and expr-evaluates all 8 built-ins; no GL context needed), plus four
-C++ test exes: `session_json_test`, `playlist_runner_test`, `theme_bank_test`, and
-`phase_execution_test`. Each C++ test exists only because its subject is unreachable from
-outside the process (proto-state assertions, the playlist VM, the GL-uploading loader,
-and phase entry/reset/clock state across frame advances). CI runs ctest on every pull
-request. Test targets live in `tests/CMakeLists.txt`; their binaries and intermediates
-land under `build/<preset>/tests/`, keeping `Release/` to the shippable binaries only.
-The command channel is QA'd end-to-end from Python against a live exe
-(`tests/qa_command_channel.py`, issue #29) — hands-on, never in ctest.
+Windows uses the Visual Studio 18 2026 generator and
+`x64-windows-static-md`. Linux uses `linux-gcc` / `linux-release`; its Debug
+configure preset is `linux-gcc-debug` with build preset `linux-debug`.
 
-`theme_bank_test` is the one that is **not** headless: it drives ThemeBank's tiered image
-selection and its per-theme content isolation (a theme must never draw another theme's
-image or gif) against a real synthetic media tree, and `get_image` uploads textures, so it needs
-a current OpenGL context (`sf::Context` — no window). It is labelled `gpu`, so
-`ctest -LE gpu` skips it; run without a GPU it prints a loud SKIP banner and exits 0 rather
-than reddening CI.
+Build the full preset before CTest. Building only the player can leave stale
+test binaries. `theme_bank_test` requires GL and is labelled `gpu`; use
+`-LE gpu` for a runner without a context, and report the exclusion. A successful
+skip is not media coverage.
 
-**Build the test targets, not just `trance`.** Building only the `trance` target leaves
-stale test binaries in place and `ctest` then reports false passes — that is exactly how
-`session_json_test` sat red on master unnoticed.
+`--lint` parses/compiles built-ins and optional custom patterns, then samples
+render expressions at three schedule positions with no-op effects. It is not a
+formal proof or complete runtime test. `phase_execution_test` checks execution
+and clocks with an effect recorder; other CTests cover playlists, JSON and
+ThemeBank. See [validation coverage](docs/architecture-maturity.md).
+The live socket QA harness is `tests/qa_command_channel.py`, outside CTest.
 
-`trance --lint [session]` is the grammar's validation surface: it proves the built-ins
-(and a session's custom patterns, against that program's real entrainment beat) parse,
-lower, compile and evaluate — and doubles as the pattern author's linter. It is **not** a
-parity test — see "supersede, not parity" below.
+## Visual architecture and invariants
 
-## Architecture
+The pipeline is:
 
-The visual pipeline (most active area of work):
-
-```
-v3 intent grammar  ──parse──▶  pattern::Node AST  ──compile──▶  Cycler tree  ──┐
-(pattern_parser_v3)            (pattern_ast.h)     (pattern_compiler)          │
-                                                                               ▼
-                         render { } block of RenderStmts  ◀──generated──   per-frame eval
-                         (render_eval.cpp)                                  (compiled_visual)
+```text
+v3 source -> pattern::Node + RenderStmt -> Cycler tree + registers -> render evaluation
 ```
 
-- **Cycler runtime** (`src/trance/visual/cyclers.{h,cpp}`): a tree of frame-counter nodes
-  (Action / OneShot / Parallel / Sequence / Repeat / Offset / Phase / Burst) whose leaves fire effects
-  (draw ops: Image/Text/Anim/Spiral/Subtext/Warp + scalar-register ops set/inc/toggle/roll/pulse/
-  copy/spiral-set/when). Image registers live in a per-visual map, lexically pattern-scoped.
-- **v3 intent grammar** (`pattern_parser_v3.{h,cpp}`, spec `docs/spec-grammar-v3.md`): the
-  ONLY grammar -- v1 (`pattern_parser.{h,cpp}`) and the intermediate v2 have both been retired
-  and deleted; there is no fallback parser. Two nouns (pattern, effect) + one rule (every
-  numeric is a modulator riding the nearest timed occurrence, redirectable with `over NAME`).
-  Burst branches own their child schedules and restart on entry; direct branch effects
-  fire once, explicit `every` repeats, and burst curves follow the sampled local duration.
-  An indefinite base needs a timed cut or explicit ancestor for normalized motion (§4.11).
-  Patterns nest; crossfade emerges from `copy` + cur/prev + source-over fade-in (no keyword);
-  zoom/fade/spiral speed/warp are one curve-drivable class. Built-ins live in
-  `builtin_patterns_v3.cpp`. `director.cpp` parses every built-in and custom pattern source
-  with v3; a custom pattern that fails to parse is skipped with a surfaced warning (not a
-  crash, not a silent black screen) -- the rest of the program's visuals still play.
-  (The `super_fast` FSM has also been retired.)
-- **Director** (`src/trance/director.cpp`): owns the program, picks/compiles visuals, threads the
-  entrainment beat period into the grammar, surfaces parse warnings.
-- **ThemeBank** (`src/trance/theme_bank.{h,cpp}`): the async image/theme loader. **Bi-thematic
-  by design** (see invariants).
-- **Renderer** (`src/trance/render/`): `render.{h,cpp}` is `ScreenRenderer` (window, GL
-  context, desktop pass, pacing); `openxr.{h,cpp}` is `XrOutput` (per-eye swapchains,
-  head-locked quads) plus `XrProbe` (the background hot-attach probe).
-- **main loop** (`src/trance/main.cpp`): events → update → render, per frame.
+- `pattern_parser_v3.cpp` is the only language parser. Built-ins use that same
+  path in `builtin_patterns_v3.cpp`; there is no fallback to handwritten visual
+  classes or the retired SuperFast state machine.
+- `pattern_compiler.cpp` maps schedule nodes to runtime cyclers.
+  `CompiledVisual` executes ordered effects; `render_eval` reads clocks and
+  registers to draw. Keep scheduling and rendering separate.
+- Local occurrence ownership and clock selection are separate. A child retains
+  its schedule when a curve reads an ancestor with `over NAME`. A pattern owns
+  exactly its declared `for Nf` span per iteration; nested cadence bodies restart
+  with their cadence, and partial final cuts are clipped. Inactive burst
+  branches do not advance children; re-entry restarts their schedule clocks.
+  A base phase has no known endpoint, so normalized base motion needs an
+  explicit timed child or a finite named ancestor.
+- Re-entry does not mean all scalar/image state is erased. State lifetime must
+  be specified and tested independently from clock reset.
+- Grammar features must lower to concrete schedule, effect and render data.
+  If they require runtime behavior, make that change explicit rather than
+  hiding it behind parser terminology.
+- ThemeBank exposes two live theme sides: `primary` and `secondary`.
+  `alternate` is a selector that toggles between them. More simultaneous theme
+  sides require a runtime/data-model change and are outside the current design.
+- Theme content selection stays within that theme and its explicit inheritance.
+  Still/animation requests can fall back to the other kind, then to the side's
+  last good frame. Preserve both isolation and fallback behavior.
+- Captured live images refresh on theme-generation changes; `copy` images are
+  snapshots and must retain their outgoing content for crossfades.
+- Multiple output passes must not advance schedules or accumulating render
+  state multiple times. Content ticks, playback elapsed time, animation frame
+  delays, and audio timing are distinct.
+- Built-ins preserve useful visual intent without requiring old frame-by-frame
+  parity. Test the desired observable behavior, not a frozen compiled-tree shape.
 
-Layout: `src/trance/visual` (grammar, cyclers, render), `src/trance` (director, theme_bank,
-media, main), `src/trance/render` (ScreenRenderer + the OpenXR output), `src/common` (proto
-`trance.proto`, session), `docs/`, `tests/`.
+Syntax: [spec-grammar-v3.md](docs/spec-grammar-v3.md).
+Recipes: [authoring-v3-patterns.md](docs/authoring-v3-patterns.md).
+Runtime model: [engine-today.md](docs/engine-today.md).
 
-## Key invariants & principles
+## Session and UI boundaries
 
-- **Product priorities: fast, small, easy to use.** Every design decision is judged
-  against these three — native-rate rendering with no wasted work; one exe with few
-  dependencies and net-negative diffs preferred; zero configuration, with loud specific
-  console lines when something can't just work. A change that trades against one of
-  them needs to say which and why.
-- **Compile-down floor.** Everything the v3 grammar offers must lower to the runtime described
-  in `docs/engine-today.md` — a counter tree firing the fixed draw/scalar ops feeding a render
-  block. The v3 runtime extensions (curve spiral speed, the `SpiralSet` selector, the wave
-  warp, the new render params, burst phase ownership/local clocks) are explicit and named
-  in `docs/spec-grammar-v3.md` §9/§0; nothing else sneaks new runtime magic in through the grammar. A construct that can't lower is flagged a
-  REQUIRED RUNTIME EXTENSION, never faked.
-- **Bi-thematic engine.** ThemeBank holds exactly **two live themes** (primary + alternate);
-  every accessor below the grammar is a `bool alternate`, not an index. The grammar exposes
-  only `primary` (theme 0) and `secondary` (theme 1) — plus the unrelated `alternate` content
-  word, which ping-pongs a draw between the two sides rather than pinning one. 3+ simultaneous
-  themes is a **decided non-goal** (`docs/spec-grammar-v3.md` §9, "hard non-goals") — not
-  deferred work.
-- **Supersede, not parity.** The v3 grammar *improves on* the original 8 built-ins rather than
-  matching them byte-for-byte ("same effect, not the same frames"). Do not add tests that freeze
-  the originals' compiled-tree shape; parity-locking is what kept dragging the design back to
-  super_fast's hand-rolled FSM (now deleted).
-- **Modding-language north star.** The grammar reads like a modding language — "oh, so that's how
-  they define this; I can make my own." This was the whole point of v3: crossfade, spiral, zoom,
-  fade, and warp are composed from exposed primitives, not baked `if (kw == "...")` C++ macros.
-  Keep it that way — add general primitives, not special cases. (The one deferred piece is a
-  text-content register so text can crossfade like images; `docs/spec-grammar-v3.md` Ext#4.)
+JSON is the on-disk session format. The current in-memory model uses protobuf;
+legacy files migrate through the frozen legacy schema. Preserve sidecar state
+when loading/saving authored pattern paths and theme scan information.
 
-## Conventions
+F2 committed edits autosave to the current session. Session/system JSON writes
+use a checked temporary file followed by rename. Export writes another copy.
+Underscore-prefixed comment keys are not preserved on save. Runtime overrides
+such as command-issued theme/text pins must stay separate from persisted session
+settings.
 
-- MSVC builds with **`/W3 /WX`** (warnings are errors). Linux is `-Wall -Wextra` without
-  `-Werror` (legacy 2014-era code). Keep new code warning-clean on MSVC.
-- Commit to `master`. This repo does not use feature branches: it is a single-developer
-  repo with no review gate, so a branch is pure ceremony. (A "branch for changes" line
-  used to sit here; it was never the user's convention, it came in with the generated
-  CLAUDE.md in 78b45f7.)
-- `system.json` is a runtime-written config (gitignored), not source. (`system.cfg` is its
-  retired protobuf ancestor — a sibling one is auto-migrated at startup.)
+`system.json` is runtime-written and gitignored. Do not treat it as source.
+The old creator editor, renderer selection, and video-export pipeline have been
+removed; do not reintroduce their assumptions into current documentation.

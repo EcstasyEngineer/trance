@@ -865,7 +865,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
   auto async_thread = run_async_thread(running, *theme_bank);
   audio.TriggerEvents(playlist.current());
   audio.SetEntrainment(program().entrainment());
-  std::cout << std::endl << "-> " << session.first_playlist_item() << std::endl;
+  std::cerr << "playlist: " << session.first_playlist_item() << '\n';
 
   // Live overlay: what's actually applied to the window right now, seeded from the
   // startup flags. The `overlay` verbs and the F2 UI's Overlay section only write
@@ -915,7 +915,7 @@ void play_session(const std::string& root_path, trance_pb::Session& session,
     // stack/transition logic.
     auto on_playlist_enter = [&](const std::string& name, const trance_pb::PlaylistItem& item) {
       audio.TriggerEvents(item);
-      std::cout << "\n-> " << name << std::endl;
+      std::cerr << "playlist: " << name << '\n';
       theme_bank->set_program(program());
       director.set_program(program());
       audio.SetEntrainment(program().entrainment());
@@ -1467,7 +1467,7 @@ namespace
     return std::string{std::istreambuf_iterator<char>{f}, std::istreambuf_iterator<char>{}};
   }
 
-  // --lint: the grammar's lean proof, run inside the product binary. Parse + lower +
+  // --lint: a grammar smoke check inside the product binary. Parse + lower +
   // compile each pattern, then evaluate every lowered render [expr] against live cycler
   // state at frames {0, mid, end-1} -- parse-time name resolution can't catch a
   // malformed expr the LOWERING itself emits (it silently evaluates to 0.0 or worse),
@@ -1587,6 +1587,7 @@ namespace
 
 int main(int argc, char** argv)
 {
+  gflags::SetVersionString(TRANCE_VERSION);
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   // --mcp: stdout IS the JSON-RPC transport, so it must be claimed before the first
   // log line anywhere in the program. Re-pointing std::cout at stderr's buffer moves

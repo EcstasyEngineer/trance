@@ -478,6 +478,7 @@ namespace
     // drains), so this needs a generous pump rather than a few iterations. Runs the full
     // count rather than stopping at the first swap, to sample both themes in the lane.
     std::size_t dishonest = 0;
+    std::size_t wrong_provenance = 0;
     std::size_t broken_samples = 0;
     bool swapped = false;
     for (int i = 0; i < 6000; ++i) {
@@ -491,7 +492,11 @@ namespace
       // that when the lane later holds "broken" there is something for a dishonest
       // fallback to hand back. Without it the check below is vacuous -- the fallback
       // returns an empty image and looks identical to the honest answer.
-      fx.bank->get_image(false);
+      bool from_current = true;
+      fx.bank->get_image(false, &from_current);
+      if (from_current != (lane_theme(false) == "still")) {
+        ++wrong_provenance;
+      }
 
       // THE assertion. While the lane holds "broken" -- a theme that can never make an
       // image resident -- an honest fetch has exactly one correct answer: nothing. The
@@ -510,6 +515,8 @@ namespace
 
     check(swapped, "the primary lane's theme changes when two themes are enabled "
                    "(otherwise the rest of this case proves nothing)");
+    check(wrong_provenance == 0,
+          "get_image marks current-theme picks as fresh and last-good fallback as stale");
     check(broken_samples > 0,
           "the lane actually held the unloadable theme at some point (" +
               std::to_string(broken_samples) + " samples) -- without this the assertion "
@@ -936,6 +943,72 @@ namespace
             "on " + std::to_string(substituted) + "/100 reads)");
     }
   }
+  void test_failed_images_do_not_fill_the_cache()
+  {
+    auto broken = make_anim_fixture("failed_residency",
+                                     R"({ "theme_name": "broken", "random_weight": 1 })");
+    check(broken.bank->debug_snapshot().slots[1].loaded == 0,
+          "a failed decode is not reported as a resident image");
+    for (int i = 0; i < 1000; ++i) {
+      broken.bank->async_update();
+    }
+    check(broken.bank->debug_snapshot().slots[1].loaded == 0,
+          "an exhausted corrupt theme stays unloaded without retrying dead slots");
+    check(broken.bank->change_themes(),
+          "an exhausted corrupt theme does not block theme rotation");
+
+    auto root = scratch_root() / "mixed_failed_residency";
+    std::filesystem::create_directories(root);
+    write_png(root / "healthy.png", kPng2x1, sizeof(kPng2x1));
+    trance_pb::Session session;
+    auto& theme = (*session.mutable_theme_map())["mixed"];
+    theme.add_image_path("healthy.png");
+    for (int i = 0; i < 16; ++i) {
+      const auto path = "broken_" + std::to_string(i) + ".png";
+      write_file(root / path, "corrupt image");
+      theme.add_image_path(path);
+    }
+    auto& program = (*session.mutable_program_map())["p"];
+    program.set_global_fps(120);
+    auto* enabled = program.add_enabled_theme();
+    enabled->set_theme_name("mixed");
+    enabled->set_random_weight(1);
+    auto system = get_default_system();
+    system.set_image_cache_size(1);
+    ThemeBank bank{root.string(), session, system, program};
+    for (bool alternate : {false, true}) {
+      const auto image = bank.get_current_theme_image(alternate);
+      check(image && image.width() == kOwnWidth && image.texture(),
+            "one usable image fills a one-image cache despite sixteen corrupt files");
+    }
+    std::size_t blank = 0;
+    for (int i = 0; i < 2000; ++i) {
+      bank.async_update();
+      if (!bank.get_current_theme_image(false) || !bank.get_current_theme_image(true)) {
+        ++blank;
+      }
+    }
+    check(blank == 0,
+          "cache reconciliation never evicts the only healthy image for a failed file");
+
+    auto inherited = make_fixture("failed_tier_residency", 2, 1, 1,
+                                   R"({ "theme_name": "media/own", "random_weight": 1 })");
+    inherited.bank.reset();
+    write_file(inherited.root / "media" / "own" / "o0.png", "corrupt image");
+    write_file(inherited.root / "media" / "own" / "o1.png", "corrupt image");
+    inherited.bank = std::make_unique<ThemeBank>(
+        inherited.root.string(), inherited.session, inherited.system,
+        inherited.session.program_map().at("p"), inherited.sidecar.theme_tiers);
+    blank = 0;
+    for (int i = 0; i < 2000; ++i) {
+      inherited.bank->async_update();
+      const auto image = inherited.bank->get_current_theme_image(false);
+      if (!image || image.width() != kParentWidth) {
+        ++blank;
+      }
+    }
+    check(blank == 0, "an exhausted failed tier never starves the healthy inherited tier");
+  }
 } // namespace
 
 int main()
@@ -962,6 +1035,7 @@ int main()
   test_theme_change_is_detectable();
   test_lane_animation_follows_theme_swap();
   test_anim_fallback_latch();
+  test_failed_images_do_not_fill_the_cache();
 
   if (g_fail) {
     std::cout << g_fail << " check(s) failed\n";

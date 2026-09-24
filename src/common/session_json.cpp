@@ -1486,13 +1486,11 @@ trance_pb::System load_system_json(const std::string& path)
   // allow-list would make trance.exe fail to start on every existing install. It goes
   // when the format_version is bumped and old configs are migrated, not before.
   //
-  // `renderer` is NOT on the list, deliberately: there is no renderer choice any more
-  // (docs/spec-xr-unified.md D2), and no back-compat entry was added for it. A
-  // system.json still carrying the key therefore fails here and regenerates with
-  // defaults, losing its other settings -- the accepted, spec'd cost of the greenfield
-  // config rule.
+  // `renderer` is accepted only for migration. XR is automatic, so the obsolete
+  // value is ignored and never saved. Rejecting this one retired key would send
+  // an otherwise valid upgrade through default-config recovery and lose preferences.
   check_unknown_keys(root_json,
-                      {"format", "format_version", "enable_vsync", "windowed",
+                      {"format", "format_version", "enable_vsync", "renderer", "windowed",
                        "draw_depth", "eye_spacing", "image_cache_size", "animation_buffer_size",
                        "font_cache_size", "last_root_directory", "last_export_settings",
                        "last_session_map"},

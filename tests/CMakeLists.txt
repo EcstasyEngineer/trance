@@ -4,7 +4,7 @@
 # files — under build/<preset>/tests/ instead of scattered across the top of the
 # build tree, so Release/ holds only the shippable binaries.
 
-# The grammar's lean proof runs INSIDE the product binary: `trance --lint` parses,
+# The grammar smoke check runs INSIDE the product binary: `trance --lint` parses,
 # lowers, compiles and expr-evaluates all 8 built-ins (main.cpp run_lint). No GL
 # context is created on the lint path, so a bare CI runner can execute it. No
 # redundant parser-only test target exists -- the product exe IS the harness, and
@@ -22,6 +22,19 @@ add_executable(phase_execution_test
 target_include_directories(phase_execution_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(phase_execution_test PRIVATE trance_options)
 add_test(NAME phase_execution_test COMMAND phase_execution_test)
+
+# Real image capture/refresh effects with a recording render API. SFML images are
+# CPU-only here; no window, GPU context, uploads or production media are needed.
+add_executable(compiled_visual_test
+  ${CMAKE_SOURCE_DIR}/src/trance/visual/compiled_visual.cpp
+  ${CMAKE_SOURCE_DIR}/src/trance/visual/pattern_compiler.cpp
+  ${CMAKE_SOURCE_DIR}/src/trance/visual/cyclers.cpp
+  ${CMAKE_SOURCE_DIR}/src/trance/visual/render_eval.cpp
+  ${CMAKE_SOURCE_DIR}/src/trance/visual/visual.cpp
+  compiled_visual_test.cpp)
+target_link_libraries(compiled_visual_test PRIVATE
+  common_lib trance_options SFML::Graphics OpenGL::GL)
+add_test(NAME compiled_visual_test COMMAND compiled_visual_test)
 
 # Playlist stack machine test. Headless but links common_lib for the proto types the
 # playlist map is made of.

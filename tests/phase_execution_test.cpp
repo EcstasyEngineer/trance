@@ -207,6 +207,126 @@ pattern scene for 192f seq {
           "phase exit truncates its nested sequence at the parent boundary");
 }
 
+void bounded_pattern_clocks()
+{
+  Run run(R"(
+pattern scene for 25f {
+  every 8f -> cut {
+    image primary zoom (curve 0 -> 1)
+    draw cur zoom (curve 0 -> 1 over scene)
+  }
+})");
+  run.compile();
+  require(run.root->length() == 25, "a pattern's declared span owns its partial final cut");
+  for (run.frame = 0; run.frame < 50; ++run.frame) {
+    run.root->advance();
+    const auto zooms = run.visible_zooms();
+    require(zooms.size() == 2, "named pattern and cadence clocks both remain addressable");
+    const auto local = run.frame % 25;
+    close(zooms[0], double(local % 8) / 8, "cut clock resets at the owning pattern boundary");
+    close(zooms[1], double(local) / 25, "parent clock uses its declared span");
+  }
+  require(run.picks(Slot::Primary) == std::vector<uint32_t>({0, 8, 16, 24, 25, 33, 41, 49}),
+          "partial final cuts are truncated and restart with their pattern");
+
+  Run single(R"(
+pattern outer for 25f {
+  pattern inner for 8f { image primary zoom (curve 0 -> 1) }
+})");
+  single.compile();
+  require(single.root->length() == 25, "a sole child cannot replace its owner's duration");
+  for (single.frame = 0; single.frame < 25; ++single.frame) {
+    single.root->advance();
+    const auto zooms = single.visible_zooms();
+    require(zooms.size() == 1, "a sole nested pattern keeps its own active clock id");
+    close(zooms.front(), double(single.frame % 8) / 8, "sole child keeps its local clock");
+  }
+
+  Run long_cut("pattern scene for 5f { every 8f { image primary } }");
+  long_cut.compile();
+  for (long_cut.frame = 0; long_cut.frame < 11; ++long_cut.frame) long_cut.root->advance();
+  require(long_cut.root->length() == 5
+              && long_cut.picks(Slot::Primary) == std::vector<uint32_t>({0, 5, 10}),
+          "a cadence longer than its owner is one partial cut, never a zero-count repeat");
+
+  Run sequence(R"(
+pattern scene for 16f seq {
+  pattern first for 8f { image primary zoom [scene.index] }
+  pattern second for 8f { image secondary zoom [scene.index] }
+})");
+  sequence.compile();
+  for (sequence.frame = 0; sequence.frame < 32; ++sequence.frame) {
+    sequence.root->advance();
+    const auto zooms = sequence.visible_zooms();
+    require(zooms.size() == 1, "only the running sequence child is visible");
+    close(zooms.front(), double((sequence.frame % 16) / 8),
+          "a named seq pattern retains its active child index across repetitions");
+  }
+
+  Run parent_index(R"(
+pattern scene for 16f {
+  burst period 4f chance 1/1 duration 8f {
+    base { image primary zoom [scene.index] }
+    burst { image secondary zoom [scene.index] }
+  }
+})");
+  parent_index.compile();
+  parent_index.root->advance();
+  close(parent_index.visible_zooms().front(), 0,
+        "an ordinary pattern does not inherit its sole child's burst-state index");
+}
+
+void nested_cadence_ownership()
+{
+  Run run(R"(
+pattern scene for 64f {
+  every 16f {
+    every 6f { image primary zoom (curve 0 -> 1) }
+    draw cur zoom [this.frame]
+  }
+})");
+  run.compile();
+  require(run.root->length() == 64, "nested cadence lengths cannot expand their owner by LCM");
+  for (run.frame = 0; run.frame < 64; ++run.frame) {
+    run.root->advance();
+    const auto zooms = run.visible_zooms();
+    require(zooms.size() == 2, "nested cadence keeps inner and outer draws active together");
+    close(zooms[0], double((run.frame % 16) % 6) / 6, "nested cadence restarts every outer cut");
+    close(zooms[1], double(run.frame % 16), "outer cadence owns its independent clock");
+  }
+  require(run.picks(Slot::Primary)
+              == std::vector<uint32_t>({0, 6, 12, 16, 22, 28, 32, 38, 44, 48, 54, 60}),
+          "a cadence body belongs to each occurrence, not a parallel sibling schedule");
+
+  Run ramp(R"(
+pattern scene for 24f {
+  every ramp 8f -> 4f steps 2 {
+    every 6f { image primary }
+  }
+})");
+  ramp.compile();
+  require(ramp.root->length() == 24, "nested ramp bodies retain sampled segment lengths");
+  for (ramp.frame = 0; ramp.frame < 48; ++ramp.frame) ramp.root->advance();
+  // Midpoint sampling scales the two segments to 14f and 10f.
+  require(ramp.picks(Slot::Primary) == std::vector<uint32_t>({0, 6, 12, 14, 20, 24, 30, 36, 38, 44}),
+          "ramp segments own and truncate nested cadences");
+
+  Run interrupts(R"(
+pattern scene for 32f {
+  every 16f {
+    burst period 4f chance 1/1 cooldown 4f duration 8f {
+      base { image primary }
+      burst { image secondary }
+    }
+  }
+})");
+  interrupts.compile();
+  for (interrupts.frame = 0; interrupts.frame < 32; ++interrupts.frame) interrupts.root->advance();
+  require(interrupts.picks(Slot::Secondary) == std::vector<uint32_t>({0, 12, 16, 28})
+              && interrupts.picks(Slot::Primary) == std::vector<uint32_t>({8, 24}),
+          "each cadence resets a nested burst's state even when its last burst is truncated");
+}
+
 void sampled_durations()
 {
   get_mersenne_twister().seed(2026);
@@ -284,6 +404,21 @@ void validation()
           "a fixed-duration burst supports a compile-time ramp");
   require(patternv3::parse(source("", "pattern cuts for 24f { " + ramp + " }")).ok,
           "a timed child makes a ramp well-defined inside a sampled phase");
+  require(!patternv3::parse("pattern scene for 8f loop 0 {}").ok,
+          "a zero loop count cannot silently become one iteration");
+  require(!patternv3::parse("pattern scene for 2147483648f loop 2 {}").ok,
+          "a repeated pattern duration cannot overflow the counter width");
+  const std::string nested = "burst -> inner period 4f duration 8f { base {} "
+      "burst { image primary zoom (curve 0 -> 1 over inner) } }";
+  require(!patternv3::parse(source(nested, "")).ok,
+          "a controller nested in an indefinite base cannot invent a normalized lifetime");
+  require(!patternv3::parse(source("", nested)).ok,
+          "a controller nested in a sampled phase cannot substitute its static maximum length");
+  require(patternv3::parse(source("", nested, "24f")).ok,
+          "a controller inside a fixed-duration phase has a valid normalized enclosing span");
+  require(patternv3::parse(source("", "burst -> inner period 4f duration 8f { base {} "
+      "burst { image primary zoom [inner.frame] draw cur zoom (curve 0 -> 1 over scene) } }")).ok,
+          "nested controllers retain elapsed time and explicit parent-clock access");
 }
 
 pattern::Node* burst_node(pattern::Node& node)
@@ -328,6 +463,8 @@ int main()
     }
     entry_order_and_reset();
     nested_sequence_and_parent();
+    bounded_pattern_clocks();
+    nested_cadence_ownership();
     sampled_durations();
     validation();
     super_fast(8);

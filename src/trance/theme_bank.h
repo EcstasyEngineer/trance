@@ -109,18 +109,17 @@ public:
   // Enforcing that here rather than in the grammar is deliberate -- a pattern asks for
   // the LOOK it wants, and which of the two a given folder happens to hold is not
   // something the pattern author can know.
-  Image get_image(bool alternate);
+  // Optional provenance distinguishes a fresh pick from a drawable last-good fallback.
+  Image get_image(bool alternate, bool* from_current_theme = nullptr);
   Image get_animation(bool alternate);
   // A pick from this lane's CURRENT theme only -- a resident still, or the live
   // animation frame -- with NO last-good fallback. Empty when the theme genuinely has
   // nothing to give at this instant (nothing resident yet, or a transient selection
   // miss).
   //
-  // This exists because get_image cannot answer "did this come from the theme that is on
-  // the lane NOW?". Its never-black fallback returns the PREVIOUS theme's frame, and
-  // Image::operator bool() cannot tell the two apart -- so a caller refreshing stale
-  // content would accept the stale frame as fresh and stop retrying, which is exactly
-  // the bug it set out to fix.
+  // A refresh must not accept the previous theme's last-good frame as fresh.
+  // Image::operator bool() only says drawable, so use this no-fallback method or
+  // get_image's explicit provenance when deciding whether to mark a capture current.
   Image get_current_theme_image(bool alternate);
   // Bumped whenever the theme occupying this lane changes. The single question a holder
   // of a captured Image needs answered: "is what I am holding still from the theme that
@@ -171,6 +170,7 @@ public:
       // perfectly healthy -- which is exactly what a reader took for "nothing loaded,
       // hence the black screen", so the count has to be on screen next to the ratio.
       uint32_t animations;
+      uint32_t failed;
     };
     std::array<Slot, 4> slots;
     std::vector<std::pair<std::string, uint32_t>> enabled_weights;
@@ -275,6 +275,10 @@ private:
     // another theme's content. See do_load_animation.
     std::unordered_set<std::size_t> image_members;
     std::unordered_set<std::size_t> animation_members;
+    // Undecoded or healthy images. Failed files consume neither a resident cache slot
+    // nor a load target; atomic because the render thread gates theme swaps on it.
+    std::atomic<std::size_t> available_size{0};
+    std::vector<std::size_t> tier_failed_count;
   };
 
   // Data for each possible image.

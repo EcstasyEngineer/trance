@@ -336,7 +336,7 @@ namespace
   bool is_audio_file(const std::string& path)
   {
     return ext_is(path, "wav") || ext_is(path, "ogg") || ext_is(path, "flac") ||
-        ext_is(path, "aiff");
+        ext_is(path, "aiff") || ext_is(path, "mp3");
   }
 
   bool is_scan_ignored(const std::filesystem::path& relative_path)
@@ -348,6 +348,15 @@ namespace
     auto rel_str = relative_path.string();
     if (ext_is(rel_str, "json") || ext_is(rel_str, "session") || ext_is(rel_str, "pattern") ||
         ext_is(rel_str, "cfg") || ext_is(rel_str, "trance")) {
+      return true;
+    }
+    // These are known non-images, not unknown still-image extensions. Only GIF and
+    // VP8/VP9 WebM video are supported; sending MP4/MOV to the still decoder makes
+    // video-only folders look drawable and admits them to the visual theme rotation.
+    if (ext_is(rel_str, "mp4") || ext_is(rel_str, "mov") || ext_is(rel_str, "m4v") ||
+        ext_is(rel_str, "mkv") || ext_is(rel_str, "avi") || ext_is(rel_str, "wmv") ||
+        ext_is(rel_str, "mpg") || ext_is(rel_str, "mpeg") || ext_is(rel_str, "md") ||
+        ext_is(rel_str, "markdown")) {
       return true;
     }
     // Hidden files and anything under a dotted directory (.git, .DS_Store): never content.

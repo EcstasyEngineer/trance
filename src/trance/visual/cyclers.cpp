@@ -426,8 +426,8 @@ void OffsetCycler::advance_to_offset()
 }
 
 PhaseCycler::PhaseCycler(uint32_t length, std::function<void()> entry,
-                         std::vector<Cycler*> children)
-: _length{length}, _entry{std::move(entry)}
+                         std::vector<Cycler*> children, bool sequence)
+: _length{length}, _sequence{sequence}, _entry{std::move(entry)}
 {
   for (auto* child : children) _children.emplace_back(child);
   activate(false);
@@ -435,6 +435,10 @@ PhaseCycler::PhaseCycler(uint32_t length, std::function<void()> entry,
 
 uint32_t PhaseCycler::length() const { return _length; }
 uint32_t PhaseCycler::position() const { return _position; }
+uint32_t PhaseCycler::index() const
+{
+  return _sequence && !_children.empty() ? _children.front()->index() : 0;
+}
 
 void PhaseCycler::reset()
 {
@@ -460,7 +464,7 @@ void PhaseCycler::advance(bool trigger_actions)
 {
   // The owner schedules advancement. active() describes the last rendered frame
   // and may still be false when a sequence hands execution to this phase.
-  if (complete()) return;
+  if (complete()) restart(_length);
   if (trigger_actions && !_position && _entry) _entry();
   for (auto& child : _children) child->advance(trigger_actions);
   ++_position;

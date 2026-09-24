@@ -1,108 +1,96 @@
 # Runtime controls
 
-All the ways to control a running `trance` player. Implementation: in-window keys in
-`handle_events()` (`src/trance/main.cpp`); everything global lives in
-`src/trance/platform/system_control.{h,cpp}`.
-
-## In-window keys
-
-Work while the trance window has focus (realtime mode):
+## Window keys and F2
 
 | Key | Action |
 |---|---|
-| **Escape** | Quit trance |
-| **F2** | Toggle the in-app control panel (ImGui) |
-| **F1** | Toggle the debug overlay (visual/cycler/theme state) |
+| **Escape** | Quit; in an ImGui text edit, cancel the edit instead. |
+| **F2** | Toggle the control panel. |
+| **F1** | Toggle visual, cycler, and theme diagnostics. |
+| **M** | Toggle global audio mute. |
 
-| **M** | Toggle audio mute |
+These keys require focus. Closing the window, F2 **Quit trance**, and Windows
+tray **Quit** also exit.
 
-Escape quits outright; the other ways out are closing the window, the tray menu's
-**Quit**, and the control panel's **Quit trance** button. While a control-panel text
-field is being edited, Escape cancels that edit instead of quitting.
+If F2 opens but neither hover nor clicks respond, Alt-Tab away and back is the
+known workaround for [the startup focus issue](https://github.com/EcstasyEngineer/trance/issues/54).
+The UI reconciles its input focus with the window to repair stale backend state.
 
-The F1 overlay's THEMES block reads `<loaded>/<total> img  <n> anim` per slot. Stills are
-cached, so they have a loaded/total ratio; gifs are streamed on demand and have no such
-ratio, which is why they are counted separately. **`0/0 img  17 anim` is a healthy folder
-of gifs, not an empty theme** — a theme draws whichever kind it has, so an all-gif theme
-serves `image` draws from its gifs and a stills-only theme serves `anim` draws from its
-stills.
+F2 writes committed session edits to the loaded file. System/display settings go
+to `system.json`; **System → Export** writes a session copy. **Windowed** takes
+effect on the next launch; eye spacing applies live.
 
-Every edit made in the F2 panel is saved as you make it — visual/theme weights, colours,
-pattern text and the entrainment bed go back to the loaded session file, window and
-display settings to `system.json`. There is no Save button; **System → Export** writes a
-copy of the session somewhere else and leaves the live file alone.
+Theme media rows preview stills on hover; animation rows are labeled. Runtime
+theme solos appear with a **runtime solo (not saved)** banner. F1 reports
+loaded/total stills, failed image decodes, and animation counts separately:
+`0/0 img 0 failed 17 anim` can be a valid animation-only theme.
 
-In **Themes**, hovering a media row shows a thumbnail of that file, so deciding what to
-un-tick doesn't mean alt-tabbing to a file browser to find out what `1364097724285.jpg`
-is. Animations (`webm`/`gif`) are labelled rather than decoded — the streamers that read
-them are busy serving the show. Previews load on hover only, one per frame, and at most a
-couple of dozen are kept in memory at a time, so a theme of several thousand images costs
-nothing until a row is actually pointed at.
+F1/F2 render on the desktop with OpenXR attached, never in the headset.
+See [OpenXR output](spec-xr-unified.md).
 
-The panel is available on **every** run, including while a headset is playing: it is
-drawn in the desktop pass only (as is the F1 overlay), so it never appears in the
-headset, and its edits apply live to both outputs. There is no renderer setting to find
-in it — VR output is automatic and unconfigurable; see the README's
-[VR setup](../README.md#vr-setup) section. The **eye spacing** slider is the one
-VR-related control, and it is always live. **System → windowed** persists to
-`system.json` immediately but only takes effect on the next launch.
+## Global hide/show: Shift+F11
 
-## Global hide-everything hotkey — Shift+F11
+On Windows and X11, Shift+F11 works while another application has focus.
 
-Registered system-wide (Win32 `RegisterHotKey` on Windows, `XGrabKey` on X11), so it
-works **no matter which application has focus** — including when the trance window is a
-click-through overlay that can't receive input at all.
+- First press hides, pauses, and mutes.
+- Next press restores visibility and the requested pause/mute state.
+- Explicit pause/resume or mute commands while hidden change what show restores.
+- Hiding clears overlay mode, making the restored window interactive.
 
-- **First press** — hide everything instantly: window invisible, playback paused,
-  audio muted. The process stays alive (tray icon, hotkey, command channel).
-- **Next press** — restore: window visible again, with the pause/mute state from
-  before the hide brought back (a pause/resume explicitly commanded *while* hidden —
-  tray or command channel — updates what gets restored; playback itself stays idle
-  until the window is shown again). It never quits — with one exception: in hotkey-only
-  configurations with no other quit surface (Linux fullscreen when the ImGui panel failed
-  to initialise — no tray, no panel), a press while already hidden quits instead of
-  restoring, so an orderly exit always exists.
+The process stays alive. Registration failure is reported at startup.
+In the hotkey-only case with no tray or usable panel, a press while already
+hidden quits instead of restoring, preserving an exit route.
 
-Holding the key fires once, not an autorepeat stream. If registration fails (another
-app owns the combination), a warning is printed at startup and the tray menu is the
-fallback.
+`--hidden` starts hidden. `--muted` separately requests mute that survives show.
 
-## System tray icon (Windows)
+## Windows tray
 
-A tray icon appears for every realtime run. Its menu mirrors the runtime controls:
+The menu provides Hide/Show, Overlay, opacity changes, Paused, Show control panel,
+and Quit. **Show control panel** shows the window and clears click-through mode
+so the panel can receive input. Linux has the global hotkey but no tray.
 
-- **Hide everything / Show** (Shift+F11) — drives the same hidden state as the hotkey
-  above; the item performs exactly the action its label names (an explicit hide or
-  show, not a blind toggle — so a menu left open across a state change can't invert
-  your intent)
-- **Overlay** — toggle the click-through overlay (checkmark shows live state)
-- **Overlay opacity + / −** — nudge the live overlay opacity in 0.1 steps (clamped
-  to 0..1)
-- **Paused** — toggle playback pause (checkmark shows live state)
-- **Show control panel** — bring up the F2 panel (disengages the overlay and un-hides
-  first — a click-through or invisible window can't host an interactive panel)
-- **Quit**
+## Overlay
 
-No Linux tray yet; X11 gets the global hotkey, which is the safety-critical half.
+`--overlay` or runtime overlay controls make the window click-through,
+translucent, and always on top. Its own keys cannot reach it. Use:
 
-## Overlay mode — the escape routes
+- **Shift+F11:** hide; showing again clears overlay.
+- **Windows tray:** turn Overlay off, open the panel, or quit.
+- **Command/MCP:** `overlay off`, `ui on`, or `hide`.
+- **Ctrl+C:** orderly shutdown when launched with `--overlay` from a terminal.
 
-With the overlay engaged (`--overlay`, or toggled at runtime), the window is
-click-through **by design**: no in-window key — not even Escape or F2 — can reach it.
-Every way out lives outside the window:
+`--overlay_opacity=0.35` sets initial whole-window opacity (0–1).
 
-- **Shift+F11** — the global hide-everything toggle (window hidden + paused + muted;
-  hiding also clears the click-through state, so the restored window is interactive)
-- the **tray icon** menu (Windows) — Quit lives here
-- the **command channel** (`stop`, `overlay off`, `hide`/`show`, … — see below)
-- **Ctrl+C** in the launching terminal (SIGINT/SIGTERM are handled cleanly)
+## External control
 
-## Command channel
+`--command_port=9191` opens TCP on `127.0.0.1`; `--mcp` exposes the same
+actions as stdio tools. See the [command reference](spec-mcp-ambient-daemon.md)
+and [MCP setup](mcp-install.md).
 
-`--command_port <port>` opens a line-protocol control socket (start/stop, pause,
-overlay on/off/opacity, hide/show, status, screenshot, …). The verb reference is in
-[spec-mcp-ambient-daemon.md](spec-mcp-ambient-daemon.md).
+There is no `start`/`stop` or live session-loading command. Use
+`pause`/`resume`, or `hide`/`show` for visibility and silence together.
 
-`--mcp` (beta) serves the same verbs as MCP tools on the process's own stdin/stdout,
-for launch by an MCP host such as Claude Desktop or Claude Code — no sidecar process.
-Setup and tool reference: [mcp-install.md](mcp-install.md).
+## Console progress
+
+Playback appends a line when a pattern traversal begins, a named section changes
+or restarts, or the primary/secondary theme lanes change. Section paths retain
+their nesting, with local position and length in content frames:
+
+```text
+themes: primary="Landscape" secondary="Abstract"
+pattern scene #1: scene 1/120f | scene/slow 1/60f
+  phase scene #1: scene 61/120f | scene/fast 1/60f
+```
+
+The traversal number counts starts during this run. Up to eight active named
+sections appear per line. Rapid pattern/section events are coalesced to at most
+four progress lines per second, with counts of the intervening traversals and
+transitions; these lines are a playback summary, not a complete event trace.
+Theme changes are reported separately. No per-frame progress redraw is performed.
+
+These records go to stderr, keeping MCP's JSON on stdout. Lines append rather
+than overwrite the console, preserving media errors, XR diagnostics, and useful
+redirected logs. F1 supplies the continuously updated schedule view.
+
+Implementation: [main.cpp](../src/trance/main.cpp),
+[system_control.cpp](../src/trance/platform/system_control.cpp).

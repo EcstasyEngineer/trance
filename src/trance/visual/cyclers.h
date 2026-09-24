@@ -255,15 +255,17 @@ private:
   uint32_t _position;
 };
 
-// A timed activation. Entry effects fire once; child clocks run only while this
-// phase is advanced. The owner supplies the duration on each restart, so a curve
-// sees the sampled lifetime through the ordinary frame/progress interface.
+// A timed occurrence. Entry effects fire once; child clocks run only while this
+// occurrence advances and reset at its boundary. Patterns/cadences use a fixed
+// length; a burst owner supplies a newly sampled duration on restart.
 class PhaseCycler : public Cycler
 {
 public:
-  PhaseCycler(uint32_t length, std::function<void()> entry, std::vector<Cycler*> children);
+  PhaseCycler(uint32_t length, std::function<void()> entry, std::vector<Cycler*> children,
+              bool sequence = false);
   uint32_t length() const override;
   uint32_t position() const override;
+  uint32_t index() const override;
   void reset() override;
   void restart(uint32_t length);
   void advance(bool trigger_actions = true) override;
@@ -274,6 +276,7 @@ public:
 private:
   uint32_t _length;
   uint32_t _position = 0;
+  bool _sequence;
   std::function<void()> _entry;
   std::vector<std::unique_ptr<Cycler>> _children;
 };

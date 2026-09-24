@@ -242,6 +242,22 @@ XrProbe::XrProbe()
 , _probe_started{}
 , _state{State::Unknown}
 {
+#ifdef _WIN32
+  // The loader prints errors independently of our state-change diagnostics. A
+  // registered runtime without a headset can fail xrCreateInstance on every
+  // probe, flooding stderr even though set_state() reports the failure once.
+  // Configure its supported logging control before the first OpenXR call; it
+  // is read once when the loader's logger is created. Keep an explicit user
+  // setting for troubleshooting, and leave stdout/stderr themselves untouched.
+  SetLastError(ERROR_SUCCESS);
+  if (GetEnvironmentVariableW(L"XR_LOADER_DEBUG", nullptr, 0) == 0 &&
+      GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
+    if (!SetEnvironmentVariableW(L"XR_LOADER_DEBUG", L"none")) {
+      std::cerr << "could not disable repetitive OpenXR loader diagnostics (Windows error "
+                << GetLastError() << ")" << std::endl;
+    }
+  }
+#endif
 }
 
 XrProbe::~XrProbe()

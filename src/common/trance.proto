@@ -31,8 +31,8 @@ message ExportSettings {
 message System {
   // Field 2 was `Renderer renderer`. There is no renderer choice any more: there is one
   // desktop renderer, and XR output is attempted automatically (docs/spec-xr-unified.md
-  // D2). Reserved so the number is never reused, not as a migration hook -- the JSON
-  // layer has no "renderer" key at all and a config carrying one regenerates.
+  // D2). Reserved so the number is never reused. The JSON loader accepts and drops
+  // the obsolete key while preserving the rest of an existing system config.
   reserved 2;
 
   // Enable vsync to eliminate tearing, but can cause stuttering.

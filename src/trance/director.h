@@ -2,6 +2,7 @@
 #define TRANCE_SRC_TRANCE_DIRECTOR_H
 #include <trance/render/render.h>
 #include <trance/visual/pattern_ast.h>
+#include <chrono>
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -21,6 +22,7 @@ namespace trance_pb
 }
 
 class Audio;
+class Cycler;
 class Font;
 class Image;
 class ThemeBank;
@@ -136,6 +138,9 @@ public:
 
 private:
   void change_visual(uint32_t length);
+  void select_visual(uint32_t length);
+  void cache_progress_nodes(const Cycler* clock, const std::string& parent);
+  void log_playback_state();
   // (Re)parse the program's custom_visual_pattern sources into _custom_patterns,
   // skipping (with a warning) any that fail to parse. Called when the program changes.
   void rebuild_custom_patterns();
@@ -171,6 +176,25 @@ private:
 
   std::uint32_t _last_visual_selection;
   std::unique_ptr<Visual> _visual;
+
+  // Cache the named schedule nodes once per compiled visual, avoiding children()
+  // allocations and path formatting in the content-tick loop. Console output is
+  // append-only so asynchronous media/XR errors and redirected logs remain intact.
+  struct ProgressNode {
+    const Cycler* clock;
+    std::string path;
+    bool active = false;
+    uint32_t position = 0;
+  };
+  std::vector<ProgressNode> _progress_nodes;
+  std::string _progress_name;
+  bool _progress_new_traversal = false;
+  uint64_t _progress_traversal = 0;
+  uint32_t _progress_pending_traversals = 0;
+  uint32_t _progress_pending_transitions = 0;
+  std::chrono::steady_clock::time_point _next_progress_log{};
+  bool _progress_themes_seen = false;
+  uint32_t _progress_theme_generations[2] = {0, 0};
 
   // Set by force_builtin_visual / force_pattern_from_source (--visual / --pattern in
   // main.cpp). When set, change_visual() skips the weighted shuffle entirely and always

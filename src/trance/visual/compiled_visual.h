@@ -8,11 +8,9 @@
 
 class VisualControl;
 
-// A Visual built at runtime from a compiled pattern AST (Framing B). The pattern's
-// effects write named image registers; a named render preset reads them and the
-// live cycler state. This is the bridge that lets an authored .session pattern play
-// through the same path as the hardcoded visuals -- and, because the compiled tree
-// carries the same phase/image annotations, it drives the F1 overlay for free.
+// A Visual built from a parsed pattern. Scheduled effects update runtime state;
+// render statements read that state and the live clocks. Built-ins and session
+// patterns share this path, including the tree annotations used by the F1 overlay.
 class CompiledVisual : public Visual
 {
 public:
@@ -29,10 +27,10 @@ private:
   void refresh_stale_registers(VisualControl& api);
 
   // Named image registers an Image effect writes (e.g. "current"); read by the render
-  // preset. Stable for the lifetime of the visual so the cycler's action lambdas can
+  // block. Stable for the lifetime of the visual so the cycler's action lambdas can
   // write into it.
   pattern::Registers _registers;
-  // id -> compiled node, so the render preset can read named cycler state.
+  // id -> compiled node, so render expressions can read named cycler state.
   pattern::NodeMap _node_map;
 };
 

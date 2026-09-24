@@ -157,6 +157,7 @@ ThemeBank::ThemeBank(const std::string& root_path, const trance_pb::Session& ses
                                        {static_cast<std::size_t>(theme.text_line().size())}});
     ThemeInfo& theme_info = *_themes.back();
     theme_info.name = pair.first;
+    theme_info.available_size = images.size();
     // Fonts and audio alone put nothing on screen, so they don't count. See set_program:
     // a theme that can't draw is kept out of the rotation entirely.
     theme_info.drawable =
@@ -210,6 +211,7 @@ ThemeBank::ThemeBank(const std::string& root_path, const trance_pb::Session& ses
           theme_info.tier_sources.push_back(tier.first);
           theme_info.tier_weights.push_back(1);
           theme_info.tier_loaded_count.push_back(0);
+          theme_info.tier_failed_count.push_back(0);
           theme_info.tier_members.push_back(std::move(members));
         }
       }
@@ -220,6 +222,7 @@ ThemeBank::ThemeBank(const std::string& root_path, const trance_pb::Session& ses
         theme_info.tier_sources.clear();
         theme_info.tier_weights.clear();
         theme_info.tier_loaded_count.clear();
+        theme_info.tier_failed_count.clear();
         theme_info.tier_members.clear();
       }
     }
@@ -279,10 +282,12 @@ ThemeBank::DebugSnapshot ThemeBank::debug_snapshot() const
       slot.loaded = uint32_t(theme->loaded_size.load());
       slot.total = uint32_t(theme->size);
       slot.animations = uint32_t(theme->animation_members.size());
+      slot.failed = uint32_t(theme->size - theme->available_size.load());
     } else {
       slot.loaded = 0;
       slot.total = 0;
       slot.animations = 0;
+      slot.failed = 0;
     }
   }
   for (const auto& pair : _enabled_theme_weights) {
@@ -493,14 +498,20 @@ void ThemeBank::advance_frames()
   _change_animation = _alt_change_animation = false;
 }
 
-Image ThemeBank::get_image(bool alternate)
+Image ThemeBank::get_image(bool alternate, bool* from_current_theme)
 {
+  if (from_current_theme) {
+    *from_current_theme = false;
+  }
   auto& last_good = _last_good_image[alternate ? 1 : 0];
   // Stills first -- this is the `image` draw -- but a theme made entirely of gifs has
   // none, and get_still_image says so by returning nothing rather than by reaching for
   // another theme's content.
   Image image = get_still_image(alternate);
   if (image) {
+    if (from_current_theme) {
+      *from_current_theme = true;
+    }
     last_good = image;
     return image;
   }
@@ -509,6 +520,9 @@ Image ThemeBank::get_image(bool alternate)
   // ever draw, so it is not a degraded path for those -- it is the path.
   Image frame = get_animation_frame(alternate);
   if (frame) {
+    if (from_current_theme) {
+      *from_current_theme = true;
+    }
     last_good = frame;
     // An `image` pull is a request for a NEW piece of content, and on a stills theme it
     // gets one (the shuffle). Served from the animation lane instead, it used to get
@@ -660,6 +674,14 @@ Image ThemeBank::get_still_image(bool alternate)
     // to, so reject rather than draw another theme's image (last_good repeats below).
     if (!theme.image_members.count(index)) {
       index = static_cast<std::size_t>(-1);
+    }
+    // Recency can lower the last healthy resident below unloaded candidates, especially
+    // in a one-image cache. A miss is not proof that this theme has nothing drawable:
+    // select from its actual resident list before the lane's last-good fallback. This
+    // also protects the first draw on the other lane, which may have no last good yet.
+    if ((index >= _all_images.size() || !_all_images[index].image) &&
+        !theme.loaded_index.empty()) {
+      index = theme.loaded_index[random(theme.loaded_index.size())];
     }
     if (index < _all_images.size() && _all_images[index].image) {
       do_video_upload(*_all_images[index].image);
@@ -938,7 +960,8 @@ void ThemeBank::advance_theme()
 bool ThemeBank::all_loaded() const
 {
   const auto& next_theme = *_active_themes.back().load();
-  return next_theme.loaded_size >= next_theme.size || next_theme.loaded_size >= cache_per_theme();
+  return next_theme.loaded_size >= next_theme.available_size ||
+      next_theme.loaded_size >= cache_per_theme();
 }
 
 bool ThemeBank::all_unloaded() const
@@ -956,11 +979,16 @@ bool ThemeBank::all_unloaded() const
 void ThemeBank::do_swap(std::size_t active_theme_index)
 {
   auto& theme = *_active_themes[active_theme_index].load();
-  if (!theme.loaded_size || theme.loaded_size == theme.size) {
+  if (!theme.loaded_size || theme.loaded_size >= theme.available_size) {
     return;
   }
-  do_unload(theme);
+  // Keep the outgoing resident until a replacement has actually decoded. Failed
+  // files must not punch a one-tick hole in a small cache (or the first draw on a lane).
+  const auto before = theme.loaded_size.load();
   do_load(theme);
+  if (theme.loaded_size > before) {
+    do_unload(theme);
+  }
 }
 
 void ThemeBank::do_reconcile(ThemeInfo& theme)
@@ -975,7 +1003,7 @@ void ThemeBank::do_reconcile(ThemeInfo& theme)
 
 void ThemeBank::do_load(ThemeInfo& theme)
 {
-  if (theme.loaded_size >= theme.size) {
+  if (theme.loaded_size >= theme.available_size) {
     return;
   }
   // Residency is built with the SAME weighted draw get_image selects with. Loading flat
@@ -991,7 +1019,8 @@ void ThemeBank::do_load(ThemeInfo& theme)
     std::lock_guard<std::mutex> lock{theme.load_mutex};
     std::vector<char> eligible(theme.tier_load_shufflers.size());
     for (std::size_t t = 0; t < eligible.size(); ++t) {
-      eligible[t] = theme.tier_loaded_count[t] < theme.tier_members[t].size() ? 1 : 0;
+      eligible[t] = theme.tier_loaded_count[t] <
+          theme.tier_members[t].size() - theme.tier_failed_count[t] ? 1 : 0;
     }
     auto tier = weighted_tier(theme.tier_weights, eligible);
     if (tier != static_cast<std::size_t>(-1)) {
@@ -1001,19 +1030,10 @@ void ThemeBank::do_load(ThemeInfo& theme)
   if (index >= _all_images.size()) {
     index = theme.load_shuffler.next();
   }
-  theme.load_shuffler.decrease(index);
-  for (std::size_t t = 0; t < theme.tier_load_shufflers.size(); ++t) {
-    if (theme.tier_members[t].count(index)) {
-      theme.tier_load_shufflers[t].decrease(index);
-      ++theme.tier_loaded_count[t];
-    }
-  }
-  theme.loaded_index.emplace_back(index);
-
   auto& image = _all_images[index];
   // Could store spare capacity due to duplicated images and load more. Might
   // get a bit confusing though.
-  if (!image.use_count++ && !image.failed) {
+  if (!image.use_count && !image.failed) {
     image.image.reset(new Image{load_image(_root_path + "/" + image.path)});
     if (!*image.image) {
       // Mark it dead: never retry the file, and never put the blank image in
@@ -1024,6 +1044,10 @@ void ThemeBank::do_load(ThemeInfo& theme)
       image.failed = true;
       image.image.reset();
       for (auto& other_theme : _themes) {
+        if (!other_theme->image_members.count(index)) {
+          continue;
+        }
+        --other_theme->available_size;
         other_theme->load_shuffler.modify(index, -static_cast<int32_t>(last_image_count));
         std::lock_guard<std::mutex> lock{other_theme->load_mutex};
         other_theme->image_shuffler.modify(index, -static_cast<int32_t>(last_image_count));
@@ -1032,6 +1056,7 @@ void ThemeBank::do_load(ThemeInfo& theme)
         // and one left holding it on the LOAD side keeps spending cache slots on it.
         for (std::size_t t = 0; t < other_theme->tier_shufflers.size(); ++t) {
           if (other_theme->tier_members[t].count(index)) {
+            ++other_theme->tier_failed_count[t];
             other_theme->tier_shufflers[t].modify(index, -static_cast<int32_t>(last_image_count));
             other_theme->tier_load_shufflers[t].modify(index,
                                                        -static_cast<int32_t>(last_image_count));
@@ -1040,8 +1065,20 @@ void ThemeBank::do_load(ThemeInfo& theme)
       }
     }
   }
+  if (image.failed) {
+    return;
+  }
+  ++image.use_count;
+  theme.load_shuffler.decrease(index);
+  for (std::size_t t = 0; t < theme.tier_load_shufflers.size(); ++t) {
+    if (theme.tier_members[t].count(index)) {
+      theme.tier_load_shufflers[t].decrease(index);
+      ++theme.tier_loaded_count[t];
+    }
+  }
   if (!image.failed) {
     std::lock_guard<std::mutex> lock{theme.load_mutex};
+    theme.loaded_index.emplace_back(index);
     theme.image_shuffler.increase(index);
     // Tier shufflers must track residency exactly as the flat one does. The whole scheme
     // rests on a LOADED image sitting one priority level above an unloaded one, so that
@@ -1055,9 +1092,8 @@ void ThemeBank::do_load(ThemeInfo& theme)
       }
     }
   }
-  // Failed loads still count towards loaded_size/loaded_index so the theme-swap
-  // bookkeeping (all_loaded / do_unload) stays symmetric; they just never
-  // become drawable.
+  // Only successful loads occupy the cache. A failed attempt reduced available_size,
+  // so startup and preloading continue until the cache is useful or the pool exhausted.
   ++theme.loaded_size;
 }
 
@@ -1079,11 +1115,10 @@ void ThemeBank::do_unload(ThemeInfo& theme)
       }
     }
   }
-  theme.loaded_index.erase(theme.loaded_index.begin());
-
   auto& image = _all_images[index];
   if (!image.failed) {
     std::lock_guard<std::mutex> lock{theme.load_mutex};
+    theme.loaded_index.erase(theme.loaded_index.begin());
     theme.image_shuffler.decrease(index);
     // Mirror of the increase in do_load -- an unloaded image drops back below the loaded
     // ones so the tier stops offering it.

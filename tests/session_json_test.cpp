@@ -359,21 +359,32 @@ namespace
     check(reloaded.last_session_map().at("deep.session.json").variable_map().at("Mode") == "Deep",
           "LastSession wrapper flattens to a direct string->string map");
 
-    // The deleted `renderer` key got NO back-compat allow-list entry
-    // (docs/spec-xr-unified.md D2): an old config carrying it must fail the load and
-    // regenerate, not be quietly tolerated. Catches exactly the well-meaning re-add.
+    // Retiring renderer selection must not reset unrelated settings on upgrade.
     auto legacy_key_path = (root / "old-system.json").string();
     {
       std::ofstream f{legacy_key_path};
-      f << R"({"format":"trance-system","format_version":1,"renderer":"openvr"})";
+      f << R"({"format":"trance-system","format_version":1,"renderer":"openvr",)"
+           R"("windowed":true,"image_cache_size":128,"draw_depth":0.75,)"
+           R"("last_session_map":{"deep.session.json":{"Mode":"Deep"}}})";
     }
-    bool renderer_key_threw = false;
+    auto migrated = load_system_json(legacy_key_path);
+    check(migrated.windowed() && migrated.image_cache_size() == 128 &&
+              std::abs(migrated.draw_depth().draw_depth() - .75f) < 1e-6f &&
+              migrated.last_session_map().at("deep.session.json").variable_map().at("Mode") ==
+                  "Deep",
+          "obsolete renderer selection is ignored while existing settings survive");
+    save_system_json(migrated, legacy_key_path);
+    check(read_file(legacy_key_path).find("\"renderer\"") == std::string::npos,
+          "the obsolete renderer key is omitted on the next save");
+    write_file(root / "unknown-system.json",
+               R"({"format":"trance-system","format_version":1,"renderer_typo":"openvr"})");
+    bool unknown_key_threw = false;
     try {
-      load_system_json(legacy_key_path);
+      load_system_json((root / "unknown-system.json").string());
     } catch (const std::exception&) {
-      renderer_key_threw = true;
+      unknown_key_threw = true;
     }
-    check(renderer_key_threw, "a system.json still carrying \"renderer\" is a load error");
+    check(unknown_key_threw, "renderer migration does not relax other unknown-key checks");
   }
 
   void test_pattern_slug_assigned_on_save_without_sidecar()
@@ -798,6 +809,7 @@ namespace
     auto root = make_scan_session("scan_complete");
     write_file(root / "media" / "lines.txt", "sink deeper now\n\nobey\n");
     write_file(root / "media" / "voice.wav", "not really a wav");
+    write_file(root / "media" / "voice.MP3", "not really an mp3");
 
     SessionJsonSidecar sidecar;
     auto session = load_session_json((root / "s.session.json").string(), root.string(), sidecar);
@@ -817,6 +829,7 @@ namespace
       audio.insert(p);
     }
     check(audio.count("media/voice.wav") == 1, "scanned audio is root-relative theme audio");
+    check(audio.count("media/voice.MP3") == 1, "MP3 is audio, not a failed still image");
   }
 
   // #36: "if it's in the folder, that's the content" -- no extension allowlist. An unknown
@@ -872,6 +885,9 @@ namespace
     write_file(root / "media" / "LICENSE", "junk");
     // ...but a plausible-media extension nobody recognizes is still content (not an allowlist).
     write_file(root / "media" / "odd.xyz", "junk");
+    write_file(root / "media" / "output.mp4", "unsupported video");
+    write_file(root / "media" / "output.MOV", "unsupported video");
+    write_file(root / "media" / "notes.md", "documentation");
 
     SessionJsonSidecar sidecar;
     auto session = load_session_json((root / "s.session.json").string(), root.string(), sidecar);
@@ -893,6 +909,9 @@ namespace
     check(images.count("media/odd.xyz") == 1,
           "an unrecognized-but-real extension is still content (denylist, not allowlist)");
     check(images.count("media/a.png") == 1, "the real image is untouched by the denylist");
+    check(images.count("media/output.mp4") == 0 && images.count("media/output.MOV") == 0,
+          "unsupported video containers never enter the still-image pool");
+    check(images.count("media/notes.md") == 0, "Markdown notes never enter the image pool");
   }
 
   // Legacy migration adopts a folder WHOLESALE, discarding the frozen list -- so it must

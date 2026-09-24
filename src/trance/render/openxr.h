@@ -50,6 +50,8 @@ struct XrProbeVerdict {
 //
 // Logging is state-change-only (D3): a leaf that is still true after 500 probes has still
 // printed exactly once, so a console left running overnight stays readable.
+// The loader's own console logger defaults to off; an explicit XR_LOADER_DEBUG
+// environment setting is preserved for troubleshooting.
 class XrProbe
 {
 public:

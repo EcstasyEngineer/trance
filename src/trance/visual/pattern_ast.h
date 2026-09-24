@@ -4,17 +4,11 @@
 #include <string>
 #include <vector>
 
-// Normalized pattern AST (Framing B IR). A textual pattern parses into this, and
-// the compiler (pattern_compiler.h) lowers it to a Cycler tree. The surface DSL and
-// the .session proto storage are front-ends that ultimately produce a Node tree;
-// keeping the IR separate from both means the compiler and the equivalence tests
-// don't depend on either yet.
-//
-// v0 carries the SCHEDULE (timing structure) plus the debug annotations the F1
-// overlay already understands (phase labels, image-lane slots). Effects are
-// recorded on leaves so intent travels with the schedule, but they are NOT yet
-// lowered to behaviour -- that is the next milestone (registers + VisualControl
-// wiring + action-log equivalence against the live visuals).
+// The v3 parser lowers authored patterns to a schedule tree and render statements.
+// The compiler builds Cyclers; CompiledVisual binds ordered effects to runtime
+// actions and evaluates render expressions against those clocks and registers.
+// Phase nodes own timed occurrences, including nested schedules and entry effects.
+// Debug annotations expose that same tree to the F1 overlay.
 namespace pattern
 {
   // Which of the two live ThemeBank sides a content word selects. `Secondary` is theme 1;
@@ -28,11 +22,10 @@ namespace pattern
   //
   // Beyond the direct VisualControl effects, a small bounded set of "state" effects
   // read/write named *scalar* registers (Registers::scalars). These are the only
-  // mutable state the DSL has -- there are no general variables -- and they exist
-  // solely so the handful of stateful hardcoded visuals (toggles, counters, captured
-  // randoms) can be expressed as data. A `when` guard turns any effect into a
-  // conditional one, comparing a scalar register against a literal; this is the only
-  // conditional in the language.
+  // mutable scalar state in the runtime. The parser generates them for `chance`,
+  // `alternate`, and animation accents; they are not general variables exposed by
+  // the v3 grammar. Guards condition effect execution; render conditions separately
+  // control visibility.
   struct Effect
   {
     enum class Kind {
@@ -141,7 +134,8 @@ namespace pattern
     Slot image_slot = Slot::None;  // set on image-bearing leaves / lanes
     std::string image_label = "img";
 
-    // Action leaf:
+    // Action duration, Phase occurrence duration, or Burst controller span.
+    // Action/Phase effects fire once at occurrence entry.
     uint32_t length = 0;
     std::vector<Effect> effects;
     // Rate divider: run the effects only every Nth time the leaf fires (1 = always).
@@ -151,6 +145,10 @@ namespace pattern
     // Rep: repetitions in `count`. Off: offset frames in `count`. Both lower
     // children[0].
     uint32_t count = 0;
+
+    // Phase created by `pattern ... seq`: expose its ordered body's active index.
+    // Other occurrences retain index 0; they do not inherit a child's burst state.
+    bool sequence = false;
 
     // Phase: owns a bounded activation clock, entry effects and child schedules.
     // Burst owns children[0] (base phase) and children[1] (sampled-duration phase).

@@ -66,13 +66,23 @@ namespace
     switch (e.kind) {
     case K::Image: {
       pattern::Slot slot = resolved_slot(e, regs);
-      regs.images[e.target] = api.get_image(slot == pattern::Slot::Secondary);
+      const bool alternate = slot == pattern::Slot::Secondary;
+      bool from_current_theme = false;
+      Image image = api.get_image(alternate, &from_current_theme);
+      // A not-yet-ready lane must not erase a drawable capture. Keep it until the
+      // current theme produces a replacement, just as refresh does after a swap.
+      if (image || !regs.images[e.target]) {
+        regs.images[e.target] = image;
+      }
       regs.image_slots[e.target] = slot;
       // Stamp the lane generation this was pulled at, so a theme swap can be detected
       // later and the register refreshed rather than left holding a dead theme's frame.
       // Presence of the entry is also what marks the register as a LIVE pull rather than
       // a `copy` snapshot (see Registers::image_gens).
-      regs.image_gens[e.target] = api.lane_generation(slot == pattern::Slot::Secondary);
+      const uint32_t generation = api.lane_generation(alternate);
+      // A last-good fallback is drawable but not current. Leave its stamp behind
+      // so readiness within this same generation triggers another attempt.
+      regs.image_gens[e.target] = from_current_theme ? generation : generation - 1;
       break;
     }
     case K::Text:
@@ -228,7 +238,7 @@ void CompiledVisual::refresh_stale_registers(VisualControl& api)
     }
     const bool alternate = slot->second == pattern::Slot::Secondary;
     const uint32_t generation = api.lane_generation(alternate);
-    if (gen->second == generation) {
+    if (gen->second == generation && entry.second) {
       continue;
     }
     // get_current_theme_image, NOT get_image: get_image's never-black fallback returns

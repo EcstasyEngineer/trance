@@ -81,7 +81,7 @@ namespace
       std::vector<Cycler*> kids;
       compile_children(kids);
       auto entry = make_action ? make_action(n) : std::function<void()>{};
-      c = new PhaseCycler{n.length, std::move(entry), std::move(kids)};
+      c = new PhaseCycler{n.length, std::move(entry), std::move(kids), n.sequence};
       break;
     }
     case Node::Type::Burst: {

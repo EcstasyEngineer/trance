@@ -1,377 +1,129 @@
-# Spec — Trance command channel (in-process, issue #21)
+# Command channel reference
 
-> **Rescoped 2026-07-01, per owner decision.** The previous drafts of this spec framed the
-> daemon around agent-driven "conditioning moments" — a `Moment` proto, a `trigger()`
-> primitive, choreographed timed sequences compiled to transient cycler trees. That framing
-> is off base for this spec's scope. **The daemon is a dumb settings-shaped effector**: a
-> small, fixed verb set that pauses/resumes playback, flips an overlay, hides everything and
-> loads a pattern. It does not choreograph anything, does not know what a "moment" is, and
-> does not read context. Composition and choreography — if anyone
-> wants that — lives entirely in whatever connects to the socket. The in-process command
-> channel decision (localhost TCP, C++ reader thread, no bridge, no auth beyond loopback
-> binding) stands unchanged from the prior rescope; only the verb surface and its framing
-> change here.
+This describes implemented controls. The filename is retained for existing links.
+The application binds one session at startup; commands control that running
+session. There is no live session-swap or command choreography engine.
 
-Trance becomes a **dumb effector**: a run mode whose playback is driven on demand by an
-external controller over a **local socket**, using a **small, fixed verb set**. Trance senses
-nothing and choreographs nothing; it exposes "do X now" verbs. Any
-decision-making — including any agent — lives in whatever connects.
+## 1. Transports
 
-**Scope decisions (unchanged from the prior rescope):** the whole feature lives **in the C++
-app**. There is **no separate bridge process** and **no Python** in the runtime — Python is
-permitted *only* as a test client. The transport is **loopback TCP with no auth and no
-encryption** (it binds `127.0.0.1` only; if you can open a socket to localhost you are already
-on the machine). No token, no TLS, no schema negotiation, no streaming.
+`--command_port=9191` opens TCP on `127.0.0.1`. Default 0 disables the socket.
+Each command is a UTF-8 line; each reply is one line:
 
-This spec is the buildable plan for **v0**.
-
----
-
-## 1. Architecture (one process)
-
-```
-  controller (script / test / MCP server / anything)  --localhost TCP, line text-->  trance (C++)
-                                                                                       |
-                                             reader thread -> mutex queue -> render loop drains 1x/frame
-```
-
-Two things, each hangs off the prior, **both in the trance binary**:
-1. **In-process command channel** (C++) — the keystone: a loopback socket + reader thread.
-2. **Line-oriented plain-text protocol** — a fixed verb set, one command per line, one reply
-   line per command.
-
-No MCP SDK, no bridge, no auth layer, no choreography engine. If MCP-client integration is
-ever wanted, it is a **separate, external thin MCP server** that maps MCP tools onto these
-verbs (§8) — out of this repo's scope, not built here.
-
----
-
-## 2. The command channel (C++) — `src/trance/net/command_channel.{h,cpp}`
-
-The **inverse of the ThemeBank async-loader pattern**: there a worker loads while the render
-thread reads atomics; here a worker *receives* while the render thread *drains a queue*. Same
-threading discipline -> idiomatic.
-
-```cpp
-class CommandChannel {
-public:
-  // Binds 127.0.0.1:<port> and spawns the reader thread. Loopback only; no auth.
-  explicit CommandChannel(uint16_t port);
-  ~CommandChannel();                       // signals stop, joins the reader thread
-
-  struct Command { uint64_t conn_id; std::string line; };
-  // Render-thread only: move out everything received since the last call.
-  std::vector<Command> drain();
-  // Render-thread only: reply on the same connection (one line back per command).
-  void reply(uint64_t conn_id, const std::string& line);
-
-private:
-  void reader_loop();                      // owns the socket; pushes raw lines into _queue
-  std::mutex _mutex;
-  std::vector<Command> _queue;             // guarded by _mutex
-  std::atomic<bool> _running;
-  std::thread _reader;
-  // winsock on Windows (ws2_32, already linked by trance), BSD sockets on Linux.
-};
-```
-
-**Threading invariant (load-bearing):** the reader thread only ever pushes raw lines into the
-mutex-guarded queue. **`Director` is mutated only at the drain point on the render thread** —
-never from the reader thread. This is exactly the ThemeBank discipline (worker side touches
-only its own atomics; the render thread owns the mutations).
-
-**Transport:** TCP on `127.0.0.1` only. No token, no TLS — loopback is the trust boundary.
-Cross-platform, trivial to drive from a test, inspectable with `netcat`. Port comes from a
-launch flag, default off (no socket unless asked). **The flag that shipped is
-`--command_port <port>`** — this spec drafted it as `--listen`; the implementation and all
-user-facing docs use `--command_port`.
-
----
-
-## 3. Protocol — line-oriented plain text
-
-One command per line, one reply line per command. Deliberately not JSON: the verb set is
-small and flat enough that plain text is simpler to parse on the C++ side and trivially
-scriptable from the shell (`echo | nc`, no JSON library needed on the client end).
-
-```
-$ echo "status" | nc -q1 127.0.0.1 9191
-ok visual=spiral_bloom bed=on overlay=off hidden=off uptime=142 themes=nature|nature|space|words
-
-$ echo "overlay opacity 0.6" | nc -q1 127.0.0.1 9191
+```text
+status
+ok visual=super_fast bed=on muted=off overlay=off hidden=off uptime=42 xr=unattached themes=prev|primary|secondary|next themepin=- text=theme
+overlay opacity 0.6
 ok
-
-$ echo "frobnicate" | nc -q1 127.0.0.1 9191
-err unknown verb: frobnicate
+unknown
+err unknown verb: unknown
 ```
 
-Reply grammar: `ok[ <space-separated key=value pairs>]` or `err <message>`. Always exactly
-one line back per command line in. Unknown verb / malformed line -> `err ...`, never a crash,
-never a dropped connection.
+Replies start with `ok` or `err`; successful commands may include a message or
+fields. Free-text names are not JSON-escaped, so treat status as a lightweight
+diagnostic format, not a fully general serialization of arbitrary theme names.
+The socket has no authentication or encryption; loopback is its access boundary.
 
-Parse + dispatch happens in the drain loop (`main.cpp`'s per-frame loop, right after
-`handle_events`).
+`--mcp` provides newline-delimited JSON-RPC over stdin/stdout in the same binary.
+It can coexist with the socket. Logs go to stderr and stdin EOF ends the run.
+See [MCP setup and mapping](mcp-install.md).
 
----
+## 2. Execution and persistence
 
-## 4. Verb set (v0 — this is the whole surface)
+Transport readers queue commands. The main/render thread drains each queue,
+parses and applies commands, then returns replies. Transport threads do not
+mutate playback state or call OpenGL.
 
-Playback lifecycle:
-- **`pause`** — freeze the current frame; program state retained.
-- **`resume`** — un-freeze after `pause`.
+Theme, text, and visual forces are runtime overrides and do not rewrite session
+settings. Bed commands edit the active program in memory but do not initiate
+autosave. **A later F2 save can persist those bed edits**, because it saves the
+same live program.
 
-> **Retired 2026-08-01.** This section used to also list `start` ("begin/resume playback from
-> a stopped state") and `stop` ("halt playback, return to idle"). The distinction was never
-> real: there is no idle state to return to — trance binds one Session at startup and the
-> runtime only freezes and unfreezes — so `start`/`stop` dispatched to the exact same two
-> lines as `resume`/`pause`. Two names for one behaviour is a promise the engine can't keep,
-> so the aliases are gone; `start` and `stop` now answer `err unknown verb`.
+## 3. Shared state rules
 
-Overlay (live, drives issue #27's click-through overlay on the running window):
-- **`overlay on`** / **`overlay off`** — apply/clear the overlay hints at runtime: on makes
-  the window click-through, translucent and always-on-top; off restores a normal window.
-- **`overlay opacity VALUE`** — `VALUE` in `0..1`, clamped; applies live while the overlay
-  is on.
+`hide` and `show` are idempotent. Hide makes the window invisible, pauses all
+playback, mutes audio, and clears overlay. Show restores requested pause/mute
+states; explicit pause/resume and mute commands while hidden update those
+requests. Shift+F11 and the tray use the same hidden state.
 
-Silent running (the hide-everything primitive — **this is the switch an MCP agent flips to
-make trance vanish instantly without killing the process**):
-- **`hide`** — hide everything: the window becomes invisible (`setVisible(false)`), playback
-  pauses, audio mutes; the process — command channel, tray icon, Shift+F11 hotkey — stays
-  alive. Idempotent: `hide` while already hidden is an `ok` no-op.
-- **`show`** — restore: window visible again, and the pause/mute state that existed *before*
-  hiding comes back (a session that was playing unmuted resumes playing unmuted; one that
-  was already paused stays paused). A `pause`/`resume` (or tray Paused
-  toggle) issued *while* hidden updates that restored pause state instead of being
-  discarded — playback stays idle for as long as the window is hidden, and on `show` the
-  last explicitly commanded pause state wins. Idempotent like `hide`.
-- Both verbs are available in **every** mode, including VR: the apply seam pauses and
-  mutes without touching the headset's hidden GL-context helper window, so there is no
-  configuration in which the intent goes unapplied. Contrast `ui`/`screenshot` below, which
-  remain capability-gated because VR genuinely has no flat pass to draw or grab.
-- Same state everywhere: `hide`/`show`, the global **Shift+F11** hotkey, and the tray's
-  Hide-everything/Show item all drive one `hidden` flag reconciled at the main loop's apply
-  seam, so the surfaces can never disagree. Hiding also forces the overlay off (clearing
-  the click-through hints), so no stuck click-through state can survive a hide/show cycle.
-- **Shift+F11 semantics (revised):** the hotkey is now a pure hide/show *toggle* — first
-  press hides everything instantly, next press restores. It no longer shows the control
-  panel and no longer quits on a second press; quitting is the Escape key, the tray's Quit
-  item, the window close button, or the F2 panel's Quit button. One carve-out: in hotkey-only
-  configurations where none of those quit surfaces exist (Linux VR, or Linux fullscreen
-  after a failed ImGui init — no tray, no panel), a press while already hidden quits
-  instead of restoring, so an orderly exit always remains reachable.
+Pause freezes desktop content while leaving UI available. With XR attached,
+pause/hide submits no visual layers while continuing the frame handshake.
+Physical-headset behavior remains subject to [XR acceptance](spec-xr-unified.md).
 
-Loading:
-- **`load pattern FILE`** — load/compile a single v3 pattern file as the active visual.
-  `FILE` is the rest of the line, so an unquoted Windows path with spaces in it works.
-- **`load pattern source V3-SOURCE`** — the same thing from source text carried on the
-  line itself (added 2026-08-12, #59). The engine API underneath was always
-  source-text-in (`Director::force_pattern_from_source`; the FILE verb reads a file to a
-  string and calls exactly this), so this is a wrapper, not engine work. It exists because a
-  controller that is not the trance machine — or that composed a pattern in memory — cannot
-  use the FILE form at all without first materialising a file somewhere trance can see.
-  v3 treats newlines as ordinary whitespace so a one-line source parses as-is; the two
-  characters `\n` are translated to a real newline for the one construct that needs one (a
-  `#` comment, which otherwise swallows the rest of the pattern). Errors return the parser's
-  `line:col` diagnostic and leave the playing visual alone.
-- **`unload pattern`** — release whatever visual is forced (by either `load pattern` form or
-  by `visual`) and return to the program's own schedule: its pin, else the weighted shuffle.
-  Idempotent. Added with the verbs above for a reason the original surface got wrong:
-  `load pattern` shipped with no un-force at all, so a restart was the only way back.
+A theme pin must wait for asynchronous media loading. One runtime-pinned theme
+occupies both live slots, two form the pair, and three or more supply candidates
+for those two slots. F2 shows a runtime solo banner. Text pin replaces the text
+source but adds no text draw to a visual that does not already have one.
 
-Content selection (added 2026-08-12, #59 — the visual side of the surface had *no* runtime
-control, which made a controller that cannot see the screen blind and mute at once):
-- **`themes`** — one line listing every theme in the session as `name:weight`, with markers
-  `*` in the solo set, `+` live on a lane right now, `!` nothing to draw. This is the
-  "what may I pin?" answer; before it, `status`'s four slots were a keyhole view of (in
-  the session that prompted the issue) 43 themes, and the names existed nowhere else a
-  controller could read.
-- **`theme pin NAME[,NAME...]`** / **`theme unpin`** — solo a live set of themes. One name
-  puts that theme on *both* lanes; two names *are* the live pair; three or more lottery
-  among the set for the two slots (the engine still holds exactly two live themes —
-  extra names are the candidate set, not a third lane). Not instant: the bank must load
-  the theme before it can put it on a lane.
-- **`visuals`** — one line listing what `visual` accepts: the built-ins and the active
-  program's custom patterns, as `name:weight` with `*` on the one playing, plus
-  `forced=yes|no` so "the schedule chose this" is distinguishable from "someone pinned it".
-- **`visual NAME`** — runtime twin of the `--visual` flag, extended to the program's custom
-  patterns since both are things `visuals` lists. Released by `unload pattern`.
-- **`text pin WORD[,WORD]`** / **`text unpin`** — every text draw
-  (`word`/`caption`/`subtext`/`line`) serves from the caller's words, round-robin, instead of
-  the themes' text pools. Comma-separated because a "word" may be a phrase with spaces in it.
-  This is a **runtime word-pool override, not a grammar change**: the content vocabulary is
-  `content ::= primary | secondary | runtime` (`spec-grammar-v3.md` §4.2) and a pattern
-  cannot carry a literal string, so the override lives at `ThemeBank::get_text` — the single
-  funnel every text verb already draws through. Both lanes read the same list: the words are
-  the caller's, so there is nothing thematic about them to keep on one side. It overrides the
-  text *source* and adds no draws, so a visual that draws no text still shows none.
-- Known gap: the **F2 panel does not show a runtime pin.** Its Themes rows read the session's
-  own weights and pin flags, which a runtime pin deliberately does not touch, so while one is
-  in effect the panel's numbers describe the session rather than what is on screen. Live
-  state, one banner's worth of work, filed rather than bodged.
-- **All three pins are process-lifetime state and do not touch the session file**, for the
-  same reason the `bed` verbs don't (see the note above): the loaded session is live state
-  that the F2 panel autosaves, so a pin issued over a socket must not become something the
-  author appears to have chosen. They deliberately survive a playlist program switch —
-  "stay on this theme" is about the session, not about one program.
+## 4. Commands
 
-Audio (added 2026-08-02 — the same surface as the F2 Audio section; `bed` edits apply to
-the ACTIVE program in place, live through the program-change seam, and reconfigures MORPH
-— glide/crossfade over ~300 ms — rather than cutting; see entrainment.cpp).
+| Command | Effect / arguments |
+|---|---|
+| `pause`, `resume` | Freeze / resume playback. |
+| `hide`, `show` | Hide and silence / restore requested state. |
+| `status` | Current visual, bed, mute, overlay, hidden, uptime, XR, theme slots, runtime content pins. |
+| `overlay on`, `overlay off` | Enable / disable click-through overlay. |
+| `overlay opacity VALUE` | Whole-window opacity, clamped 0–1. |
+| `themes` | Theme entries with `name:weight`; `*` marks solo, `+` live, `!` no drawable content. |
+| `theme pin NAME[,NAME...]` | Set the runtime theme solo set. |
+| `theme unpin` | Restore the program's theme selection. |
+| `visuals` | Built-ins/customs with weights, playing marker, and `forced=yes|no`. |
+| `visual NAME` | Force a built-in or active-program custom pattern. |
+| `load pattern FILE` | Read and force a v3 file on the trance machine. |
+| `load pattern source SOURCE` | Compile and force source supplied in the command. |
+| `unload pattern` | Release the visual force; use session pins/weights again. |
+| `text pin TEXT[,TEXT...]` | Round-robin replacement text pool for all text draws. |
+| `text unpin` | Restore theme text pools. |
+| `ui on`, `ui off` | Open / close F2. On also shows the window and clears overlay. |
+| `screenshot FILE` | Capture the next composited desktop frame, including UI, as PNG. |
+| `mute on`, `mute off` | Global audio mute. |
+| `bed on`, `bed off` | Enable bed (seed default layers if absent) / remove its layers. |
+| `bed layers` | Read count, master level, and each layer's values. |
+| `bed master DB` | Set bed master, clamped −60 to −6 dB; requires an active bed. |
+| `bed layer add` | Append a 200 Hz carrier, 3 Hz binaural, continuous, −6 dB layer; return new count. |
+| `bed layer remove I` | Remove zero-based layer I; return new count. |
+| `bed layer I FIELD VALUE` | Set a field using the ranges below. |
 
-**Channel edits are in-memory only.** The F2 panel autosaves the session file on every
-edit; this channel deliberately does not. A remote/automated control surface that
-rewrote the user's session as a side effect of a `bed master` would be a much worse
-default than one whose changes end with the run — and the QA harness
-(`tests/qa_command_channel.py`) drives every verb here against whatever session is
-loaded, which only stays safe while this holds. An edit made over the channel does
-become persistent if the user then commits an edit in the F2 panel: both surfaces mutate
-the one live program, and the autosave writes whatever it finds:
-- **`mute on|off`** — global mute over ALL audio (bed + music channels). The same toggle
-  the M key and the F2 checkbox drive: idempotent, and every surface reads one flag, so
-  they can never disagree. Note `hide` also mutes and `show` restores the pre-hide state;
-  a `mute` sent while hidden updates what `show` restores.
-- **`bed on`** — enable the entrainment bed. If the program has no bed (absent block = no
-  bed), writes the stock default bed — same as the F2 "Enable bed" button, so a session
-  whose JSON never mentions entrainment can still be driven entirely from here. Idempotent
-  when a bed exists.
-- **`bed off`** — remove the bed (fades out, then silence). Idempotent.
-- **`bed master DB`** — bed output level in dB RMS, clamped to `-60..-6` (the F2 slider's
-  range; the top stays below 0 dB both as a loudness guard and because 0 in the stored
-  config means "default"). Errs if the bed is off.
-- **`bed layers`** — READ the bed back (added 2026-08-12, #60): `ok layers=N master_db=...`
-  followed by every layer's carrier/binaural/pulse/level. Read-only, and the letter the
-  layers' CRUD was missing: without it `bed layer remove` was effectively irreversible (the
-  removed layer's parameters could not be read first, so it could not be rebuilt with
-  `bed layer add` + `set`), a changed `level` was unrestorable, and the only way to learn the
-  layer count was to call a *mutating* verb and read its `layers=N` reply.
-- **`bed layer add`** — append a layer (200 Hz carrier, 3 Hz binaural, continuous, −6 dB
-  mix — the F2 "+ add layer" seed). Replies `ok layers=N`.
-- **`bed layer remove I`** — remove layer `I` (0-based). Replies `ok layers=N`; errs on a
-  bad index.
-- **`bed layer I FIELD VALUE`** — set one field of layer `I`. `FIELD` is `carrier`
-  (20..1000 Hz), `binaural` (0..40 Hz, 0 = no split), `pulse` (0..40 Hz, 0 = continuous),
-  or `level` (−24..0 dB **relative mix** — layers balance against each other; absolute
-  loudness is `bed master`'s job, the bed being RMS-normalised to it). Values clamp to the
-  listed ranges, matching the F2 sliders.
-- `status` now also reports `muted=on|off`.
+| Layer field | Range |
+|---|---|
+| `carrier` | 20–1000 Hz |
+| `binaural` | 0–40 Hz; zero disables split |
+| `pulse` | 0–40 Hz; zero disables gate |
+| `level` | −24–0 dB relative balance |
 
-> **Retired 2026-08-01: `intensity`, `set`, `get`, `load session`.** All four shipped as
-> protocol-complete stubs and none of them ever gained a consumer. `set`/`get` answered
-> `err unknown key` for every key, `load session` answered `err not yet supported`, and
-> `intensity VALUE` was the worst of the four: it replied `ok` and wrote a field nothing
-> read, so a controller was told its command took effect when nothing had changed. A verb
-> that cannot succeed is not "protocol-complete", it is a lie in the reply grammar — the
-> four are deleted rather than left standing, and now answer `err unknown verb`.
->
-> If they come back they come back with a consumer. `intensity` was specified as a single
-> global `0..1` multiplier over the visual (master zoom / alpha / spiral-speed scaling) with
-> the exact wiring left TBD; the settings vocabulary `set`/`get` would speak is the JSON
-> schema in `docs/session-json-format.md`; `load session` needs a live session-swap path,
-> which does not exist (`play_session()` binds one Session at startup and the F2 UI only
-> mutates it in place).
+Layer balance is relative to the normalized mix; master controls absolute bed
+level. Use `bed off` or mute for silence. Live bed edits glide, with stream
+buffering latency. See [audio](audio.md).
 
-Status:
-- **`status`** — single-line, parseable reply: current visual name, entrainment-bed state,
-  mute, overlay state, hidden state, process uptime, the headset output's attach state, and
-  ThemeBank's four queue slots, plus whether either runtime content pin is in effect. Exact
-  reply shape:
-  `ok visual=<name> bed=<on|off> muted=<on|off> overlay=<on|off> hidden=<on|off> uptime=<seconds> xr=<off|unattached|attached|attached-idle> themes=<a|b|c|d> themepin=<names|-> text=<theme|pinned:N>`
-  Fields are appended, never reordered or removed, so a `grep`-shaped client keeps working.
+Names and file/source arguments consume the rest of their line, preserving
+internal spaces; do not add shell-style quotes inside a protocol command.
+Theme/text lists use commas as separators. Inline source may use literal
+`\n` sequences for line breaks, including after `#` comments.
+Invalid pattern source reports a diagnostic and leaves the playing visual alone.
 
-Debug/validation (same line protocol, not part of the settings surface proper):
-- **`ui on|off`** — show/hide the F2 ImGui panels remotely (same state the F2 key
-  toggles; `ui on` also un-hides and disengages the overlay, since a panel on an invisible
-  or click-through window is unreachable); `err ... unavailable` only when the ImGui
-  backend failed to initialize, which is the one way a run has no panel at all (the panel
-  exists in `--overlay` runs, where `ui on` disengages the overlay to reach it, and in
-  runs with a headset attached, where it lives on the desktop window's own pass).
-- **`screenshot FILE.png`** — dump the next fully-composited rendered frame (scene + UI,
-  pre-swap glReadPixels) to a PNG. Works when the physical display is locked/headless —
-  this is what makes remote visual validation possible without keyboard access.
+`ui` needs an initialized ImGui backend. Screenshots use the desktop render pass,
+including when a headset is attached. File paths are resolved on the machine
+running trance.
 
-That's the entire v0 verb set. No `trigger`, no `Moment`, no choreography primitive — an
-agent or script that wants a "flash three images then fade to spiral" sequence composes it
-client-side out of repeated `load pattern`/`overlay`/`pause` calls timed by the client, the
-same way a human operator would type them one at a time. Trance does not know what a sequence
-of commands "means."
+Unsupported commands include `start`, `stop`, `load session`, `intensity`,
+`set`, and `get`; they have no implemented state transition.
 
----
+## 5. Status
 
-## 5. State (`status` verb)
+```text
+ok visual=<name> bed=<on|off> muted=<on|off> overlay=<on|off> hidden=<on|off> uptime=<seconds> xr=<off|unattached|attached|attached-idle> themes=<a|b|c|d> themepin=<names|-> text=<theme|pinned:N>
+```
 
-`status` returns the single-line reply defined in §4 — deliberately minimal so
-it's grep/parse-friendly from a shell script without a JSON library. If richer introspection
-is needed later, that's a new verb, not a change to `status`'s shape.
+Theme positions are unloading/previous, primary, secondary, and loading-next.
+`off` includes unsupported XR platforms and a disabled probe after watchdog
+timeout. `attached-idle` has an XR output without an actively running session.
 
----
+## 6. Validation and source
 
-## 6. Testing — Python is allowed *here only*
+[qa_command_channel.py](../tests/qa_command_channel.py) drives a live process
+over the socket. It is a desktop QA harness, not a CTest target.
 
-The channel is verb-in / reply-out over a loopback socket, so it is trivially testable from
-any language, including plain shell (`echo "status" | nc host port`). A small **pytest**
-client under `tests/` (or `netcat` in a shell script) connects, sends lines, and asserts the
-reply lines. **This is the only place Python appears in the project, and it never ships in
-the runtime or as a daemon.**
-
----
-
-## 7. Build order (each step independently testable) — COMPLETE
-
-This ladder has been climbed; it is kept because it records *why* the pieces are layered
-the way they are, not as remaining work. The shipped verb surface is §4; the channel is
-QA'd end-to-end from Python against a live exe (`tests/qa_command_channel.py`, #29).
-
-1. **`CommandChannel`** + a `--command_port <port>` launch flag. Test with `netcat`: pipe a
-   `status` line, get an `ok ...` reply. (No effects yet.)
-2. **Drain + verb dispatch** in `main.cpp`'s loop; wire `pause`/`resume`.
-   Test each over the socket.
-3. **`overlay on|off` / `overlay opacity`** — wire to the live overlay toggle (#27):
-   apply/clear the click-through/translucency hints on the running window.
-4. **`load pattern FILE`** — reuse the existing load path.
-5. **`status`** — single-line reply per §4/§5. <- **the v0 done-line: a controller drives
-   playback and reads status end-to-end over the socket.**
-
----
-
-## 8. MCP angle
-
-> **Superseded 2026-08-04, per owner decision: MCP is served by the trance binary itself,
-> over stdio — no sidecar, no Python.** This section originally scoped MCP out to "a
-> separate, external, thin MCP server process"; the owner's later call was 100% stdio in
-> the binary so there is no second process to install or keep alive. `--mcp`
-> (`src/trance/net/mcp_stdio.{h,cpp}`, docs/mcp-install.md) serves newline-delimited
-> JSON-RPC on the process's own stdin/stdout for launch BY an MCP host, and maps tools 1:1
-> onto the verbs in §4 (`pause` tool -> `pause` line, `hide` tool -> `hide` line, ...).
->
-> What SURVIVES from the original framing: MCP is not a special case inside trance. The
-> stdio server reuses the mailbox discipline of §2 verbatim (reader thread queues verb
-> lines; the render thread drains, executes, replies) and the verb execution path cannot
-> tell a tool call from a socket line. The TCP channel below is unchanged and remains the
-> scripting surface (`echo status | nc`); `--mcp` and `--command_port` compose.
-
----
-
-## 9. Decisions / non-goals (from #21, amended 2026-07-01)
-
-- **The daemon is a dumb settings-shaped effector, not a choreography engine.** No `Moment`
-  proto, no `trigger()` primitive, no "conditioning moment" concept, no reading of browser or
-  session context. Rescoped per owner decision 2026-07-01 — the prior draft's agent-driven
-  choreography framing is off base for this spec.
-- **Everything in the C++ binary. No separate bridge process. No Python in the runtime**
-  (Python only as a test client, §6).
-- Transport: **TCP loopback (`127.0.0.1`), no auth, no encryption** — loopback is the trust
-  boundary; not a named pipe / stdio. (Unchanged from the prior rescope.)
-- Protocol: **line-oriented plain text**, one command per line, one reply line per command —
-  not JSON. Trivially scriptable with `echo`/`nc`.
-- **Fixed v0 verb set** (§4): `pause`/`resume`, `overlay on|off`/`overlay opacity`,
-  `hide`/`show`, `load pattern`, `status`, plus the `ui`/`screenshot` debug pair. No verb is
-  added speculatively, and a verb that turns out to have no consumer is deleted rather than
-  left replying to nobody (§4's two retirement notes).
-- **`hide`/`show` is the silent-running primitive for MCP agents** (§4): an external
-  controller that needs trance gone *now* (screen share starting, someone walks in) sends
-  `hide` — one round-trip, no process kill, instant restore later with `show`.
-- **Overlay verbs drive issue #27's click-through overlay live**: `overlay on|off` /
-  `overlay opacity` apply/clear the hints on the running window at runtime (same seam the
-  F2 UI's Overlay section uses).
-- **MCP integration is served by the binary itself over stdio** (`--mcp`, §8 — superseding
-  this list's original "external, separate process" entry, per owner decision 2026-08-04).
+Implementation:
+[command_channel.cpp](../src/trance/net/command_channel.cpp),
+[command_protocol.cpp](../src/trance/net/command_protocol.cpp),
+[mcp_stdio.cpp](../src/trance/net/mcp_stdio.cpp),
+[main.cpp](../src/trance/main.cpp).

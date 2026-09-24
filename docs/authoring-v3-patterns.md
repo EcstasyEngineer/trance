@@ -1,24 +1,8 @@
-# Authoring v3 visual patterns
+# Authoring visual patterns
 
-V3 patterns are the shipped grammar for built-in visuals and custom patterns alike. It is the
-only grammar -- there is no legacy fallback parser.
-
-Your patterns live in standalone `*.pattern` files (plain UTF-8, `#` line comments). A session
-references one per `custom_visual_pattern` entry by root-relative path; see
-[session-json-format.md](session-json-format.md) §4. To try one without touching a session at
-all, run `trance.exe --pattern=my_pattern.pattern some.session.json`, which forces every visual
-selection to that file and prints a `line:col` diagnostic instead of falling back if it does
-not parse.
-
-## The Shape
-
-V3 has two nouns and one rule:
-
-- `pattern` is a named box with a length and a `0..1` clock.
-- An effect line draws, drives, or mutates state: `image`, `draw`, `word`, `caption`,
-  `subtext`, `spiral`, `warp`, `copy`, and the small scalar ops.
-- Every numeric value is a modulator: a literal, `curve A -> B`, or raw `[expr]`. It rides the
-  nearest timed occurrence's clock unless redirected with `over NAME`.
+Write one v3 pattern in a UTF-8 `.pattern` file. Comments start with `#`.
+Built-ins use this same language; see their
+[source](../src/trance/visual/builtin_patterns_v3.cpp).
 
 ```text
 pattern my_flash for 512f {
@@ -28,20 +12,88 @@ pattern my_flash for 512f {
 }
 ```
 
-Children in a pattern run together by default. Add `seq` to a pattern header when child
-patterns should run one after another:
+This selects a primary-theme image every 64 schedule frames and zooms it through
+that cut. Words change every 128 frames. Both schedules run together. `primary`
+and `secondary` are the two live theme sides; `runtime` chooses at effect firing.
+
+## Try a pattern
+
+```powershell
+.\trance.exe --pattern=my_flash.pattern path\to\example.session.json
+.\trance.exe --lint --pattern=my_flash.pattern
+.\trance.exe --lint path\to\example.session.json
+```
+
+`--pattern` forces the file during playback; combined with `--lint` it checks a
+standalone source without a window. That standalone lint has no beat context.
+For patterns using `beats`/`locked`, reference them from the session's
+`program_map.<name>.custom_visual_pattern` list and lint the session, which supplies each
+program's beat period. See the [session format](session-json-format.md).
+Playback requires a usable media root. F1 shows active sections, clocks, themes,
+and image layers. Lint checks syntax and sampled expressions; playback checks
+appearance. Neither is formal verification.
+
+## Give each motion the right clock
+
+`zoom 0.4` is static magnification. A `curve` moves over the nearest timed
+occurrence. A named ancestor supplies a longer envelope without taking over the
+child's schedule:
 
 ```text
-pattern slow_then_fast for 768f seq {
-  pattern slow for 512f { every 64f { image primary zoom 0.5 } spiral speed 2 }
-  pattern fast for 256f { every 8f { image secondary } spiral speed 4 }
+pattern scene for 512f {
+  every 16f -> cut {
+    image primary zoom (curve 0 -> 0.4) alpha (curve 0 -> 1 over scene)
+  }
+  spiral speed (curve 1 -> 4)
 }
 ```
 
-## A nested section starts its own time
+Each image zooms independently while the image layer fades in and the spiral
+speeds up across the scene. This is the practical reason to read a parent clock.
+It works at arbitrary lexical depth: choose `over scene`, or write raw math such
+as `[0.2 * scene.progress + 0.1 * this.progress]`.
 
-A burst is a timed interruption. Its body starts at local frame zero, and its curve lasts
-for the duration chosen for that occurrence:
+Clock references are read-only. They do not merge timers, restart a parent, or
+let child work run outside its owner. Prefer names to numeric ancestor depths:
+adding a wrapper then leaves the intended reference readable.
+
+A 64-frame cut displays progress 0 through 63/64. The final frame approaches a
+curve's endpoint without adding a frame to show exactly 1.
+
+## Nest and sequence sections
+
+```text
+pattern slow_then_fast for 768f seq {
+  pattern slow for 512f {
+    every 64f { image primary zoom (curve 0 -> 0.5) }
+    spiral speed 2
+  }
+  pattern fast for 256f {
+    every 8f { image secondary zoom (curve 0 -> 0.5 over fast) }
+    spiral speed 4
+  }
+}
+```
+
+`seq` runs child schedules in order; otherwise they run together. `loop N` repeats
+a pattern's declared duration N times. A parent truncates unfinished children
+and resets their schedules on re-entry. Image contents and hidden selection
+counters persist; restarting time does not wipe visual state.
+
+For accelerating cuts:
+
+```text
+pattern accelerate for 512f {
+  every ramp 32f -> 8f steps 32 ease early {
+    image runtime zoom (curve 0 -> 0.4)
+  }
+}
+```
+
+The 32 cuts are scaled to fill 512 frames. Endpoints set relative duration shape;
+total duration divided by steps sets average cut length.
+
+## Interrupt rapid cuts with a moving hold
 
 ```text
 pattern cuts_and_holds for 2048f {
@@ -54,127 +106,74 @@ pattern cuts_and_holds for 2048f {
 }
 ```
 
-Read it as “cut every eight frames until interrupted; then hold one animation and zoom
-through the hold.” If no animation is available, its fallback still gets the same motion.
-Only the active branch runs. Returning to the base starts a fresh cut; returning to the
-burst starts a fresh hold. Nested work stops when its branch stops.
+The base cuts every eight frames. The burst selects one animation and moves it
+over its sampled 64–128-frame lifetime. An unavailable animation falls back to a
+still with the same motion. Returning to a branch restarts its child schedules;
+inactive branches do not select images or consume burst rolls.
 
-The base has no known ending, so it cannot know its percentage complete. Put its motion
-inside a timed cut as above; a bare base `curve` is rejected. For a deliberate whole-show
-curve, write `over cuts_and_holds`. To carry a burst-wide envelope across shorter cuts,
-name the branch `burst -> held { ... }` and use `over held` inside those cuts. The outer
-`burst -> controller period ...` names the controller's whole span, a different clock.
-
-**Custom-pattern migration (#65):** direct base/burst effects now fire once on entry.
-Use `every Nf` for repeated selections; `period` only sets interruption-check cadence.
-`enter { ... }` remains optional setup before burst entry effects and shares the burst
-clock. Timed children belong in the burst body; putting them in `enter` is an error.
-Branch children restart on entry and no longer run invisibly in the other phase.
-Frame-valued `env` operands and `every ramp` need a statically known length; use a
-fixed-duration burst or a timed child pattern when those forms are needed. The full
-contract is in
-[spec §4.11](spec-grammar-v3.md#411-burst--phases-own-their-nested-work-and-local-time).
-
-## Content And Registers
-
-The engine is bi-thematic. `primary` reads theme 0, `secondary` reads theme 1, and `runtime`
-picks a side at fire time.
-
-`image CONTENT -> REG` pulls an image into a register and draws it. `draw REG` draws an
-existing image register without pulling a new image. Registers are local to the nearest
-enclosing `pattern`, so two sibling patterns can both use `cur` and `prev` safely.
-
-The canonical handoff is a crossfade:
+The base's interruption time is unknown, so a bare base `curve` has no meaningful
+percentage-complete clock and is rejected. Use a timed child or a bounded ancestor.
+For repeated cuts with one long burst envelope, name the branch:
 
 ```text
-pattern xfade for 512f {
-  pattern life for 128f loop 4 {
-    every 64f -> beat {
-      copy cur -> prev
-      draw prev          zoom (curve 0.5 -> 1.0)
-      image secondary -> cur fade in zoom (curve 0 -> 0.5)
+pattern burst_envelope for 1024f {
+  burst period 8f chance 1/4 cooldown 32f duration 64f..128f {
+    base { every 8f { image primary } }
+    burst -> held {
+      every 8f { image secondary zoom (curve 0.1 -> 0.7 over held) }
     }
   }
 }
 ```
 
-Each image has two halves. While it is `cur`, it zooms `0 -> 0.5`; after `copy cur -> prev`,
-it continues `0.5 -> 1.0`. The old layer draws first, and the new layer fades in above it.
-That matches the renderer's source-over blending without a special `crossfade` keyword.
+Direct branch effects fire once on entry. `period` controls interruption checks;
+it does not repeat those effects. Optional `enter { ... }` runs setup before
+burst-body effects. Timed work belongs in `burst`, not `enter`. Fractional `env`
+works in sampled bursts; frame envelopes and ramps need a fixed duration. See
+the [burst reference](spec-grammar-v3.md#burst-phases).
 
-## Beats: phase-locking to the entrainment bed
-
-Most patterns are timed in frames (`for 512f`, `every 64f`) -- an arbitrary clock with no
-relationship to the audio. If the session has a pulsed entrainment bed (a binaural or
-isochronic layer with `pulse_hz > 0`, synthesized in `entrainment.cpp`: the gate that fades
-each ear in and out, 180 degrees out of phase for binaural), a pattern can instead lock its
-cadence to that bed's pulse period, so a flash or a handoff lands exactly on the beat instead
-of drifting against it.
-
-`director.cpp` resolves one beat period per program before parsing: it looks at the program's
-entrainment layers, picks the pulsed layer with the highest amplitude, and converts its
-`pulse_hz` to a frame count (`round(global_fps / pulse_hz)`). That frame count is threaded into
-the parser as `locked_period_frames`; the grammar exposes it through two length keywords:
-
-- **`locked`** -- exactly one beat period.
-- **`beats N`** -- `N` beat periods (`N * locked_period_frames`).
-
-Both are valid anywhere a `<len>` is expected: a pattern's `for` span, or a cadence's `every`
-length.
+## Crossfade with image registers
 
 ```text
-pattern pulse_flash for beats 8 {
-  every beats 1 { image primary zoom (curve 0 -> 0.5) }
-}
-```
-
-With an 8 Hz isochronic layer at 60 fps, `locked_period_frames` resolves to 8 (60/8, rounded),
-so this pattern runs for 64 frames total and flashes once per beat -- 8 flashes, one per pulse.
-
-The same substitution works inside the crossfade shape shown above; swap the inner clock's
-frame length for a beat length and the handoff itself locks to the bed instead of running on
-an arbitrary cadence:
-
-```text
-pattern xfade_on_beat for beats 8 {
-  pattern life for beats 2 loop 4 {
-    every beats 1 -> beat {
-      copy cur -> prev
-      draw prev          zoom (curve 0.5 -> 1.0)
-      image secondary -> cur fade in zoom (curve 0 -> 0.5)
-    }
+pattern dissolve for 512f {
+  every 64f {
+    copy cur -> prev
+    draw prev zoom (curve 0.4 -> 0.8)
+    image secondary -> cur fade in zoom (curve 0 -> 0.4)
   }
 }
 ```
 
-Each image now lives for exactly 2 beats before the next one cuts in, and the cut itself
-always lands on a pulse.
+The old image draws first; the new one fades in above it. Initially `prev` is
+empty; thereafter each image continues its zoom after the copy. Registers belong
+to the nearest pattern, so siblings can each use `cur`. Cadences/burst branches
+share that scope. `scene.cur` can address an enclosing pattern's register.
+Text does not have equivalent copyable registers.
 
-**Prefer `beats`/`locked` when the pattern's whole point is to feel synced to the bed** --
-a flash cadence, a crossfade handoff, anything meant to read as "on the beat." **Prefer plain
-frame lengths (`Nf`) everywhere else**, including anything that must also work in a program
-with no pulsed bed at all.
+## Show, fade, and alternate
 
-That last clause is load-bearing, not stylistic: **`beats N` and `locked` hard-error at parse
-time when `locked_period_frames` is 0** -- i.e. when the program has no pulsed entrainment
-layer (`` `beats` needs a pulsed entrainment bed (none in this program) ``, same for `locked`).
-There is no silent fallback to a frame count. This is exactly why the eight shipped built-ins
-(`builtin_patterns_v3.cpp`) are written entirely in frames: they are parsed once at startup
-against whatever program is loaded (`Director::build_builtin_patterns()`), including sessions
-with no entrainment bed configured at all, so they cannot use a length keyword that hard-errors
-in that case. A custom pattern authored for a specific session that is known to always ship a
-pulsed bed does not have that constraint.
+```text
+pattern accents for 512f {
+  every 64f {
+    image primary anim
+    image secondary -> still env in 8f hold 16f out 8f
+    word primary show 0f..8f
+  }
+}
+```
 
-Themes own PRECANNED audio pools exactly like their image and font pools (no TTS, ever), and
-the `audio` effect (issue #23) is the grammar's window onto them: `every beats N { audio
-mantra }` triggers a spoken line phase-locked to the entrainment bed, the same way `image`/
-`word` trigger a flash. See the worked example below.
+The still rises, holds, falls, then stays transparent for half the cut. `fade
+inout` instead spans the whole cut. `show` gates visibility without delaying
+selection; use `show 0.5..1` for fractions or `show [this.frame < 8]` for raw math.
+Main word/line text supports visibility windows and zoom/origin, not alpha envelopes.
 
-## Audio: phase-locking a mantra to the beat
+`image alternate` flips sides each selection. `image alternate chance 0.25`
+selects every time but flips only on a chance hit. Statements have independent
+alternation state. Ordinary `image primary chance 0.25` instead retains the old
+image on misses. Text chance also gates visibility. Chances are quantized and
+clamped to 1..99 percent; omit chance for an unconditional effect.
 
-This is the showcase for `beats`: a precanned mantra line, pulled from the active theme's
-audio pool, fires exactly on the entrainment pulse -- the same phase-lock a flash gets, but
-for the ear instead of the eye.
+## Audio and nominal beat lengths
 
 ```text
 pattern mantra_pulse for beats 16 {
@@ -184,118 +183,19 @@ pattern mantra_pulse for beats 16 {
 }
 ```
 
-`audio primary` pulls a random precanned line from the primary theme's `audio_path` pool
-(exactly like `image primary` pulls a random image) and starts it playing on the engine's
-dedicated theme-audio channel. `loop` keeps it going for the rest of its `every beats 4`
-window; `volume (curve 0.2 -> 0.8)` fades it in across each 32-beat-frame span, riding the
-SAME curve machinery as `zoom`/`fade`/`spiral speed` -- there is no separate "audio curve"
-concept. Meanwhile `every beats 1` flashes an image once per pulse: the mantra cadence (every
-4 beats) and the flash cadence (every beat) both lock to the same entrainment bed
-independently, so they never drift relative to each other even though they fire at different
-rates.
+`beats N` and `locked` require a pulsed entrainment layer. They use a frame period
+computed when the program is parsed, not a live audio phase signal. At 60 schedule
+frames/s, an 8 Hz bed becomes an 8-frame cadence (7.5 events/s), so exact sync is
+not promised. Plain frame counts work without a bed.
 
-**Single-slot v0:** there is exactly one live grammar-driven theme audio at a time, the same
-shape as the engine's single live text slot (`docs/audio.md`). A second `audio` fire --
-whether it's a different pattern or the next cycle of this one -- replaces whatever was
-already playing; there is no queueing or crossfade for audio the way there is for images.
-Use `audio stop` to cut a line early:
+`audio` selects from the theme's audio pool. One dedicated slot plays grammar
+audio; the next selection replaces it. `loop` continues until replacement or
+`audio stop`, including after the enclosing visual block ends. Volume is 0..1.
+See [audio.md](audio.md) for other audio paths and volume scales.
 
-```text
-audio stop
-```
+## Reference and validation
 
-**Content vocabulary.** `audio` takes the exact same bi-thematic content word as `image`/
-`word`: `primary` (theme 0), `secondary` (theme 1), or `runtime` (rolled at fire
-time). Unlike `get_font` (which falls back to a system font when a theme has no fonts of its
-own), a theme with an empty `audio_path` pool makes `get_audio` return an empty path; the
-engine then fails to open it and logs `couldn't load ` to stderr rather than crashing --
-not silent, but not fatal either. Give the theme at least one file in its audio pool before
-using `audio` against it.
-
-**Volume scale.** `audio ... volume M` is `0..1`, matching `Audio::set_theme_audio_volume`'s
-signature -- NOT the `0..100` scale playlist `AudioEvent.volume` uses elsewhere in the engine.
-Worth remembering if you're used to authoring playlist audio events.
-
-## Windows, Envelopes, And Alternation
-
-Three params and one verb control *when* a layer is on and *which theme* it pulls from. All
-four are compile-time sugar over fields the runtime already evaluated -- they add vocabulary,
-not engine.
-
-**`show` -- when a layer paints.** Without it, a draw paints for the whole life of its pattern.
-Write the window as a slice of the enclosing clock, in frames, or as a raw condition:
-
-```text
-every 64f -> beat {
-  image primary
-  word secondary show 0f..8f   # an 8-frame stab at the top of each cut
-  line primary show 0.5..1     # the second half only
-  caption runtime show [this.frame < 32]
-}
-```
-
-The window is ANDed onto whatever gating is already in play, so it composes with sequenced
-phases, `burst` blocks and `chance`. Frames and fractions can't be mixed inside one window
-(`show 0f..0.5` is an error), and a frame window that runs past its clock's length is an error
-too -- neither gets silently clamped.
-
-**`env` -- rise, hold, fall, then gone.** `fade inout` is a whole-clock triangle: it peaks for
-an instant and is never actually absent, so a layer beneath it never has the screen to itself.
-`env` gives you a real hold and a real hole:
-
-```text
-every 64f -> beat {
-  image primary anim                            # the animation runs the whole cut
-  image secondary -> still env in 16f hold 16f out 16f
-}                                               # ...and the still is GONE for the last 16f
-```
-
-Operands are frames or fractions (`env in 0.25 out 0.25`); omit `hold` for a triangle that
-still has the absent tail. `in + hold + out` must fit the clock.
-
-**`line` -- whole phrases.** `word` puts one word on screen at a time; `line` puts the whole
-phrase up. Same content vocabulary, same params, same everything else.
-
-**`alternate` -- deterministic A/B.** Not to be confused with `secondary`, which *pins* theme
-1: `alternate` is the word that makes a draw switch sides. `primary` pins theme A and
-`runtime` rolls a coin every firing. `alternate` ping-pongs A, B, A, B instead:
-
-```text
-every 48f { image alternate zoom (curve 0 -> 0.4) }
-every 8f  { image alternate chance 0.25 anim }   # holds a side, pivots occasionally
-```
-
-`alternate chance P` flips only with probability `P` per pull, so the theme *holds* between
-flips -- at `P = 0.5` that is a uniform-random side per image, and lower values read as
-"stay in this world for a while, then pivot." Each `alternate` statement keeps its own phase.
-It also works on the standalone animation load (`anim alternate`).
-
-## Common Effects
-
-```text
-image primary -> cur zoom (curve 0 -> 0.5) fade in
-image alternate chance 0.5 env in 16f hold 16f out 16f
-draw prev alpha 0.5 origin 0.25 zoom 0.75
-word secondary show 0f..8f
-line primary show 0.5..1
-caption primary
-subtext runtime
-spiral speed (curve 1 -> 4)
-warp amplitude (curve 0 -> 0.2) wavelength 0.15 speed 2
-drunk (curve 0 -> 0.3)
-copy cur -> prev
-```
-
-Text currently has one live slot; it can be changed and zoomed by the existing text render path,
-but it cannot be copied and alpha-crossfaded like images until the deferred text-register
-extension lands.
-
-## Debugging
-
-Press F1 during playback. The overlay shows the active visual, the deepest active pattern
-section, all four ThemeBank queue slots (`unloaded`, `primary`, `secondary`, `loading`), image
-layers drawn this frame, spiral state, entrainment state, and a minimized cycler tree. A `*`
-next to a theme row means a visible image layer from that concrete slot was drawn this frame.
-
-For implementation details, see [visuals.md](visuals.md). For the full v3 grammar and design
-notes, see [spec-grammar-v3.md](spec-grammar-v3.md).
+The [language reference](spec-grammar-v3.md) lists syntax, scopes, expressions, and
+limits. The [visual guide](visuals.md) maps them to code. For code changes, run
+the complete build and CTest commands in [CLAUDE.md](../CLAUDE.md). Phase execution
+tests exercise counter transitions that lint alone cannot observe.
