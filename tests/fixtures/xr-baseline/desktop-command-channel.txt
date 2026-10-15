@@ -1,0 +1,12 @@
+> status
+< ok visual=slow_flash [slow then fast flash phases] bed=on muted=off overlay=off hidden=off uptime=11 themes=/root/|/root/|/root/|/root/
+> screenshot C:/trance/tests/fixtures/xr-baseline/desktop-screenshot.png
+< ok writing C:/trance/tests/fixtures/xr-baseline/desktop-screenshot.png after the next frame
+> status
+< ok visual=slow_flash [slow then fast flash phases] bed=on muted=off overlay=off hidden=off uptime=14 themes=/root/|/root/|/root/|/root/
+> ui off
+< ok
+> screenshot C:/trance/tests/fixtures/xr-baseline/desktop-screenshot-scene.png
+< ok writing C:/trance/tests/fixtures/xr-baseline/desktop-screenshot-scene.png after the next frame
+> status
+< ok visual=super_fast [rapid current/next cuts] bed=on muted=off overlay=off hidden=off uptime=12 themes=/root/|/root/|/root/|/root/

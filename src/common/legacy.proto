@@ -1,0 +1,265 @@
+syntax = "proto3";
+package trance_legacy_pb;
+
+// FROZEN SCHEMA -- DO NOT ADD FIELDS. DO NOT KEEP IN SYNC WITH trance.proto.
+//
+// This is a verbatim copy of the message definitions in `src/common/trance.proto`
+// as of commit 0e97381 ("ui improvements", 2018-06-04) -- the last upstream commit
+// before this fork began (first fork commit 738a1ba, 2026-02-18, has 0e97381 as its
+// parent). Only the package name differs, so the generated C++ lands in
+// `trance_legacy_pb` instead of `trance_pb`.
+//
+// Why a second .proto instead of reusing the live descriptor: the legacy `.session` /
+// `system.cfg` importer reads text-format protobuf, and TextFormat parses against
+// whatever descriptor it is handed. Pointed at `trance.proto`, every field this fork
+// ever adds silently becomes part of the import surface -- converters stacking on
+// converters -- and an unrelated proto cleanup would change what the importer accepts
+// as a side effect. Pinning the schema here makes the importer's contract permanent:
+// upstream-era files, nothing else. See docs/session-json-format.md sec 7 and issue #47.
+//
+// The translation from these messages into the live `trance_pb` model is explicit and
+// lives in exactly one place, `session_legacy.cpp`. When `trance.proto` changes, that
+// translation stops compiling -- which is the point. Fix the mapping there; never
+// widen this file.
+//
+// `SessionArchive` is deliberately absent: the importer only ever reads a Session or a
+// System, and the archive message is dead schema (docs/session-json-format.md sec 9.1).
+
+message Colour {
+  float r = 1;
+  float g = 2;
+  float b = 3;
+  float a = 4;
+}
+
+message ExportSettings {
+  // Last path exported to.
+  string path = 1;
+  // Export side-by-side 3D video.
+  bool export_3d = 2;
+  // Width in pixels of the video.
+  uint32 width = 3;
+  // Height in pixels of the video.
+  uint32 height = 4;
+  // Frames per seconds of the video.
+  uint32 fps = 5;
+  // Length in seconds of the video.
+  uint32 length = 6;
+  // 0 to 4, 0 is best.
+  uint32 quality = 7;
+  // Number of threads for encoding.
+  uint32 threads = 8;
+}
+
+// General system-wide configuration.
+message System {
+  enum Renderer {
+    MONITOR = 0;
+    OCULUS = 1;
+    OPENVR = 2;
+  }
+
+  // Enable vsync to eliminate tearing, but can cause stuttering.
+  bool enable_vsync = 1;
+
+  // The renderer to use.
+  Renderer renderer = 2;
+
+  // Draw depth, between 0 and 1. Affects intensity of zoom effect, and depth in VR.
+  message DrawDepth {
+    float draw_depth = 1;
+  }
+  DrawDepth draw_depth = 11;
+
+  // How far apart the view for each eye is in VR.
+  message EyeSpacing {
+    float eye_spacing = 1;
+  }
+  EyeSpacing eye_spacing = 12;
+
+  // Number of images to keep in memory at a time. Uses up both RAM and video
+  // memory.
+  uint32 image_cache_size = 5;
+
+  // Number of frames to buffer for each loaded animation. Uses up both RAM and video
+  // memory.
+  uint32 animation_buffer_size = 13;
+
+  // Number of font sizes to keep in memory at a time. Each character size of a
+  // single font uses up another slot in the cache. Uses up video card memory.
+  uint32 font_cache_size = 6;
+
+  // Windowed mode.
+  bool windowed = 7;
+
+  // Last known root directory.
+  string last_root_directory = 8;
+  // Last used export settings.
+  ExportSettings last_export_settings = 9;
+
+  message LastSession {
+    map<string, string> variable_map = 1;
+  }
+  // Last used variable settings for each session.
+  map<string, LastSession> last_session_map = 10;
+}
+
+// Configuration for a single program, i.e. a combination of a selection of
+// themes with settings related to visual styles, visual effects and so on.
+// Different programs can be swapped in during a single session.
+message Program {
+  // The different implemented visual types.
+  enum VisualType {
+    NONE = 0;
+    ACCELERATE = 1;
+    SLOW_FLASH = 2;
+    SUB_TEXT = 3;
+    FLASH_TEXT = 4;
+    PARALLEL = 5;
+    SUPER_PARALLEL = 6;
+    ANIMATION = 7;
+    SUPER_FAST = 8;
+  }
+
+  // Controls enabling/frequency of each theme.
+  message EnabledTheme {
+    string theme_name = 1;
+
+    // How frequently this theme will be selected relative to others.
+    uint32 random_weight = 2;
+
+    // If pinned, this theme is always one of the two active themes, and
+    // the weights are used only for choosing the other theme. Only one
+    // theme can be pinned in a program.
+    bool pinned = 3;
+  }
+
+  // Controls enabling/frequency of each visual type.
+  message VisualTypeConfig {
+    VisualType type = 1;
+
+    // Controls how frequently this program will be randomly selected relative
+    // to others.
+    uint32 random_weight = 2;
+  }
+
+  // Deprecated; replaced by enabled_theme!
+  repeated string enabled_theme_name = 100;
+  // Themes to use.
+  repeated EnabledTheme enabled_theme = 1;
+  // Visual types to use.
+  repeated VisualTypeConfig visual_type = 2;
+
+  // Ticks per second. Controls the global speed of everything; higher is faster,
+  // default is 120.
+  uint32 global_fps = 3;
+
+  // Intensity of the zoom effect (0 being no zoom, 1 being the maximum).
+  float zoom_intensity = 4;
+
+  // Settings for spiral.
+  Colour spiral_colour_a = 5;
+  Colour spiral_colour_b = 6;
+  bool reverse_spiral_direction = 7;
+
+  // Font settings for displayed text.
+  Colour main_text_colour = 8;
+  Colour shadow_text_colour = 9;
+}
+
+message AudioEvent {
+  enum Type {
+    NONE = 0;
+    AUDIO_PLAY = 1;
+    AUDIO_STOP = 2;
+    AUDIO_FADE = 3;
+  }
+
+  // Type of event.
+  Type type = 1;
+  // Whether to use the next unused audio channel.
+  bool next_unused_channel = 7;
+  // Audio channel to affect.
+  uint32 channel = 2;
+  // Path to (audio) file.
+  string path = 3;
+  // Whether to loop the file.
+  bool loop = 4;
+  // Volume setting for this event.
+  uint32 volume = 5;
+  // Time over which this event takes place.
+  uint32 time_seconds = 6;
+}
+
+message PlaylistItem {
+  message Standard {
+    string program = 1;
+
+    // How long to play this item before choosing a new one.
+    uint32 play_time_seconds = 2;
+  }
+
+  message Subroutine {
+    repeated string playlist_item_name = 1;
+  }
+
+  // Deprecated; replaced by standard!
+  string program = 100;
+  uint32 play_time_seconds = 101;
+
+  oneof contents {
+    Standard standard = 1;
+    Subroutine subroutine = 2;
+  }
+
+  message NextItem {
+    // References playlist item in Session.
+    string playlist_item_name = 1;
+
+    // Controls how frequently this item will be selected relative to others.
+    uint32 random_weight = 2;
+
+    // References variable_map.
+    string condition_variable_name = 3;
+    // References value in chosen variable.
+    string condition_variable_value = 4;
+  }
+
+  repeated NextItem next_item = 3;
+  repeated AudioEvent audio_event = 4;
+}
+
+message Theme {
+  // Paths to be used as images.
+  repeated string image_path = 2;
+  // Paths to be used as animations.
+  repeated string animation_path = 3;
+  // Fonts to be used for text.
+  repeated string font_path = 4;
+  // Lines of text.
+  repeated string text_line = 5;
+}
+
+message Variable {
+  // Description of the variable.
+  string description = 1;
+  // Possible values for this variable.
+  repeated string value = 2;
+  // Default value.
+  string default_value = 3;
+}
+
+message Session {
+  // The playlist of programs.
+  string first_playlist_item = 1;
+  map<string, PlaylistItem> playlist = 2;
+
+  // Available programs.
+  map<string, Program> program_map = 3;
+
+  // Available themes.
+  map<string, Theme> theme_map = 4;
+
+  // Configurable variables for this session.
+  map<string, Variable> variable_map = 5;
+}

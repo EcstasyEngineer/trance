@@ -1,0 +1,314 @@
+syntax = "proto3";
+package trance_pb;
+
+message Colour {
+  float r = 1;
+  float g = 2;
+  float b = 3;
+  float a = 4;
+}
+
+message ExportSettings {
+  // Last path exported to.
+  string path = 1;
+  // Export side-by-side 3D video.
+  bool export_3d = 2;
+  // Width in pixels of the video.
+  uint32 width = 3;
+  // Height in pixels of the video.
+  uint32 height = 4;
+  // Frames per seconds of the video.
+  uint32 fps = 5;
+  // Length in seconds of the video.
+  uint32 length = 6;
+  // 0 to 4, 0 is best.
+  uint32 quality = 7;
+  // Number of threads for encoding.
+  uint32 threads = 8;
+}
+
+// General system-wide configuration.
+message System {
+  // Field 2 was `Renderer renderer`. There is no renderer choice any more: there is one
+  // desktop renderer, and XR output is attempted automatically (docs/spec-xr-unified.md
+  // D2). Reserved so the number is never reused. The JSON loader accepts and drops
+  // the obsolete key while preserving the rest of an existing system config.
+  reserved 2;
+
+  // Enable vsync to eliminate tearing, but can cause stuttering.
+  bool enable_vsync = 1;
+
+  // Draw depth, between 0 and 1. Affects intensity of zoom effect, and depth in VR.
+  message DrawDepth {
+    float draw_depth = 1;
+  }
+  DrawDepth draw_depth = 11;
+
+  // How far apart the view for each eye is in VR.
+  message EyeSpacing {
+    float eye_spacing = 1;
+  }
+  EyeSpacing eye_spacing = 12;
+
+  // Number of images to keep in memory at a time. Uses up both RAM and video
+  // memory.
+  uint32 image_cache_size = 5;
+
+  // Number of frames to buffer for each loaded animation. Uses up both RAM and video
+  // memory.
+  uint32 animation_buffer_size = 13;
+
+  // Number of font sizes to keep in memory at a time. Each character size of a
+  // single font uses up another slot in the cache. Uses up video card memory.
+  uint32 font_cache_size = 6;
+
+  // Windowed mode.
+  bool windowed = 7;
+
+  // Last known root directory.
+  string last_root_directory = 8;
+  // Last used export settings.
+  ExportSettings last_export_settings = 9;
+
+  message LastSession {
+    map<string, string> variable_map = 1;
+  }
+  // Last used variable settings for each session.
+  map<string, LastSession> last_session_map = 10;
+}
+
+// Configuration for a single program, i.e. a combination of a selection of
+// themes with settings related to visual styles, visual effects and so on.
+// Different programs can be swapped in during a single session.
+// One layer of the entrainment bed: a carrier with an optional binaural split
+// and an optional isochronic gate. See Entrainment.
+message EntrainmentLayer {
+  // Carrier centre frequency in Hz.
+  float center_hz = 1;
+  // Binaural beat in Hz: left ear = center - beat/2, right = center + beat/2.
+  // 0 = no split (mono carrier).
+  float binaural_hz = 2;
+  // Isochronic pulse (amplitude-gate) rate in Hz; 0 = continuous. The gate runs
+  // 180 degrees out of phase between the ears (hemispheric effect).
+  float pulse_hz = 3;
+  // Relative layer level in dB (0 = unity). Layers are summed, then the whole
+  // bed is normalised to Entrainment.master_db.
+  float amplitude_db = 4;
+}
+
+// A continuously-synthesised binaural/isochronic entrainment bed, mixed under
+// the visuals. Self-contained: the layers are stored in full. Delete them (an
+// empty layer list) to disable the bed.
+message Entrainment {
+  repeated EntrainmentLayer layer = 1;
+  // Master output level in dB RMS. 0 (unset) uses the default (~ -28 dB).
+  float master_db = 2;
+}
+
+// An authorable visual pattern (Framing B), stored as DSL source text. Parsed and
+// compiled at playback into a Cycler tree; if parsing fails the pattern is skipped
+// (never the whole session). Additive: older builds ignore this and fall back to
+// the built-in VisualType list.
+message VisualPatternSource {
+  // Unique name within the program.
+  string name = 1;
+  // Selection weight in the same shuffle as the built-in visual_type entries.
+  uint32 random_weight = 2;
+  // The pasteable DSL source -- the source of truth (see docs/visual-grammar.md).
+  string source_text = 3;
+  // Disabled patterns are stored but not selected.
+  bool enabled = 4;
+
+  // If pinned, this pattern is in the visual solo set. Zero pins: weighted
+  // lottery as usual. One pin: that visual is the only one selected. Two or
+  // more: the lottery runs among the pinned visuals only. A disabled pattern's
+  // pin is cleared by validate_program (it is not in the lottery).
+  bool pinned = 5;
+}
+
+message Program {
+  // The different implemented visual types.
+  enum VisualType {
+    NONE = 0;
+    ACCELERATE = 1;
+    SLOW_FLASH = 2;
+    SUB_TEXT = 3;
+    FLASH_TEXT = 4;
+    PARALLEL = 5;
+    SUPER_PARALLEL = 6;
+    ANIMATION = 7;
+    SUPER_FAST = 8;
+  }
+
+  // Controls enabling/frequency of each theme.
+  message EnabledTheme {
+    string theme_name = 1;
+
+    // How frequently this theme will be selected relative to others.
+    uint32 random_weight = 2;
+
+    // If pinned, this theme is in the theme solo set. Zero pins: weighted
+    // rotation. One pin: always-resident (weights pick the other live slot).
+    // Two pins: those two ARE the live pair. Three or more: the two live
+    // slots lottery among the pinned themes. Runtime `theme pin` is a
+    // separate overlay and does not write this bit.
+    bool pinned = 3;
+  }
+
+  // Controls enabling/frequency of each visual type.
+  message VisualTypeConfig {
+    VisualType type = 1;
+
+    // Controls how frequently this program will be randomly selected relative
+    // to others.
+    uint32 random_weight = 2;
+
+    // If pinned, this visual type is in the visual solo set (same rules as
+    // VisualPatternSource.pinned). A pin on NONE is cleared: NONE is the
+    // enum zero and Director uses 0 to mean "no built-in".
+    bool pinned = 3;
+  }
+
+  // Deprecated; replaced by enabled_theme!
+  repeated string enabled_theme_name = 100;
+  // Themes to use.
+  repeated EnabledTheme enabled_theme = 1;
+  // Visual types to use.
+  repeated VisualTypeConfig visual_type = 2;
+
+  // Ticks per second. Controls the global speed of everything; higher is faster,
+  // default is 120.
+  uint32 global_fps = 3;
+
+  // Intensity of the zoom effect (0 being no zoom, 1 being the maximum).
+  float zoom_intensity = 4;
+
+  // Settings for spiral.
+  Colour spiral_colour_a = 5;
+  Colour spiral_colour_b = 6;
+  bool reverse_spiral_direction = 7;
+
+  // Font settings for displayed text.
+  // TODO: better text options and handling, sizing, etc.
+  Colour main_text_colour = 8;
+  Colour shadow_text_colour = 9;
+
+  // Optional entrainment audio bed played while this program is active.
+  Entrainment entrainment = 10;
+
+  // Authorable custom visual patterns (Framing B), selected alongside visual_type.
+  repeated VisualPatternSource custom_visual_pattern = 11;
+}
+
+message AudioEvent {
+  enum Type {
+    NONE = 0;
+    AUDIO_PLAY = 1;
+    AUDIO_STOP = 2;
+    AUDIO_FADE = 3;
+  }
+
+  // Type of event.
+  Type type = 1;
+  // Whether to use the next unused audio channel.
+  bool next_unused_channel = 7;
+  // Audio channel to affect.
+  uint32 channel = 2;
+  // Path to (audio) file.
+  string path = 3;
+  // Whether to loop the file.
+  bool loop = 4;
+  // Volume setting for this event.
+  uint32 volume = 5;
+  // Time over which this event takes place.
+  uint32 time_seconds = 6;
+}
+
+message PlaylistItem {
+  message Standard {
+    string program = 1;
+
+    // How long to play this item before choosing a new one.
+    uint32 play_time_seconds = 2;
+  }
+
+  message Subroutine {
+    repeated string playlist_item_name = 1;
+  }
+
+  // Deprecated; replaced by standard!
+  string program = 100;
+  uint32 play_time_seconds = 101;
+
+  oneof contents {
+    Standard standard = 1;
+    Subroutine subroutine = 2;
+  }
+
+  message NextItem {
+    // References playlist item in Session.
+    string playlist_item_name = 1;
+
+    // Controls how frequently this item will be selected relative to others.
+    uint32 random_weight = 2;
+
+    // References variable_map.
+    string condition_variable_name = 3;
+    // References value in chosen variable.
+    string condition_variable_value = 4;
+  }
+
+  repeated NextItem next_item = 3;
+  repeated AudioEvent audio_event = 4;
+}
+
+message Theme {
+  // Paths to be used as images.
+  repeated string image_path = 2;
+  // Paths to be used as animations.
+  repeated string animation_path = 3;
+  // Fonts to be used for text.
+  repeated string font_path = 4;
+  // Lines of text.
+  repeated string text_line = 5;
+  // Precanned audio files (mantras/cues) this theme owns. The grammar decides
+  // when/how loud to play them; absent = empty, old sessions and
+  // the converter are unaffected.
+  repeated string audio_path = 6;
+}
+
+message Variable {
+  // Description of the variable.
+  string description = 1;
+  // Possible values for this variable.
+  repeated string value = 2;
+  // Default value.
+  string default_value = 3;
+}
+
+message Session {
+  // The playlist of programs.
+  string first_playlist_item = 1;
+  map<string, PlaylistItem> playlist = 2;
+
+  // Available programs.
+  map<string, Program> program_map = 3;
+
+  // Available themes.
+  map<string, Theme> theme_map = 4;
+
+  // Configurable variables for this session.
+  map<string, Variable> variable_map = 5;
+}
+
+message SessionArchive {
+  message Location {
+    uint64 offset = 1;
+    uint64 length = 2;
+  }
+
+  // The embedded session.
+  Session session = 1;
+  // The embedded filesystem.
+  map<string, Location> file_archive = 2;
+}

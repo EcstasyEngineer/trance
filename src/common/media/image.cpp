@@ -1,0 +1,131 @@
+#include <common/media/image.h>
+#include <iostream>
+
+#define VPX_CODEC_DISABLE_COMPAT 1
+#pragma warning(push, 0)
+#include <SFML/Graphics.hpp>
+#include <SFML/OpenGL.hpp>
+#pragma warning(pop)
+
+std::vector<GLuint> Image::textures_to_delete;
+std::mutex Image::textures_to_delete_mutex;
+
+Image::Image() : _width{0}, _height{0}, _texture{0}
+{
+}
+
+Image::Image(uint32_t width, uint32_t height, unsigned char* data)
+: _width{width}, _height{height}, _texture{0}, _sf_image{new sf::Image}
+{
+  _sf_image->resize({width, height}, data);
+}
+
+Image::Image(const sf::Image& image)
+: _width{image.getSize().x}
+, _height{image.getSize().y}
+, _texture{0}
+, _sf_image{new sf::Image{image}}
+{
+}
+
+Image::operator bool() const
+{
+  return _width && _height;
+}
+
+uint32_t Image::width() const
+{
+  return _width;
+}
+
+uint32_t Image::height() const
+{
+  return _height;
+}
+
+uint32_t Image::texture() const
+{
+  return _texture;
+}
+
+bool Image::ensure_texture_uploaded() const
+{
+  if (_texture || !(*this)) {
+    return false;
+  }
+
+  // Upload the texture to video memory and set its texture_deleter so that
+  // it's cleaned up when there are no more Image objects referencing it.
+  glGenTextures(1, &_texture);
+  _deleter.reset(new texture_deleter{_texture});
+
+  // Could be split out to a separate call so that Theme doesn't have to hold on
+  // to mutex while uploading. This probably doesn't actually block though so no
+  // worries.
+  glBindTexture(GL_TEXTURE_2D, _texture);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, _width, _height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+               _sf_image->getPixelsPtr());
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+
+  // Return true for purging on the async thread.
+  return true;
+}
+
+const std::shared_ptr<sf::Image>& Image::get_sf_image() const
+{
+  return _sf_image;
+}
+
+void Image::clear_sf_image() const
+{
+  _sf_image.reset();
+}
+
+void Image::delete_textures()
+{
+  textures_to_delete_mutex.lock();
+  for (const auto& texture : textures_to_delete) {
+    glDeleteTextures(1, &texture);
+  }
+  textures_to_delete.clear();
+  textures_to_delete_mutex.unlock();
+}
+
+Image::texture_deleter::~texture_deleter()
+{
+  textures_to_delete_mutex.lock();
+  textures_to_delete.push_back(texture);
+  textures_to_delete_mutex.unlock();
+}
+
+// Reject images whose dimensions are zero or larger than any GPU will accept.
+// A corrupt header can report absurd sizes, and width*height*4 then overflows
+// or exhausts memory inside sf::Image::create / glTexImage2D and takes the
+// process down with no diagnostic.
+static const int max_image_dimension = 16384;
+
+// JPEGs used to go through a vendored copy of the jpgd library because SFML 2
+// could not decode progressive JPEGs. SFML 3's image loader is stb_image, which
+// handles baseline and progressive alike (and additionally CMYK/YCCK Adobe files
+// and truncated scans, all of which jpgd rejected), so every format goes through
+// the one loadFromFile path below.
+Image load_image(const std::string& path)
+{
+  sf::Image sf_image;
+  if (!sf_image.loadFromFile(path)) {
+    std::cerr << "\ncouldn't load " << path << std::endl;
+    return {};
+  }
+  if (sf_image.getSize().x > uint32_t(max_image_dimension) ||
+      sf_image.getSize().y > uint32_t(max_image_dimension)) {
+    std::cerr << "\nrefusing " << path << ": bad dimensions " << sf_image.getSize().x << "x"
+              << sf_image.getSize().y << std::endl;
+    return {};
+  }
+
+  Image image{sf_image};
+  return image;
+}
