@@ -1,5 +1,0 @@
-# The accent holds one image; periodic visibility reveals the underlay.
-pattern reveal_underlay for 48f {
-  pattern background for 48f { image primary }
-  pattern accent for 48f { image secondary show [this.frame % 12 < 3] }
-}

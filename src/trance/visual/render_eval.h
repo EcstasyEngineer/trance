@@ -284,12 +284,8 @@ namespace pattern
       return AnimDraw::Still;
     }
     // Follow each V4 output's captured theme, so a later sibling cannot redirect
-    // its animation to the other streamer. Historical V3 follows the last load.
-#ifdef TRANCE_LEGACY_ORACLE
-    Slot slot = regs.anim_slot;
-#else
+    // its animation to the other streamer.
     Slot slot = Slot::Primary;
-#endif
     if (!st.anim_image_reg.empty()) {
       const auto captured = regs.image_slots.find(st.anim_image_reg);
       if (captured == regs.image_slots.end()) return AnimDraw::Still;
@@ -305,11 +301,6 @@ namespace pattern
   void eval_render(const std::vector<RenderStmt>& stmts, VisualRender& api,
                    const Registers& regs, const NodeMap& nodes, const Cycler* root);
 
-  // The render block used when a pattern declares none (draws the "current" image +
-  // spiral + text), so playback never shows a blank frame.
-#ifdef TRANCE_LEGACY_ORACLE
-  std::vector<RenderStmt> default_render_block();
-#endif
 }
 
 #endif

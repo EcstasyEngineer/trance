@@ -68,9 +68,9 @@ subtasks, not a claim that 27 agents ran simultaneously.
   with recording APIs. This establishes draw requests and selection counts,
   rather than physical display brightness or animation decoder behavior.
 - Parser acceptance is too permissive to serve as the whole editor contract.
-  The [diagnostic probe](../../tests/exploration/grammar/diagnostic_probe.cpp)
+  The [diagnostic probe](https://github.com/EcstasyEngineer/trance/blob/3fd6dccffda4dfa7e44967b13239f954b42b5dd6/tests/exploration/grammar/diagnostic_probe.cpp)
   records accepted trailing input, misspelled clock attributes and other cases;
-  [captured results](../../tests/exploration/grammar/diagnostic-probe-results.txt)
+  [captured results](https://github.com/EcstasyEngineer/trance/blob/3fd6dccffda4dfa7e44967b13239f954b42b5dd6/tests/exploration/grammar/diagnostic-probe-results.txt)
   distinguish those findings from desirable acceptance behavior.
 - Snapshot storage does not guarantee snapshot display across animation-only
   theme swaps. The concrete renderer can substitute the current lane frame for

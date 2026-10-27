@@ -31,7 +31,7 @@ with testable semantics, rather than inferring completion from the word
 
 ## 11. Grammar-only recipe: hold content, pulse visibility
 
-Executable asset: [held-still.pattern](../../tests/exploration/strobe/held-still.pattern).
+Executable asset: [held-still.pattern](https://github.com/EcstasyEngineer/trance/blob/3fd6dccffda4dfa7e44967b13239f954b42b5dd6/tests/exploration/strobe/held-still.pattern).
 
 ```text
 pattern held_still for 48f {
@@ -53,7 +53,7 @@ the gate at every cut boundary.
 
 ## 12. Images, animation, and theme fallback
 
-Executable asset: [held-animation.pattern](../../tests/exploration/strobe/held-animation.pattern).
+Executable asset: [held-animation.pattern](https://github.com/EcstasyEngineer/trance/blob/3fd6dccffda4dfa7e44967b13239f954b42b5dd6/tests/exploration/strobe/held-animation.pattern).
 Adding `anim` requests animation once on scene entry and sends the same gate
 through `render_animation_or_image`. The recorder checks that each scene selects
 one still and requests one animation; none of its visibility pulses reloads them.
@@ -91,10 +91,10 @@ coverage; it must not be conflated with this test's dispatch assertions.
 | Change media rapidly | `every Nf { image alternate }` | No absent phase; new selection each cut |
 | Opaque full-frame blackout or white flash | No dedicated primitive | Requires a design/runtime decision |
 
-[reveal-underlay.pattern](../../tests/exploration/strobe/reveal-underlay.pattern)
+[reveal-underlay.pattern](https://github.com/EcstasyEngineer/trance/blob/3fd6dccffda4dfa7e44967b13239f954b42b5dd6/tests/exploration/strobe/reveal-underlay.pattern)
 selects both images once, draws primary first, and draws secondary on top for
 three of every twelve ticks. The test asserts the exact recorded layer order
-and the continuous primary draw. [switch-media.pattern](../../tests/exploration/strobe/switch-media.pattern)
+and the continuous primary draw. [switch-media.pattern](https://github.com/EcstasyEngineer/trance/blob/3fd6dccffda4dfa7e44967b13239f954b42b5dd6/tests/exploration/strobe/switch-media.pattern)
 changes theme sides every six ticks and has a draw on every tick. It is a distinct
 effect even when the user perceives both as flashing.
 
@@ -143,7 +143,7 @@ pacing, perceptual effect, or synchronization on hardware.
 
 ## 15. Nesting, re-entry and clipping
 
-Executable asset: [nested-gate.pattern](../../tests/exploration/strobe/nested-gate.pattern).
+Executable asset: [nested-gate.pattern](https://github.com/EcstasyEngineer/trance/blob/3fd6dccffda4dfa7e44967b13239f954b42b5dd6/tests/exploration/strobe/nested-gate.pattern).
 A 23-tick outer scene selects the held image. Its deterministic burst controller
 has 10 active ticks followed by 4 cooldown ticks. Inside each burst, a six-tick
 gate is visible for its first three ticks. The test runs two outer iterations:
@@ -184,7 +184,7 @@ It asserts 526 content ticks and repeats every render as a second output pass:
 | Nested burst, 46 ticks | Gate re-entry, inactive suppression, outer clipping, image lifetime |
 | Prototype default, 192 ticks | Five selections; 16 windows; 64 visible accent ticks; cut-clock zoom |
 
-[prototype-default.pattern](../../tests/exploration/strobe/prototype-default.pattern)
+[prototype-default.pattern](https://github.com/EcstasyEngineer/trance/blob/3fd6dccffda4dfa7e44967b13239f954b42b5dd6/tests/exploration/strobe/prototype-default.pattern)
 mirrors the structured authoring prototype's default emitted source: a continuous
 secondary backdrop, primary selection every 48 ticks, and a 4-on/8-off gate
 inside each cut. The recorder verifies every visible zoom sample against the

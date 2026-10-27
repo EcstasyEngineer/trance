@@ -21,18 +21,19 @@ Eight paired reviews examined each built-in twice:
 [04](reviews/PAIR04.md), [05](reviews/PAIR05.md), [06](reviews/PAIR06.md),
 [07](reviews/PAIR07.md), [08](reviews/PAIR08.md).
 
-The native recording-renderer comparison covers 27,912 frames across the eight
-recipes, including loops and child transitions. Selector reference tests examine
-selection, local time, sampled duration and random-call behavior. Native runtime
-tests add all nine composition nesting pairs, finite-child completion, repetitions,
-sampling, offsets and clipping.
+The retained native tests exercise scheduling, private image ownership,
+primary/secondary animation coherence and the distinct Parallel, Flash Text and
+Super Parallel layer behavior through the production compiler and recorder.
+Native runtime tests cover all nine composition nesting pairs, finite-child
+completion, repetitions, sampling, offsets and clipping.
 
 These establish bounded execution behavior. They do not prove arbitrary nesting,
 media decoding, final GPU pixels, refresh timing or physical-headset correctness.
 The current validation commands and limits are in
 [validation coverage](../../architecture-maturity.md).
 
-The prototype Python validator and V3 lowering adapter remain comparison tools.
+The prototype Python validator, V3 lowering adapter, historical comparison
+tests and their supporting implementations have been deleted.
 Native compilation is authoritative for executable acceptance and resource bounds.
 Reports in this directory describe the state when written; references to
 unsupported native nesting or V3 compatibility in those reports are historical.

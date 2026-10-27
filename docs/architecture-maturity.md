@@ -25,9 +25,8 @@ ctest --test-dir build/windows-msvc -C Release --output-on-failure
 | `grammar_lint` | Production V4 builtin validation and sampled render-expression checks. | Does not explore every transition or random outcome. |
 | `v4_parser_test` | Native AST acceptance, diagnostics and execution bounds. | Is not a media decoder or pixel comparison. |
 | `v4_runtime_test` | Parallel/sequential/random nesting, durations, repetitions, cadence, offsets, sampled holds, exits and clipping. | Finite test cases do not prove every possible AST. |
-| `v4_native_execution_test` | Production compiler/render recording against builtin reference traces; private images and theme/animation coherence. | Recording calls do not establish decoded media or final GPU pixels. |
+| `v4_native_execution_test` | Production compiler/render behavior assertions for Parallel/Flash Text/Super Parallel, private images and theme/animation coherence. | Recording calls do not establish decoded media or final GPU pixels. |
 | `compiled_visual_test` | Production capture and refresh effects, stale selections and repeat-render invariance. | Uses recording media/render APIs. |
-| `phase_execution_test`, `animation_accent_composition_test`, `leapfrog_composition_test`, `strobe_composition_test` | Historical behavior oracles and targeted composition regressions. | Legacy source support in a test does not imply language support in the executable. |
 | `playlist_runner_test`, `session_json_test` | Playlist transitions, session serialization and validation. | Not complete live-loop or filesystem coverage. |
 | `bed_preset_test` | Synthesized preset lookup, application and matching. | Not a listening or sound-device test. |
 | `theme_bank_test` | Synthetic media, selection, fallback and cache behavior with a GL context. | Not complete codec or threading coverage. |

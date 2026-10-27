@@ -57,8 +57,7 @@ that an input is within the native compiler's resource bounds.
 
 The executable accepts V4 JSON exclusively. F2 source display/copy, new custom
 patterns, live lint, CLI and session custom patterns share the same V4 frontend.
-Historical V3 parser and scheduler code is compiled only into test oracles, never
-into the product. Existing V3 source receives an explicit unsupported diagnostic.
+Historical V3 parsers, schedulers and comparison tests have been deleted. Existing V3 source receives an explicit unsupported diagnostic.
 
 Parallel (#5) is restored to primary and secondary image lanes: each64f, secondary
 offset32f and opacity0.5, zoom0to0.5, animation every third selection. The old

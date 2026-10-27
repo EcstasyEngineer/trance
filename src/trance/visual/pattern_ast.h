@@ -14,7 +14,7 @@ namespace pattern
   // it is deliberately NOT spelled "Alternate", because the grammar's `alternate` content
   // word means something else entirely (deterministic A/B ping-pong between the two sides).
   // The ThemeBank/api boundary below this still speaks `bool alternate` by design.
-  enum class Slot { None, Primary, Secondary, Runtime };
+  enum class Slot { None, Primary, Secondary };
 
   // One effect a leaf performs. The compiler turns an ordered effect list into a
   // single action lambda (see pattern_compiler / CompiledVisual).
@@ -27,54 +27,25 @@ namespace pattern
   // control visibility.
   struct Effect
   {
-    enum class Kind {
-      Image, Text, Anim, Themes, Font, SpiralNew, Subtext, SmallSub,
-      // Scalar-register state ops:
-      Set,       // scalars[target] = ivalue
-      Toggle,    // scalars[target] ^= 1
-      Roll,      // scalars[target] = choices[random(choices.size())]
-      Pulse,     // bounded counter -> one-frame flag (see fields below)
-#ifdef TRANCE_LEGACY_ORACLE
-      Copy,      // Historical snapshot effect, excluded from the product.
-#endif
-      SpiralSet, // deterministically set spiral type (ivalue) + width (mod_literal)
-      // Grammar-driven theme audio: `audio <content> [loop]` pulls a
-      // precanned path from the theme's audio pool (slot semantics identical to
-      // Image) and starts it playing on the engine's single dedicated theme-audio
-      // channel. `force` doubles as the `loop` flag here. `audio stop` is AudioStop
-      // (no fields used). See docs/spec-grammar-v4.md.
-      Audio,
-      AudioStop,
-      Chance // Exact rational probability -> scalar target (internal V4 selection policy).
-    };
+    enum class Kind { Image, Text, Anim, Subtext, SmallSub, Toggle, Roll, Pulse, Chance };
     Kind kind = Kind::Image;
     Slot slot = Slot::None;
     // If non-empty, the effect's slot bool is read from scalars[slot_reg] at fire time
     // (a toggle/flag used as a primary/alternate selector) instead of `slot`.
     std::string slot_reg;
     std::string target = "current";  // generated image capture or scalar-state identity
-#ifdef TRANCE_LEGACY_ORACLE
-    std::string src;                 // Historical snapshot source.
-#endif
     uint32_t split = 0;              // SplitType for a Text effect
-    float rate = 0.f;                // constant volume (0..1) for Audio (a literal `volume`
-                                     // modulator sets it once at fire time instead of every
-                                     // frame -- see Audio in run_effect)
-    bool force = false;              // force flag for Font / SmallSub; loop flag for Audio
+    bool force = false;              // refresh caption selection
 
-    // Scalar-op operands:
-    int32_t ivalue = 0;              // Set value / SpiralSet spiral type
+    // Internal selection and animation-accent state.
     std::vector<int32_t> choices;    // Roll choices
-    std::string mod_reg;             // Pulse modulus register (empty => mod_literal)
-    int32_t mod_literal = 0;         // Pulse modulus literal
+    int32_t mod_literal = 0;         // Pulse modulus
     std::string flag;                // Pulse output flag register
 
-    // `when` guard: run the effect only if the condition holds. Truthy tests
-    // scalars[guard_reg] != 0; Eq / Ge compare it against guard_value.
-    enum class Guard { None, Truthy, Eq, Ge };
+    // Conditional selection is gated by an internal probability result.
+    enum class Guard { None, Truthy };
     Guard guard = Guard::None;
     std::string guard_reg;
-    int32_t guard_value = 0;
     uint32_t probability_numerator = 0;
     uint32_t probability_denominator = 1;
   };
@@ -84,10 +55,7 @@ namespace pattern
   // maps them against occurrence clocks and capture state to a VisualRender call.
   struct RenderStmt
   {
-    // AudioVolume: a per-frame curve-drivable theme-audio volume set,
-    // the same shape as Spiral's speed axis -- `speed` field carries the [0,1]-scaled
-    // expr, evaluated and applied every frame so `volume (curve ...)` reads like zoom.
-    enum class Op { Image, Text, Subtext, SmallText, Spiral, Warp, AudioVolume };
+    enum class Op { Image, Text, Subtext, SmallText, Spiral };
     Op op = Op::Image;
 
     // Image op: the image register to draw (e.g. "current"). A register that was never
@@ -106,8 +74,6 @@ namespace pattern
     //   Text:                origin, zoom, shadow_origin, shadow_zoom
     //   Subtext / SmallText: alpha, origin
     //   Spiral:              speed (per-frame rotation advance; empty => static)
-    //   AudioVolume:         speed (per-frame theme-audio volume, 0..1; empty => no-op --
-    //                        a constant volume is set once at fire time instead, see Audio)
     std::string alpha, origin, zoom, shadow_origin, shadow_zoom, speed;
 
     // Optional `when [cond]`: draw only if the expr evaluates non-zero. Empty => always.
@@ -116,12 +82,6 @@ namespace pattern
 
   struct Node
   {
-    // Historical comparison executables inject their old schedule data here.
-    // Product builds have no legacy node tags or scheduling parameters.
-#ifdef TRANCE_LEGACY_ORACLE
-#include <legacy_node_fields.h>
-#endif
-
     // Stable id (optional) so a render preset can address this node through the
     // compiler's id->Cycler map (e.g. read "slow_loop"->active()).
     std::string id;

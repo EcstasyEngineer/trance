@@ -1,9 +1,0 @@
-# One selection per cut, with periodic visibility on that same subject.
-pattern scene for 192f {
-  pattern backdrop for 192f { image secondary }
-  pattern foreground for 192f {
-    every 48f -> cut {
-      image primary zoom (curve 0 -> 0.5 over cut) show [this.frame % 12 < 4]
-    }
-  }
-}

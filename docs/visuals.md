@@ -65,8 +65,8 @@ counts are separate.
 
 `trance --lint [session]` parses, lowers, compiles, and evaluates expressions
 without a window. It is author feedback, not proof of every runtime schedule.
-`phase_execution_test` additionally checks effects, activity, reset, and local
-clocks across frame advances.
+`v4_runtime_test` and `v4_native_execution_test` check scheduling, image ownership
+and animation behavior across frame advances.
 
 Implementation: [director.cpp](../src/trance/director.cpp),
 [compiled_visual.cpp](../src/trance/visual/compiled_visual.cpp),

@@ -110,7 +110,8 @@ Linux also needs development packages for X11/Xext, OpenGL, and the vcpkg ports.
 Outputs are under `build/<configure-preset>/`.
 
 Build all test targets before CTest. `grammar_lint` and
-`phase_execution_test` cover pattern compilation and execution;
+`v4_parser_test`, `v4_runtime_test` and `v4_native_execution_test` cover
+pattern compilation and execution;
 `session_json_test` and `playlist_runner_test` cover session behavior.
 `theme_bank_test` requires an OpenGL context and is labeled `gpu`
 (`ctest -LE gpu` excludes it). The live command-channel harness is separate:

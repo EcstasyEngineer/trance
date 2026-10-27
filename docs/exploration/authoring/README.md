@@ -50,9 +50,8 @@ lanes forming a dissolve. Flash Text is the actual built-in; there is no separat
 dissolve-example button. The local server reads built-ins from the executable;
 the hosted site uses the generated built-in JSON shipped with the page.
 
-The composer and player use V4 directly. V3 text is rejected. Historical parser
-and scheduler comparison oracles are test-only and not a player compatibility
-layer. See the [V4 grammar](../../spec-grammar-v4.md),
+The composer and player use V4 directly. V3 text is rejected. Retired parser,
+scheduler, composer and translation prototypes and their tests have been deleted. See the [V4 grammar](../../spec-grammar-v4.md),
 [runtime](../../engine-today.md) and [validation coverage](../../architecture-maturity.md).
 
 ## Checks

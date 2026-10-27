@@ -1,4 +1,4 @@
-"""Run direct native V4 parser/compiler execution checks on all eight source examples.
+"""Run direct native V4 parser/compiler execution behavior checks.
 
 No V4-to-V3 adapter is imported or invoked. Recording renderer avoids real media,
 GPU pixels, displays, and wall-clock timing.
@@ -15,7 +15,7 @@ def main():
     args = parser.parse_args()
     if not args.exe.is_file():
         parser.error("Build v4_native_execution_test first, or provide --exe")
-    return subprocess.run([str(args.exe.resolve()), str(ROOT / "docs/exploration/v4/examples")], check=False).returncode
+    return subprocess.run([str(args.exe.resolve())], check=False).returncode
 
 if __name__ == "__main__":
     raise SystemExit(main())

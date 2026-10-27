@@ -11,8 +11,6 @@ namespace
       return ImageSlotHint::Primary;
     case pattern::Slot::Secondary:
       return ImageSlotHint::Alternate;
-    case pattern::Slot::Runtime:
-      return ImageSlotHint::Runtime;
     default:
       return ImageSlotHint::None;
     }

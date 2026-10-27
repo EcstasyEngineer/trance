@@ -1,6 +1,6 @@
 #include <trance/visual/builtin_patterns.h>
 
-// Native V4 AST sources. V3 definitions remain compatibility fixtures.
+// Native V4 AST sources shared by the player and composer.
 namespace builtin {
 std::string pattern_source_v4(uint32_t visual_type)
 {

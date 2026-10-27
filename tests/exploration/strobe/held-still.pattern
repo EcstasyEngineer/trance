@@ -1,4 +1,0 @@
-# Hold one theme selection; pulse its visibility. 3 ticks on, 9 ticks off.
-pattern held_still for 48f {
-  image primary show [this.frame % 12 < 3]
-}

@@ -18,5 +18,6 @@ coverage.
 - [V4 development record](../exploration/v4/README.md) links the paired reviews,
   comparisons and original adapter. None of those adapters is on the player path.
 
-Historical comparison tests preserve source oracles for regression checks. Their
-presence does not provide a legacy language option in the product.
+Retired parser/compiler oracles, translation prototypes and their tests have
+been deleted. Historical documents describe earlier investigations; referenced
+implementations and test scripts may exist only in Git history.

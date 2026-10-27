@@ -37,7 +37,7 @@ Probability = NumberInZeroToOne | {numerator: Integer, denominator: PositiveInte
 
 The machine-readable shape is [pattern-v4.schema.json](pattern-v4.schema.json).
 The authoritative semantic validator is
-[pattern_v4.py](../../../tools/pattern_v4.py); it additionally checks IDs,
+[pattern_v4.py](https://github.com/EcstasyEngineer/trance/blob/3fd6dccffda4dfa7e44967b13239f954b42b5dd6/tools/pattern_v4.py); it additionally checks IDs,
 ancestor references, local envelope fit, sampled-duration alignment, legal
 combinations, unsupported no-op output properties and finite sequential children.
 Unknown fields fail instead of becoming invisible flags. All durations in this
@@ -144,12 +144,12 @@ would simplify the syntax by breaking the effect.
 
 The [examples directory](examples) contains all eight ASTs, including leaf motion,
 content choices, opacity, animation frequency, text probabilities and timing.
-[pattern_v4_examples.py](../../../tools/pattern_v4_examples.py) generates those
+[pattern_v4_examples.py](https://github.com/EcstasyEngineer/trance/blob/3fd6dccffda4dfa7e44967b13239f954b42b5dd6/tools/pattern_v4_examples.py) generates those
 canonical files. [MODEL-AUDIT.md](MODEL-AUDIT.md) and
 [CONTENT-AND-CLOCK-AUDIT.md](CONTENT-AND-CLOCK-AUDIT.md) record independent source
 audits and deliberate differences.
 
-The earlier [restricted V3 adapter](../../../tools/pattern_v4_lower.py) is
+The earlier [restricted V3 adapter](https://github.com/EcstasyEngineer/trance/blob/3fd6dccffda4dfa7e44967b13239f954b42b5dd6/tools/pattern_v4_lower.py) is
 retained as historical comparison evidence. Native V4 no longer depends on it:
 generic selectors, nesting, completed-child tails, private images and coherent
 image/animation theme choice are implemented directly. The common renderer and

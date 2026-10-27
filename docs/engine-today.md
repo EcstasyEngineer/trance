@@ -2,9 +2,8 @@
 
 The released visual language is the [V4 JSON AST](spec-grammar-v4.md). Built-ins,
 custom session patterns, CLI source loading, F2 editing and the composer use the
-same native frontend. It does not lower through V3 text. Historical parsers and
-schedulers are retained under test support as comparison oracles, not linked into
-the player.
+same native frontend. It does not lower through V3 text. Retired parsers,
+schedulers and their comparison tests have been deleted.
 
 ## Compilation and execution
 
