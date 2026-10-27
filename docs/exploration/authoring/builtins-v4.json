@@ -1,0 +1,789 @@
+{
+  "builtins": [
+    {
+      "id": 1,
+      "key": "accelerate",
+      "name": "accelerate",
+      "version": 4,
+      "sourcePatternName": "accelerate",
+      "sourcePath": "src/trance/visual/builtin_patterns_v4.cpp",
+      "source": "{\n  \"version\": 4,\n  \"root\": {\n    \"kind\": \"parallel\",\n    \"children\": [\n      {\n        \"node\": {\n          \"kind\": \"parallel\",\n          \"children\": [\n            {\n              \"node\": {\n                \"op\": \"image\",\n                \"source\": \"alternate\",\n                \"zoom\": {\n                  \"sum\": [\n                    {\n                      \"curve\": {\n                        \"from\": 0,\n                        \"to\": 0.4,\n                        \"scope\": \"scene\"\n                      }\n                    },\n                    {\n                      \"curve\": {\n                        \"from\": 0,\n                        \"to\": 0.1,\n                        \"scope\": \"local\"\n                      }\n                    }\n                  ]\n                },\n                \"flip_probability\": 0.5,\n                \"zoom_baseline\": {\n                  \"curve\": {\n                    \"from\": 0,\n                    \"to\": 0.4,\n                    \"scope\": \"scene\"\n                  }\n                },\n                \"animation\": {\n                  \"every\": 4\n                }\n              }\n            },\n            {\n              \"node\": {\n                \"op\": \"word\",\n                \"source\": \"primary\",\n                \"visibility\": [\n                  0,\n                  0.25\n                ],\n                \"selection_probability\": 0.5\n              }\n            }\n          ],\n          \"cadence\": {\n            \"ramp\": {\n              \"from\": 56,\n              \"to\": 12,\n              \"steps\": 140,\n              \"ease\": \"early\"\n            }\n          },\n          \"duration\": 2048\n        }\n      },\n      {\n        \"node\": {\n          \"op\": \"spiral\",\n          \"speed\": {\n            \"curve\": {\n              \"from\": 1,\n              \"to\": 4,\n              \"scope\": \"scene\"\n            }\n          }\n        }\n      }\n    ],\n    \"duration\": 2048,\n    \"id\": \"accelerate\"\n  }\n}",
+      "ast": {
+        "version": 4,
+        "root": {
+          "kind": "parallel",
+          "children": [
+            {
+              "node": {
+                "kind": "parallel",
+                "children": [
+                  {
+                    "node": {
+                      "op": "image",
+                      "source": "alternate",
+                      "zoom": {
+                        "sum": [
+                          {
+                            "curve": {
+                              "from": 0,
+                              "to": 0.4,
+                              "scope": "scene"
+                            }
+                          },
+                          {
+                            "curve": {
+                              "from": 0,
+                              "to": 0.1,
+                              "scope": "local"
+                            }
+                          }
+                        ]
+                      },
+                      "flip_probability": 0.5,
+                      "zoom_baseline": {
+                        "curve": {
+                          "from": 0,
+                          "to": 0.4,
+                          "scope": "scene"
+                        }
+                      },
+                      "animation": {
+                        "every": 4
+                      }
+                    }
+                  },
+                  {
+                    "node": {
+                      "op": "word",
+                      "source": "primary",
+                      "visibility": [
+                        0,
+                        0.25
+                      ],
+                      "selection_probability": 0.5
+                    }
+                  }
+                ],
+                "cadence": {
+                  "ramp": {
+                    "from": 56,
+                    "to": 12,
+                    "steps": 140,
+                    "ease": "early"
+                  }
+                },
+                "duration": 2048
+              }
+            },
+            {
+              "node": {
+                "op": "spiral",
+                "speed": {
+                  "curve": {
+                    "from": 1,
+                    "to": 4,
+                    "scope": "scene"
+                  }
+                }
+              }
+            }
+          ],
+          "duration": 2048,
+          "id": "accelerate"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "key": "slow_flash",
+      "name": "slow_flash",
+      "version": 4,
+      "sourcePatternName": "slow_flash",
+      "sourcePath": "src/trance/visual/builtin_patterns_v4.cpp",
+      "source": "{\n  \"version\": 4,\n  \"root\": {\n    \"kind\": \"sequential\",\n    \"children\": [\n      {\n        \"node\": {\n          \"kind\": \"parallel\",\n          \"children\": [\n            {\n              \"node\": {\n                \"kind\": \"parallel\",\n                \"children\": [\n                  {\n                    \"node\": {\n                      \"op\": \"image\",\n                      \"source\": \"primary\",\n                      \"zoom\": {\n                        \"curve\": {\n                          \"from\": 0,\n                          \"to\": 0.5,\n                          \"scope\": \"local\"\n                        }\n                      },\n                      \"animation\": {\n                        \"every\": 2\n                      }\n                    }\n                  }\n                ],\n                \"cadence\": 64\n              }\n            },\n            {\n              \"node\": {\n                \"kind\": \"parallel\",\n                \"children\": [\n                  {\n                    \"node\": {\n                      \"op\": \"caption\",\n                      \"source\": \"primary\"\n                    }\n                  }\n                ],\n                \"cadence\": 64\n              }\n            },\n            {\n              \"node\": {\n                \"op\": \"spiral\",\n                \"speed\": 2\n              }\n            }\n          ],\n          \"duration\": 1024\n        }\n      },\n      {\n        \"node\": {\n          \"kind\": \"parallel\",\n          \"children\": [\n            {\n              \"node\": {\n                \"kind\": \"parallel\",\n                \"children\": [\n                  {\n                    \"node\": {\n                      \"op\": \"image\",\n                      \"source\": \"secondary\",\n                      \"zoom\": {\n                        \"curve\": {\n                          \"from\": 0,\n                          \"to\": 0.8,\n                          \"scope\": \"fast_section\"\n                        }\n                      }\n                    }\n                  }\n                ],\n                \"cadence\": 8\n              }\n            },\n            {\n              \"node\": {\n                \"kind\": \"parallel\",\n                \"children\": [\n                  {\n                    \"node\": {\n                      \"op\": \"word\",\n                      \"source\": \"secondary\"\n                    }\n                  }\n                ],\n                \"cadence\": 16\n              }\n            },\n            {\n              \"node\": {\n                \"op\": \"spiral\",\n                \"speed\": 4\n              }\n            }\n          ],\n          \"duration\": 512,\n          \"id\": \"fast_section\"\n        }\n      }\n    ],\n    \"duration\": 1536,\n    \"repeat\": 2,\n    \"id\": \"slow_flash\"\n  }\n}",
+      "ast": {
+        "version": 4,
+        "root": {
+          "kind": "sequential",
+          "children": [
+            {
+              "node": {
+                "kind": "parallel",
+                "children": [
+                  {
+                    "node": {
+                      "kind": "parallel",
+                      "children": [
+                        {
+                          "node": {
+                            "op": "image",
+                            "source": "primary",
+                            "zoom": {
+                              "curve": {
+                                "from": 0,
+                                "to": 0.5,
+                                "scope": "local"
+                              }
+                            },
+                            "animation": {
+                              "every": 2
+                            }
+                          }
+                        }
+                      ],
+                      "cadence": 64
+                    }
+                  },
+                  {
+                    "node": {
+                      "kind": "parallel",
+                      "children": [
+                        {
+                          "node": {
+                            "op": "caption",
+                            "source": "primary"
+                          }
+                        }
+                      ],
+                      "cadence": 64
+                    }
+                  },
+                  {
+                    "node": {
+                      "op": "spiral",
+                      "speed": 2
+                    }
+                  }
+                ],
+                "duration": 1024
+              }
+            },
+            {
+              "node": {
+                "kind": "parallel",
+                "children": [
+                  {
+                    "node": {
+                      "kind": "parallel",
+                      "children": [
+                        {
+                          "node": {
+                            "op": "image",
+                            "source": "secondary",
+                            "zoom": {
+                              "curve": {
+                                "from": 0,
+                                "to": 0.8,
+                                "scope": "fast_section"
+                              }
+                            }
+                          }
+                        }
+                      ],
+                      "cadence": 8
+                    }
+                  },
+                  {
+                    "node": {
+                      "kind": "parallel",
+                      "children": [
+                        {
+                          "node": {
+                            "op": "word",
+                            "source": "secondary"
+                          }
+                        }
+                      ],
+                      "cadence": 16
+                    }
+                  },
+                  {
+                    "node": {
+                      "op": "spiral",
+                      "speed": 4
+                    }
+                  }
+                ],
+                "duration": 512,
+                "id": "fast_section"
+              }
+            }
+          ],
+          "duration": 1536,
+          "repeat": 2,
+          "id": "slow_flash"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "key": "sub_text",
+      "name": "sub_text",
+      "version": 4,
+      "sourcePatternName": "sub_text",
+      "sourcePath": "src/trance/visual/builtin_patterns_v4.cpp",
+      "source": "{\n  \"version\": 4,\n  \"root\": {\n    \"kind\": \"parallel\",\n    \"children\": [\n      {\n        \"node\": {\n          \"kind\": \"parallel\",\n          \"children\": [\n            {\n              \"node\": {\n                \"op\": \"image\",\n                \"source\": \"either\",\n                \"zoom\": {\n                  \"curve\": {\n                    \"from\": 0,\n                    \"to\": 0.375,\n                    \"scope\": \"local\"\n                  }\n                },\n                \"animation\": {\n                  \"every\": 3\n                }\n              }\n            }\n          ],\n          \"cadence\": 64\n        }\n      },\n      {\n        \"node\": {\n          \"kind\": \"parallel\",\n          \"children\": [\n            {\n              \"node\": {\n                \"op\": \"subtext\",\n                \"source\": \"secondary\"\n              }\n            }\n          ],\n          \"cadence\": 32\n        }\n      },\n      {\n        \"node\": {\n          \"op\": \"spiral\",\n          \"speed\": 4\n        }\n      }\n    ],\n    \"duration\": 1024,\n    \"id\": \"sub_text\"\n  }\n}",
+      "ast": {
+        "version": 4,
+        "root": {
+          "kind": "parallel",
+          "children": [
+            {
+              "node": {
+                "kind": "parallel",
+                "children": [
+                  {
+                    "node": {
+                      "op": "image",
+                      "source": "either",
+                      "zoom": {
+                        "curve": {
+                          "from": 0,
+                          "to": 0.375,
+                          "scope": "local"
+                        }
+                      },
+                      "animation": {
+                        "every": 3
+                      }
+                    }
+                  }
+                ],
+                "cadence": 64
+              }
+            },
+            {
+              "node": {
+                "kind": "parallel",
+                "children": [
+                  {
+                    "node": {
+                      "op": "subtext",
+                      "source": "secondary"
+                    }
+                  }
+                ],
+                "cadence": 32
+              }
+            },
+            {
+              "node": {
+                "op": "spiral",
+                "speed": 4
+              }
+            }
+          ],
+          "duration": 1024,
+          "id": "sub_text"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "key": "flash_text",
+      "name": "flash_text",
+      "version": 4,
+      "sourcePatternName": "flash_text",
+      "sourcePath": "src/trance/visual/builtin_patterns_v4.cpp",
+      "source": "{\n  \"version\": 4,\n  \"root\": {\n    \"kind\": \"parallel\",\n    \"children\": [\n      {\n        \"node\": {\n          \"kind\": \"parallel\",\n          \"children\": [\n            {\n              \"node\": {\n                \"op\": \"image\",\n                \"source\": \"secondary\",\n                \"zoom\": {\n                  \"curve\": {\n                    \"from\": 0,\n                    \"to\": 0.8,\n                    \"scope\": \"local\"\n                  }\n                }\n              }\n            }\n          ],\n          \"cadence\": 128\n        }\n      },\n      {\n        \"node\": {\n          \"kind\": \"parallel\",\n          \"children\": [\n            {\n              \"node\": {\n                \"op\": \"image\",\n                \"source\": \"secondary\",\n                \"zoom\": {\n                  \"curve\": {\n                    \"from\": 0,\n                    \"to\": 0.8,\n                    \"scope\": \"local\"\n                  }\n                },\n                \"opacity\": {\n                  \"triangle\": {\n                    \"from\": 0,\n                    \"peak\": 1,\n                    \"to\": 0\n                  }\n                }\n              }\n            }\n          ],\n          \"cadence\": 128,\n          \"offset\": 64\n        }\n      },\n      {\n        \"node\": {\n          \"kind\": \"parallel\",\n          \"children\": [\n            {\n              \"node\": {\n                \"op\": \"word\",\n                \"source\": \"secondary\"\n              }\n            }\n          ],\n          \"cadence\": 64\n        }\n      },\n      {\n        \"node\": {\n          \"kind\": \"parallel\",\n          \"children\": [\n            {\n              \"node\": {\n                \"op\": \"caption\",\n                \"source\": \"primary\"\n              }\n            }\n          ],\n          \"cadence\": 32\n        }\n      },\n      {\n        \"node\": {\n          \"op\": \"spiral\",\n          \"speed\": 2\n        }\n      }\n    ],\n    \"duration\": 1024,\n    \"id\": \"flash_text\"\n  }\n}",
+      "ast": {
+        "version": 4,
+        "root": {
+          "kind": "parallel",
+          "children": [
+            {
+              "node": {
+                "kind": "parallel",
+                "children": [
+                  {
+                    "node": {
+                      "op": "image",
+                      "source": "secondary",
+                      "zoom": {
+                        "curve": {
+                          "from": 0,
+                          "to": 0.8,
+                          "scope": "local"
+                        }
+                      }
+                    }
+                  }
+                ],
+                "cadence": 128
+              }
+            },
+            {
+              "node": {
+                "kind": "parallel",
+                "children": [
+                  {
+                    "node": {
+                      "op": "image",
+                      "source": "secondary",
+                      "zoom": {
+                        "curve": {
+                          "from": 0,
+                          "to": 0.8,
+                          "scope": "local"
+                        }
+                      },
+                      "opacity": {
+                        "triangle": {
+                          "from": 0,
+                          "peak": 1,
+                          "to": 0
+                        }
+                      }
+                    }
+                  }
+                ],
+                "cadence": 128,
+                "offset": 64
+              }
+            },
+            {
+              "node": {
+                "kind": "parallel",
+                "children": [
+                  {
+                    "node": {
+                      "op": "word",
+                      "source": "secondary"
+                    }
+                  }
+                ],
+                "cadence": 64
+              }
+            },
+            {
+              "node": {
+                "kind": "parallel",
+                "children": [
+                  {
+                    "node": {
+                      "op": "caption",
+                      "source": "primary"
+                    }
+                  }
+                ],
+                "cadence": 32
+              }
+            },
+            {
+              "node": {
+                "op": "spiral",
+                "speed": 2
+              }
+            }
+          ],
+          "duration": 1024,
+          "id": "flash_text"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "key": "parallel",
+      "name": "parallel",
+      "version": 4,
+      "sourcePatternName": "parallel",
+      "sourcePath": "src/trance/visual/builtin_patterns_v4.cpp",
+      "source": "{\n  \"root\": {\n    \"children\": [\n      {\n        \"node\": {\n          \"cadence\": 64,\n          \"children\": [\n            {\n              \"node\": {\n                \"animation\": {\n                  \"every\": 3\n                },\n                \"op\": \"image\",\n                \"source\": \"primary\",\n                \"zoom\": {\n                  \"curve\": {\n                    \"from\": 0,\n                    \"scope\": \"local\",\n                    \"to\": 0.5\n                  }\n                }\n              }\n            }\n          ],\n          \"kind\": \"parallel\"\n        }\n      },\n      {\n        \"node\": {\n          \"cadence\": 64,\n          \"children\": [\n            {\n              \"node\": {\n                \"animation\": {\n                  \"every\": 3\n                },\n                \"op\": \"image\",\n                \"opacity\": 0.5,\n                \"source\": \"secondary\",\n                \"zoom\": {\n                  \"curve\": {\n                    \"from\": 0,\n                    \"scope\": \"local\",\n                    \"to\": 0.5\n                  }\n                }\n              }\n            }\n          ],\n          \"kind\": \"parallel\",\n          \"offset\": 32\n        }\n      },\n      {\n        \"node\": {\n          \"cadence\": 32,\n          \"children\": [\n            {\n              \"node\": {\n                \"op\": \"caption\",\n                \"source\": \"primary\"\n              }\n            }\n          ],\n          \"kind\": \"parallel\"\n        }\n      },\n      {\n        \"node\": {\n          \"op\": \"spiral\",\n          \"speed\": 3\n        }\n      }\n    ],\n    \"duration\": 2048,\n    \"id\": \"parallel\",\n    \"kind\": \"parallel\"\n  },\n  \"version\": 4\n}",
+      "ast": {
+        "root": {
+          "children": [
+            {
+              "node": {
+                "cadence": 64,
+                "children": [
+                  {
+                    "node": {
+                      "animation": {
+                        "every": 3
+                      },
+                      "op": "image",
+                      "source": "primary",
+                      "zoom": {
+                        "curve": {
+                          "from": 0,
+                          "scope": "local",
+                          "to": 0.5
+                        }
+                      }
+                    }
+                  }
+                ],
+                "kind": "parallel"
+              }
+            },
+            {
+              "node": {
+                "cadence": 64,
+                "children": [
+                  {
+                    "node": {
+                      "animation": {
+                        "every": 3
+                      },
+                      "op": "image",
+                      "opacity": 0.5,
+                      "source": "secondary",
+                      "zoom": {
+                        "curve": {
+                          "from": 0,
+                          "scope": "local",
+                          "to": 0.5
+                        }
+                      }
+                    }
+                  }
+                ],
+                "kind": "parallel",
+                "offset": 32
+              }
+            },
+            {
+              "node": {
+                "cadence": 32,
+                "children": [
+                  {
+                    "node": {
+                      "op": "caption",
+                      "source": "primary"
+                    }
+                  }
+                ],
+                "kind": "parallel"
+              }
+            },
+            {
+              "node": {
+                "op": "spiral",
+                "speed": 3
+              }
+            }
+          ],
+          "duration": 2048,
+          "id": "parallel",
+          "kind": "parallel"
+        },
+        "version": 4
+      }
+    },
+    {
+      "id": 6,
+      "key": "super_parallel",
+      "name": "super_parallel",
+      "version": 4,
+      "sourcePatternName": "super_parallel",
+      "sourcePath": "src/trance/visual/builtin_patterns_v4.cpp",
+      "source": "{\n  \"version\": 4,\n  \"root\": {\n    \"kind\": \"parallel\",\n    \"children\": [\n      {\n        \"node\": {\n          \"kind\": \"parallel\",\n          \"children\": [\n            {\n              \"node\": {\n                \"op\": \"image\",\n                \"source\": \"primary\",\n                \"zoom\": {\n                  \"curve\": {\n                    \"from\": 0,\n                    \"to\": 0.875,\n                    \"scope\": \"local\"\n                  }\n                },\n                \"animation\": {\n                  \"every\": 2\n                }\n              }\n            }\n          ],\n          \"cadence\": 96\n        }\n      },\n      {\n        \"node\": {\n          \"kind\": \"parallel\",\n          \"children\": [\n            {\n              \"node\": {\n                \"op\": \"image\",\n                \"source\": \"primary\",\n                \"zoom\": {\n                  \"curve\": {\n                    \"from\": 0,\n                    \"to\": 0.875,\n                    \"scope\": \"local\"\n                  }\n                },\n                \"opacity\": 0.5\n              }\n            }\n          ],\n          \"cadence\": 96,\n          \"offset\": 32\n        }\n      },\n      {\n        \"node\": {\n          \"kind\": \"parallel\",\n          \"children\": [\n            {\n              \"node\": {\n                \"op\": \"image\",\n                \"source\": \"secondary\",\n                \"zoom\": {\n                  \"curve\": {\n                    \"from\": 0,\n                    \"to\": 0.875,\n                    \"scope\": \"local\"\n                  }\n                },\n                \"opacity\": 0.33\n              }\n            }\n          ],\n          \"cadence\": 96,\n          \"offset\": 64\n        }\n      },\n      {\n        \"node\": {\n          \"kind\": \"parallel\",\n          \"children\": [\n            {\n              \"node\": {\n                \"op\": \"word\",\n                \"source\": \"either\"\n              }\n            }\n          ],\n          \"cadence\": 32\n        }\n      },\n      {\n        \"node\": {\n          \"op\": \"spiral\",\n          \"speed\": 3\n        }\n      }\n    ],\n    \"duration\": 1152,\n    \"id\": \"super_parallel\"\n  }\n}",
+      "ast": {
+        "version": 4,
+        "root": {
+          "kind": "parallel",
+          "children": [
+            {
+              "node": {
+                "kind": "parallel",
+                "children": [
+                  {
+                    "node": {
+                      "op": "image",
+                      "source": "primary",
+                      "zoom": {
+                        "curve": {
+                          "from": 0,
+                          "to": 0.875,
+                          "scope": "local"
+                        }
+                      },
+                      "animation": {
+                        "every": 2
+                      }
+                    }
+                  }
+                ],
+                "cadence": 96
+              }
+            },
+            {
+              "node": {
+                "kind": "parallel",
+                "children": [
+                  {
+                    "node": {
+                      "op": "image",
+                      "source": "primary",
+                      "zoom": {
+                        "curve": {
+                          "from": 0,
+                          "to": 0.875,
+                          "scope": "local"
+                        }
+                      },
+                      "opacity": 0.5
+                    }
+                  }
+                ],
+                "cadence": 96,
+                "offset": 32
+              }
+            },
+            {
+              "node": {
+                "kind": "parallel",
+                "children": [
+                  {
+                    "node": {
+                      "op": "image",
+                      "source": "secondary",
+                      "zoom": {
+                        "curve": {
+                          "from": 0,
+                          "to": 0.875,
+                          "scope": "local"
+                        }
+                      },
+                      "opacity": 0.33
+                    }
+                  }
+                ],
+                "cadence": 96,
+                "offset": 64
+              }
+            },
+            {
+              "node": {
+                "kind": "parallel",
+                "children": [
+                  {
+                    "node": {
+                      "op": "word",
+                      "source": "either"
+                    }
+                  }
+                ],
+                "cadence": 32
+              }
+            },
+            {
+              "node": {
+                "op": "spiral",
+                "speed": 3
+              }
+            }
+          ],
+          "duration": 1152,
+          "id": "super_parallel"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "key": "animation",
+      "name": "animation",
+      "version": 4,
+      "sourcePatternName": "animation",
+      "sourcePath": "src/trance/visual/builtin_patterns_v4.cpp",
+      "source": "{\n  \"version\": 4,\n  \"root\": {\n    \"kind\": \"parallel\",\n    \"children\": [\n      {\n        \"node\": {\n          \"kind\": \"parallel\",\n          \"children\": [\n            {\n              \"node\": {\n                \"op\": \"image\",\n                \"source\": \"either\",\n                \"zoom\": {\n                  \"curve\": {\n                    \"from\": 0,\n                    \"to\": 0.625,\n                    \"scope\": \"local\"\n                  }\n                },\n                \"animation\": {\n                  \"every\": 1\n                }\n              }\n            }\n          ],\n          \"cadence\": 64\n        }\n      },\n      {\n        \"node\": {\n          \"kind\": \"parallel\",\n          \"children\": [\n            {\n              \"node\": {\n                \"op\": \"image\",\n                \"source\": \"secondary\",\n                \"zoom\": {\n                  \"curve\": {\n                    \"from\": 0.5,\n                    \"to\": 0.625,\n                    \"scope\": \"local\"\n                  }\n                },\n                \"envelope\": {\n                  \"in\": 8,\n                  \"hold\": 16,\n                  \"out\": 8\n                }\n              }\n            }\n          ],\n          \"cadence\": 64,\n          \"offset\": 48\n        }\n      },\n      {\n        \"node\": {\n          \"kind\": \"parallel\",\n          \"children\": [\n            {\n              \"node\": {\n                \"op\": \"caption\",\n                \"source\": \"either\"\n              }\n            }\n          ],\n          \"cadence\": 32\n        }\n      },\n      {\n        \"node\": {\n          \"op\": \"spiral\",\n          \"speed\": 3\n        }\n      }\n    ],\n    \"duration\": 1024,\n    \"id\": \"animation\"\n  }\n}",
+      "ast": {
+        "version": 4,
+        "root": {
+          "kind": "parallel",
+          "children": [
+            {
+              "node": {
+                "kind": "parallel",
+                "children": [
+                  {
+                    "node": {
+                      "op": "image",
+                      "source": "either",
+                      "zoom": {
+                        "curve": {
+                          "from": 0,
+                          "to": 0.625,
+                          "scope": "local"
+                        }
+                      },
+                      "animation": {
+                        "every": 1
+                      }
+                    }
+                  }
+                ],
+                "cadence": 64
+              }
+            },
+            {
+              "node": {
+                "kind": "parallel",
+                "children": [
+                  {
+                    "node": {
+                      "op": "image",
+                      "source": "secondary",
+                      "zoom": {
+                        "curve": {
+                          "from": 0.5,
+                          "to": 0.625,
+                          "scope": "local"
+                        }
+                      },
+                      "envelope": {
+                        "in": 8,
+                        "hold": 16,
+                        "out": 8
+                      }
+                    }
+                  }
+                ],
+                "cadence": 64,
+                "offset": 48
+              }
+            },
+            {
+              "node": {
+                "kind": "parallel",
+                "children": [
+                  {
+                    "node": {
+                      "op": "caption",
+                      "source": "either"
+                    }
+                  }
+                ],
+                "cadence": 32
+              }
+            },
+            {
+              "node": {
+                "op": "spiral",
+                "speed": 3
+              }
+            }
+          ],
+          "duration": 1024,
+          "id": "animation"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "key": "super_fast",
+      "name": "super_fast",
+      "version": 4,
+      "sourcePatternName": "super_fast",
+      "sourcePath": "src/trance/visual/builtin_patterns_v4.cpp",
+      "source": "{\n  \"version\": 4,\n  \"root\": {\n    \"kind\": \"parallel\",\n    \"children\": [\n      {\n        \"node\": {\n          \"kind\": \"random\",\n          \"children\": [\n            {\n              \"node\": {\n                \"kind\": \"parallel\",\n                \"children\": [\n                  {\n                    \"node\": {\n                      \"kind\": \"parallel\",\n                      \"children\": [\n                        {\n                          \"node\": {\n                            \"op\": \"image\",\n                            \"source\": \"either\",\n                            \"zoom\": {\n                              \"curve\": {\n                                \"from\": 0.0625,\n                                \"to\": 0.1875,\n                                \"scope\": \"local\"\n                              }\n                            }\n                          }\n                        }\n                      ],\n                      \"cadence\": 8\n                    }\n                  }\n                ]\n              },\n              \"exit\": {\n                \"probability\": {\n                  \"numerator\": 1,\n                  \"denominator\": 12\n                },\n                \"check_every\": 8\n              }\n            },\n            {\n              \"node\": {\n                \"kind\": \"parallel\",\n                \"children\": [\n                  {\n                    \"node\": {\n                      \"op\": \"image\",\n                      \"source\": \"either\",\n                      \"zoom\": {\n                        \"curve\": {\n                          \"from\": 0.1,\n                          \"to\": 0.7,\n                          \"scope\": \"local\"\n                        }\n                      },\n                      \"animation\": {\n                        \"every\": 1\n                      }\n                    }\n                  }\n                ],\n                \"duration\": {\n                  \"min\": 64,\n                  \"max\": 128,\n                  \"step\": 8\n                }\n              }\n            }\n          ],\n          \"select\": {\n            \"order\": \"round_robin\",\n            \"allow_self\": false,\n            \"first\": 0,\n            \"cooldown\": 64\n          }\n        }\n      },\n      {\n        \"node\": {\n          \"kind\": \"parallel\",\n          \"children\": [\n            {\n              \"node\": {\n                \"op\": \"word\",\n                \"source\": \"primary\",\n                \"selection_probability\": 0.25\n              }\n            }\n          ],\n          \"cadence\": 8\n        }\n      },\n      {\n        \"node\": {\n          \"op\": \"spiral\",\n          \"speed\": 3\n        }\n      }\n    ],\n    \"duration\": 2048,\n    \"id\": \"super_fast\"\n  }\n}",
+      "ast": {
+        "version": 4,
+        "root": {
+          "kind": "parallel",
+          "children": [
+            {
+              "node": {
+                "kind": "random",
+                "children": [
+                  {
+                    "node": {
+                      "kind": "parallel",
+                      "children": [
+                        {
+                          "node": {
+                            "kind": "parallel",
+                            "children": [
+                              {
+                                "node": {
+                                  "op": "image",
+                                  "source": "either",
+                                  "zoom": {
+                                    "curve": {
+                                      "from": 0.0625,
+                                      "to": 0.1875,
+                                      "scope": "local"
+                                    }
+                                  }
+                                }
+                              }
+                            ],
+                            "cadence": 8
+                          }
+                        }
+                      ]
+                    },
+                    "exit": {
+                      "probability": {
+                        "numerator": 1,
+                        "denominator": 12
+                      },
+                      "check_every": 8
+                    }
+                  },
+                  {
+                    "node": {
+                      "kind": "parallel",
+                      "children": [
+                        {
+                          "node": {
+                            "op": "image",
+                            "source": "either",
+                            "zoom": {
+                              "curve": {
+                                "from": 0.1,
+                                "to": 0.7,
+                                "scope": "local"
+                              }
+                            },
+                            "animation": {
+                              "every": 1
+                            }
+                          }
+                        }
+                      ],
+                      "duration": {
+                        "min": 64,
+                        "max": 128,
+                        "step": 8
+                      }
+                    }
+                  }
+                ],
+                "select": {
+                  "order": "round_robin",
+                  "allow_self": false,
+                  "first": 0,
+                  "cooldown": 64
+                }
+              }
+            },
+            {
+              "node": {
+                "kind": "parallel",
+                "children": [
+                  {
+                    "node": {
+                      "op": "word",
+                      "source": "primary",
+                      "selection_probability": 0.25
+                    }
+                  }
+                ],
+                "cadence": 8
+              }
+            },
+            {
+              "node": {
+                "op": "spiral",
+                "speed": 3
+              }
+            }
+          ],
+          "duration": 2048,
+          "id": "super_fast"
+        }
+      }
+    }
+  ]
+}

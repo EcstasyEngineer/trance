@@ -283,9 +283,19 @@ namespace pattern
     if (!st.anim_gate.empty() && !eval_cond_expr(st.anim_gate, regs, nodes, root)) {
       return AnimDraw::Still;
     }
-    // Follow the LOAD, don't re-decide: the Anim effect already resolved primary vs secondary
-    // (and rolled `runtime`) at fire time. See Registers::anim_slot.
-    return regs.anim_slot == Slot::Secondary ? AnimDraw::Alternate : AnimDraw::Primary;
+    // Follow each V4 output's captured theme, so a later sibling cannot redirect
+    // its animation to the other streamer. Historical V3 follows the last load.
+#ifdef TRANCE_LEGACY_ORACLE
+    Slot slot = regs.anim_slot;
+#else
+    Slot slot = Slot::Primary;
+#endif
+    if (!st.anim_image_reg.empty()) {
+      const auto captured = regs.image_slots.find(st.anim_image_reg);
+      if (captured == regs.image_slots.end()) return AnimDraw::Still;
+      slot = captured->second;
+    }
+    return slot == Slot::Secondary ? AnimDraw::Alternate : AnimDraw::Primary;
   }
 
   // Run a pattern's data-driven render block for one frame: evaluate each statement's
@@ -297,7 +307,9 @@ namespace pattern
 
   // The render block used when a pattern declares none (draws the "current" image +
   // spiral + text), so playback never shows a blank frame.
+#ifdef TRANCE_LEGACY_ORACLE
   std::vector<RenderStmt> default_render_block();
+#endif
 }
 
 #endif

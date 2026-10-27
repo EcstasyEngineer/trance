@@ -1,0 +1,93 @@
+{
+  "root": {
+    "children": [
+      {
+        "node": {
+          "cadence": 128,
+          "children": [
+            {
+              "node": {
+                "op": "image",
+                "source": "secondary",
+                "zoom": {
+                  "curve": {
+                    "from": 0,
+                    "scope": "local",
+                    "to": 0.8
+                  }
+                }
+              }
+            }
+          ],
+          "kind": "parallel"
+        }
+      },
+      {
+        "node": {
+          "cadence": 128,
+          "children": [
+            {
+              "node": {
+                "op": "image",
+                "opacity": {
+                  "triangle": {
+                    "from": 0,
+                    "peak": 1,
+                    "to": 0
+                  }
+                },
+                "source": "secondary",
+                "zoom": {
+                  "curve": {
+                    "from": 0,
+                    "scope": "local",
+                    "to": 0.8
+                  }
+                }
+              }
+            }
+          ],
+          "kind": "parallel",
+          "offset": 64
+        }
+      },
+      {
+        "node": {
+          "cadence": 64,
+          "children": [
+            {
+              "node": {
+                "op": "word",
+                "source": "secondary"
+              }
+            }
+          ],
+          "kind": "parallel"
+        }
+      },
+      {
+        "node": {
+          "cadence": 32,
+          "children": [
+            {
+              "node": {
+                "op": "caption",
+                "source": "primary"
+              }
+            }
+          ],
+          "kind": "parallel"
+        }
+      },
+      {
+        "node": {
+          "op": "spiral",
+          "speed": 2
+        }
+      }
+    ],
+    "duration": 1024,
+    "kind": "parallel"
+  },
+  "version": 4
+}

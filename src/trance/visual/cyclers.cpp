@@ -2,6 +2,10 @@
 #include <common/util.h>
 #include <algorithm>
 #include <utility>
+#include <cmath>
+#include <numeric>
+#include <limits>
+#include <stdexcept>
 
 Cycler::Cycler() : _active{true}
 {
@@ -59,490 +63,210 @@ float Cycler::progress() const
   return static_cast<float>(frame()) / length();
 }
 
-ActionCycler::ActionCycler(uint32_t length)
-: _position{0}, _length{length}, _action{[] {}}
+OccurrenceCycler::OccurrenceCycler(const pattern::Node& spec, std::function<void()> entry,
+                                   std::vector<Cycler*> children)
+  : _spec(spec), _entry(std::move(entry)), _local(*this)
 {
-}
-
-ActionCycler::ActionCycler(uint32_t length, const std::function<void()>& action)
-: _position{0}, _length{length}, _action{action}
-{
-}
-
-uint32_t ActionCycler::length() const
-{
-  return _length;
-}
-
-uint32_t ActionCycler::position() const
-{
-  return _position;
-}
-
-void ActionCycler::reset()
-{
-  _position = 0;
-}
-
-void ActionCycler::advance(bool trigger_actions)
-{
-  if (complete()) {
-    reset();
-  }
-  // Frame 0 of every period: the leaf fires as its counter wraps, which is what makes a
-  // leaf's rate exactly its length.
-  if (trigger_actions && !_position) {
-    _action();
-  }
-  if (_length) {
-    ++_position;
-  }
-}
-
-OneShotCycler::OneShotCycler(std::vector<Cycler*> subcycles)
-{
-  for (Cycler* cycle : subcycles) {
-    _subcycles.emplace_back();
-    _subcycles.back().reset(cycle);
-  }
-  calculate_active();
-}
-
-uint32_t OneShotCycler::length() const
-{
-  uint32_t result = 0;
-  for (const auto& cycle : _subcycles) {
-    result = std::max(result, cycle->length());
-  }
-  return result;
-}
-
-uint32_t OneShotCycler::position() const
-{
-  uint32_t result = 0;
-  for (const auto& cycle : _subcycles) {
-    result = std::max(result, cycle->position());
-  }
-  return result;
-}
-
-void OneShotCycler::reset()
-{
-  for (auto& cycler : _subcycles) {
-    cycler->reset();
-  }
-  calculate_active();
-}
-
-void OneShotCycler::advance(bool trigger_actions)
-{
-  bool any_advance = false;
-  for (auto& cycle : _subcycles) {
-    if (!cycle->complete()) {
-      cycle->advance(trigger_actions);
-      any_advance = true;
-    }
-  }
-  if (!any_advance) {
-    reset();
-    for (auto& cycle : _subcycles) {
-      if (!cycle->complete()) {
-        cycle->advance(trigger_actions);
-      }
-    }
-  }
-  calculate_active();
-}
-
-void OneShotCycler::activate(bool active)
-{
-  Cycler::activate(active);
-  calculate_active();
-}
-
-void OneShotCycler::calculate_active()
-{
-  auto p = position();
-  for (auto& cycle : _subcycles) {
-    cycle->activate(active() && p <= cycle->position());
-  }
-}
-
-ParallelCycler::ParallelCycler(std::vector<Cycler*> subcycles) : _position{0}, _length{0}
-{
-  for (Cycler* cycle : subcycles) {
-    _subcycles.emplace_back();
-    _subcycles.back().reset(cycle);
-  }
-  if (subcycles.empty()) {
-    return;
-  }
-  auto lcm = [](uint32_t a, uint32_t b) {
-    auto gcd = [](uint32_t a, uint32_t b) {
-      if (a < b) {
-        std::swap(a, b);
-      }
-      while (b) {
-        auto r = a % b;
-        a = b;
-        b = r;
-      }
-      return a;
-    };
-    if (a < b) {
-      std::swap(a, b);
-    }
-    if (!b) {
-      return a;
-    }
-    return b * (a / gcd(a, b));
-  };
-
-  _length = subcycles.front()->length();
-  for (std::size_t i = 1; i < subcycles.size(); ++i) {
-    _length = lcm(_length, subcycles[i]->length());
-  }
-}
-
-uint32_t ParallelCycler::length() const
-{
-  return _length;
-}
-
-uint32_t ParallelCycler::position() const
-{
-  return _position;
-}
-
-void ParallelCycler::reset()
-{
-  for (auto& cycler : _subcycles) {
-    cycler->reset();
-  }
-  _position = 0;
-}
-
-void ParallelCycler::advance(bool trigger_actions)
-{
-  if (complete()) {
-    _position = 0;
-  }
-  for (auto& cycler : _subcycles) {
-    cycler->advance(trigger_actions);
-  }
-  ++_position;
-}
-
-void ParallelCycler::activate(bool active)
-{
-  Cycler::activate(active);
-  for (auto& cycler : _subcycles) {
-    cycler->activate(active);
-  }
-}
-
-SequenceCycler::SequenceCycler(std::vector<Cycler*> subcycles)
-{
-  for (Cycler* cycle : subcycles) {
-    _subcycles.emplace_back();
-    _subcycles.back().reset(cycle);
-  }
-  calculate_active();
-}
-
-uint32_t SequenceCycler::index() const
-{
-  uint32_t total = 0;
-  uint32_t index = 0;
-  auto f = frame();
-  for (const auto& subcycle : _subcycles) {
-    total += subcycle->length();
-    if (f < total) {
-      return index;
-    }
-    ++index;
-  }
-  return 0;
-}
-
-uint32_t SequenceCycler::length() const
-{
-  uint32_t result = 0;
-  for (const auto& subcycle : _subcycles) {
-    result += subcycle->length();
-  }
-  return result;
-}
-
-uint32_t SequenceCycler::position() const
-{
-  uint32_t result = 0;
-  for (const auto& subcycle : _subcycles) {
-    result += subcycle->position();
-  }
-  return result;
-}
-
-void SequenceCycler::reset()
-{
-  for (auto& cycler : _subcycles) {
-    cycler->reset();
-  }
-  calculate_active();
-}
-
-void SequenceCycler::advance(bool trigger_actions)
-{
-  for (auto& cycler : _subcycles) {
-    if (!cycler->complete()) {
-      cycler->advance(trigger_actions);
-      calculate_active();
-      return;
-    }
-  }
-  reset();
-  for (auto& cycler : _subcycles) {
-    if (!cycler->complete()) {
-      cycler->advance(trigger_actions);
-      calculate_active();
-      return;
-    }
-  }
-}
-
-void SequenceCycler::activate(bool active)
-{
-  Cycler::activate(active);
-  calculate_active();
-}
-
-void SequenceCycler::calculate_active()
-{
-  for (auto& cycler : _subcycles) {
-    cycler->activate(false);
-  }
-  if (!active()) {
-    return;
-  }
-  for (std::size_t i = 0; 1 + i < _subcycles.size(); ++i) {
-    if (_subcycles[i]->position() && !_subcycles[1 + i]->position()) {
-      _subcycles[i]->activate(true);
-      return;
-    }
-  }
-  if (!_subcycles.empty()) {
-    _subcycles.back()->activate(true);
-  }
-}
-
-RepeatCycler::RepeatCycler(uint32_t repetitions, Cycler* subcycle)
-: _subcycle{subcycle}, _repetitions{repetitions}, _index{0}
-{
-}
-
-uint32_t RepeatCycler::index() const
-{
-  return frame() / _subcycle->length();
-}
-
-uint32_t RepeatCycler::length() const
-{
-  return _repetitions * _subcycle->length();
-}
-
-uint32_t RepeatCycler::position() const
-{
-  return _subcycle->position() + _index * _subcycle->length();
-}
-
-void RepeatCycler::reset()
-{
-  _index = 0;
-  _subcycle->reset();
-}
-
-void RepeatCycler::advance(bool trigger_actions)
-{
-  if (_subcycle->complete()) {
-    _index = (1 + _index) % _repetitions;
-  }
-  _subcycle->advance(trigger_actions);
-}
-
-void RepeatCycler::activate(bool active)
-{
-  Cycler::activate(active);
-  _subcycle->activate(active);
-}
-
-OffsetCycler::OffsetCycler(uint32_t offset, Cycler* subcycle)
-: _subcycle{subcycle}, _offset{offset}, _position{0}
-{
-  advance_to_offset();
-}
-
-uint32_t OffsetCycler::length() const
-{
-  return _subcycle->length();
-}
-
-uint32_t OffsetCycler::position() const
-{
-  return _position;
-}
-
-void OffsetCycler::reset()
-{
-  _position = 0;
-  _subcycle->reset();
-  advance_to_offset();
-}
-
-void OffsetCycler::advance(bool trigger_actions)
-{
-  // Mirror the other cyclers' wrap discipline so position()/progress stay inside
-  // [0, length) across repeats. Only the counter wraps -- the child wraps itself on
-  // its own advance(), and a full reset() here would re-run advance_to_offset() and
-  // double-shift the phase every cycle.
-  if (complete()) {
-    _position = 0;
-  }
-  ++_position;
-  _subcycle->advance(trigger_actions);
-}
-
-void OffsetCycler::activate(bool active)
-{
-  Cycler::activate(active);
-  _subcycle->activate(active);
-}
-
-void OffsetCycler::advance_to_offset()
-{
-  auto frames = length() - _offset % length();
-  for (uint32_t i = 0; i < frames; ++i) {
-    _subcycle->advance(false);
-  }
-}
-
-PhaseCycler::PhaseCycler(uint32_t length, std::function<void()> entry,
-                         std::vector<Cycler*> children, bool sequence)
-: _length{length}, _sequence{sequence}, _entry{std::move(entry)}
-{
+  _spec.children.clear();
   for (auto* child : children) _children.emplace_back(child);
+  _span = std::max(1u, spec.length);
   activate(false);
 }
 
-uint32_t PhaseCycler::length() const { return _length; }
-uint32_t PhaseCycler::position() const { return _position; }
-uint32_t PhaseCycler::index() const
+uint32_t OccurrenceCycler::length() const { return _span; }
+uint32_t OccurrenceCycler::position() const { return _position; }
+bool OccurrenceCycler::complete() const { return _done; }
+uint32_t OccurrenceCycler::elapsed_length() const { return _elapsed; }
+uint32_t OccurrenceCycler::index() const
 {
-  return _sequence && !_children.empty() ? _children.front()->index() : 0;
+  return _spec.occurrence_kind == pattern::Node::Composition::Parallel ? _iteration : _selected;
 }
-
-void PhaseCycler::reset()
+const char* OccurrenceCycler::type_name() const
 {
-  _position = 0;
+  switch (_spec.occurrence_kind) {
+  case pattern::Node::Composition::Parallel: return "Parallel";
+  case pattern::Node::Composition::Sequential: return "Sequential";
+  case pattern::Node::Composition::Random: return "Random";
+  }
+  return "Occurrence";
+}
+std::vector<const Cycler*> OccurrenceCycler::children() const
+{
+  std::vector<const Cycler*> out;
+  for (const auto& child : _children) out.push_back(child.get());
+  return out;
+}
+Cycler* OccurrenceCycler::local_clock() { return &_local; }
+uint32_t OccurrenceCycler::LocalClock::length() const { return _owner._body_length; }
+uint32_t OccurrenceCycler::LocalClock::position() const { return _owner._body_position; }
+
+void OccurrenceCycler::activate(bool value)
+{
+  Cycler::activate(value);
+  _local.activate(value);
+  if (!value) for (auto& child : _children) child->activate(false);
+}
+void OccurrenceCycler::reset()
+{
+  _position = _iteration = _body_position = _segment = _selected = _cooldown_until = 0;
+  _elapsed = 0;
+  _prepared = _body_started = _done = _iteration_done = false;
   for (auto& child : _children) child->reset();
   activate(false);
 }
+bool OccurrenceCycler::has_next_iteration() const
+{
+  return _spec.repeat_forever || _iteration + 1 < _spec.repeat_count;
+}
 
-void PhaseCycler::restart(uint32_t length)
+void OccurrenceCycler::prepare(uint32_t inherited_span, bool trigger_actions)
 {
   reset();
-  _length = length;
-  activate(true);
+  _inherited = std::max(1u, inherited_span);
+  begin_iteration(trigger_actions);
+  _prepared = true;
 }
 
-void PhaseCycler::activate(bool active)
-{
-  Cycler::activate(active);
-  for (auto& child : _children) child->activate(active);
-}
-
-void PhaseCycler::advance(bool trigger_actions)
-{
-  // The owner schedules advancement. active() describes the last rendered frame
-  // and may still be false when a sequence hands execution to this phase.
-  if (complete()) restart(_length);
-  if (trigger_actions && !_position && _entry) _entry();
-  for (auto& child : _children) child->advance(trigger_actions);
-  ++_position;
-}
-
-std::vector<const Cycler*> PhaseCycler::children() const
-{
-  std::vector<const Cycler*> result;
-  for (const auto& child : _children) result.push_back(child.get());
-  return result;
-}
-
-BurstCycler::BurstCycler(const Params& params, PhaseCycler* base, PhaseCycler* burst)
-: _params{params}, _base{base}, _burst{burst}
-{
-}
-
-uint32_t BurstCycler::length() const { return _params.length; }
-uint32_t BurstCycler::position() const { return _position; }
-uint32_t BurstCycler::index() const { return _in_burst ? 1 : 0; }
-
-void BurstCycler::reset()
+void OccurrenceCycler::begin_iteration(bool trigger_actions)
 {
   _position = 0;
-  _in_burst = false;
-  _started = false;
-  _cooldown = 0;
-  _base->reset();
-  _burst->reset();
-}
-
-void BurstCycler::activate(bool active)
-{
-  Cycler::activate(active);
-  _base->activate(active && _started && !_in_burst);
-  _burst->activate(active && _in_burst);
-}
-
-std::vector<const Cycler*> BurstCycler::children() const
-{
-  return {_base.get(), _burst.get()};
-}
-
-void BurstCycler::advance(bool trigger_actions)
-{
-  if (complete()) reset();
-  // Offset pre-roll / schedule-only inspection must not consume randomness or
-  // execute hidden branch effects. The next real activation starts its children.
-  if (!trigger_actions) {
-    _base->activate(false);
-    _burst->activate(false);
-    if (_params.length) ++_position;
-    return;
+  _iteration_done = false;
+  _span = _spec.length ? _spec.length : _inherited;
+  if (trigger_actions && _spec.duration_max > _span) {
+    const uint32_t step = std::max(1u, _spec.duration_step);
+    _span += step * random(1u + (_spec.duration_max - _span) / step);
   }
-
-  const bool exited = _in_burst && _burst->complete();
-  if (exited) {
-    _in_burst = false;
-    _cooldown = _params.cooldown;
-    _burst->activate(false);
-    _base->restart(_params.length - _position);
-  }
-  if (_params.period && _position % _params.period == 0 && !_in_burst) {
-    // Preserve the controller's cooldown/roll cadence. Even with zero cooldown,
-    // exiting a burst gives the base one period before another roll.
-    if (!exited && _cooldown) --_cooldown;
-    if (!exited && !_cooldown && _params.chance_den && random_chance(_params.chance_den)) {
-      const uint32_t ticks = _params.dur_min + (_params.dur_max > _params.dur_min
-          ? random(_params.dur_max - _params.dur_min + 1) : 0);
-      _in_burst = true;
-      _base->activate(false);
-      _burst->restart(ticks * _params.period);
+  _span = std::max(1u, _span);
+  _ramp.clear();
+  if (_spec.cadence_ramp_steps) {
+    const uint32_t steps = _spec.cadence_ramp_steps;
+    if (steps > _span) throw std::invalid_argument("ramp steps exceed occurrence duration");
+    std::vector<double> raw(steps);
+    double sum = 0;
+    for (uint32_t i = 0; i < steps; ++i) {
+      double p = (double(i) + .5) / steps;
+      if (_spec.cadence_ramp_ease == 1) p = 1 - std::pow(1 - p, 3);
+      else if (_spec.cadence_ramp_ease == 2) p = p * p * p;
+      raw[i] = _spec.cadence_ramp_from +
+          (double(_spec.cadence_ramp_to) - _spec.cadence_ramp_from) * p;
+      sum += raw[i];
+    }
+    for (const auto value : raw)
+      _ramp.push_back(std::max(1u, static_cast<uint32_t>(std::lround(value * _span / sum))));
+    int64_t diff = int64_t(_span) - std::accumulate(_ramp.begin(), _ramp.end(), int64_t{0});
+    uint32_t i = steps - 1;
+    while (diff) {
+      if (diff > 0) { ++_ramp[i]; --diff; }
+      else if (_ramp[i] > 1) { --_ramp[i]; ++diff; }
+      i = i ? i - 1 : steps - 1;
     }
   }
-  if (!_started && !_in_burst) _base->restart(_params.length - _position);
-  _started = true;
-  auto& phase = _in_burst ? _burst : _base;
-  phase->activate(true);
-  phase->advance();
-  if (_params.length) ++_position;
+  _segment = 0;
+  _body_length = !_ramp.empty() ? _ramp.front() : _spec.cadence ? _spec.cadence : _span;
+  _body_position = _spec.offset ? (_body_length - _spec.offset % _body_length) % _body_length : 0;
+  _body_started = false;
+  _cooldown_until = 0;
+  _selected = _spec.select_first;
+  for (auto& child : _children) { child->reset(); child->activate(false); }
+}
+
+uint32_t OccurrenceCycler::body_remaining() const
+{
+  return std::min(_body_length - _body_position, _span - _position);
+}
+void OccurrenceCycler::start_child(uint32_t child, bool trigger_actions)
+{
+  auto* value = _children.at(child).get();
+  if (auto* occurrence = dynamic_cast<OccurrenceCycler*>(value))
+    occurrence->prepare(std::max(1u, body_remaining()), trigger_actions);
+  else value->reset();
+}
+void OccurrenceCycler::begin_body(bool trigger_actions)
+{
+  const uint32_t phase = _body_position;
+  if (phase > 1000000) throw std::invalid_argument("offset phase exceeds schedule preroll budget");
+  _body_position = 0;
+  _selected = _spec.select_first;
+  _cooldown_until = 0;
+  const bool enter_actions = trigger_actions && !phase;
+  if (_spec.occurrence_kind == pattern::Node::Composition::Parallel) {
+    for (uint32_t i = 0; i < _children.size(); ++i) start_child(i, enter_actions);
+  } else if (!_children.empty()) start_child(_selected, enter_actions);
+  _body_started = true;
+  // A phase shift advances clocks without actions or random choices.
+  for (uint32_t i = 0; i < phase; ++i) {
+    run_body(false);
+    ++_body_position;
+  }
+}
+
+void OccurrenceCycler::run_body(bool trigger_actions)
+{
+  using Composition = pattern::Node::Composition;
+  for (auto& child : _children) child->activate(false);
+  if (trigger_actions && !_body_position && _entry) _entry();
+  if (_spec.occurrence_kind == Composition::Parallel) {
+    for (auto& child : _children) if (!child->complete()) {
+      child->activate(true);
+      child->advance(trigger_actions);
+    }
+    return;
+  }
+  if (_children.empty()) return;
+  if (_spec.occurrence_kind == Composition::Sequential) {
+    if (_children[_selected]->complete()) {
+      if (_selected + 1 == _children.size()) return;
+      start_child(++_selected, trigger_actions);
+    }
+  } else {
+    bool transition = _children[_selected]->complete();
+    if (!transition && trigger_actions && _selected < _spec.child_exits.size()) {
+      const auto& exit = _spec.child_exits[_selected];
+      if (exit.enabled && _body_position >= _cooldown_until &&
+          exit.check_every && _body_position % exit.check_every == 0) {
+        transition = exit.numerator >= exit.denominator ||
+            (exit.numerator && random(exit.denominator) < exit.numerator);
+      }
+    }
+    if (transition) {
+      const uint32_t count = static_cast<uint32_t>(_children.size());
+      if (!_spec.select_random) _selected = (_selected + 1) % count;
+      else if (trigger_actions && (count > 1 || _spec.select_allow_self)) {
+        if (_spec.select_allow_self) _selected = random(count);
+        else {
+          const uint32_t choice = random(count - 1);
+          _selected = choice >= _selected ? choice + 1 : choice;
+        }
+      }
+      start_child(_selected, trigger_actions);
+      _cooldown_until = _body_position + _spec.select_cooldown;
+    }
+  }
+  auto& child = _children[_selected];
+  if (!child->complete()) { child->activate(true); child->advance(trigger_actions); }
+}
+
+void OccurrenceCycler::advance(bool trigger_actions)
+{
+  if (_done) reset(); // External root advancement repeats the whole program.
+  if (!_prepared) prepare(_spec.length ? _spec.length : _inherited, trigger_actions);
+  if (_iteration_done) { ++_iteration; begin_iteration(trigger_actions); }
+  activate(true);
+  if (_body_position == _body_length) {
+    _body_position = 0;
+    if (!_ramp.empty() && _segment + 1 < _ramp.size()) _body_length = _ramp[++_segment];
+    _body_started = false;
+  }
+  if (!_body_started) begin_body(trigger_actions);
+  run_body(trigger_actions);
+  ++_body_position;
+  ++_position;
+  if (_elapsed < std::numeric_limits<uint32_t>::max()) ++_elapsed;
+  const bool sequence_end = !_spec.cadence && _ramp.empty() &&
+      _spec.occurrence_kind == pattern::Node::Composition::Sequential && !_children.empty() &&
+      _selected + 1 == _children.size() && _children.back()->complete();
+  if (_position >= _span || sequence_end) {
+    _iteration_done = true;
+    _done = !has_next_iteration();
+  }
 }

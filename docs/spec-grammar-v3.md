@@ -1,3 +1,5 @@
+> **Archived: pre-V4 design.** This page is historical and is not a supported language reference. Use the [V4 grammar](spec-grammar-v4.md); V3 source is rejected by the current player.
+
 # V3 pattern language reference
 
 V3 is the language used by built-in visuals and custom `.pattern` files. This is
@@ -16,11 +18,16 @@ ancestor's clock does not change that ownership.
 | State | Scope and lifetime |
 | --- | --- |
 | Schedule position | Local to a pattern, cadence, or burst phase; reset on re-entry |
-| Image registers | Names scoped to a pattern; contents persist until replaced or copied |
+| Held image | Private to a pattern lane; persists until the lane selects again |
 | Hidden selection state | Per compiled visual: alternation, chance results, animation counters |
 
-Resetting a schedule does not erase image registers or reset hidden selection
-state. `anim every Nth` counts selections, not frames.
+Resetting a schedule does not erase held images or reset hidden selection
+state. `anim every Nth` counts statement firings, not frames or successful still pulls.
+
+Hidden animation counters, alternation toggles and chance-result storage belong
+to each authored operation. A ramp's generated segments share that authored
+identity while keeping their own motion clocks and image lane scopes. Two
+statements at different source locations keep independent hidden state.
 
 Render values use the nearest timed occurrence's clock unless explicitly redirected:
 
@@ -63,7 +70,7 @@ every ramp Af -> Bf steps N [ease linear|late|early] [-> NAME] { ... }
 - A ramp samples N positive integer segment lengths at parse time and scales
   them to fill the enclosing span. A and B set the relative shape, not exact
   endpoint durations. N must be at least 2 and cannot exceed the span.
-  Each segment has a local clock and register scope. Optional segment names are
+  Each segment has a local clock and held-image scope. Optional segment names are
   `NAME_00`, `NAME_01`, etc.; there is no live variable-length cadence.
 
 `LENGTH` is `Nf`, `beats N`, or `locked`. Pattern/cadence lengths are positive.
@@ -135,15 +142,13 @@ the phase. Add an explicit `every` wherever repetition is intended.
 ## Rendering and content
 
 Effects change state at schedule entry; render statements read it each frame.
-`image` selects on entry and draws the selected register during the active
-occurrence. `draw` only draws an existing register. Render statements retain
+`image` selects on entry and renders its lane's held image during the active
+occurrence. Render statements retain
 source order: later image layers composite over earlier ones.
 
 | Statement | Behavior |
 | --- | --- |
-| `image CONTENT [-> REG] PARAMS [anim [every Nth]] [chance P]` | Select image (default register `cur`) and draw |
-| `draw REG PARAMS [anim]` | Draw existing image; no selection |
-| `copy SOURCE -> DEST` | Snapshot image register before subsequent effects |
+| `image CONTENT PARAMS [anim [every Nth]] [chance P]` | Select and render the lane's image |
 | `word CONTENT PARAMS [chance P]` | Select/render word |
 | `line CONTENT PARAMS [chance P]` | Select/render complete phrase |
 | `caption CONTENT PARAMS [chance P]` | Select/render small caption |
@@ -156,30 +161,51 @@ source order: later image layers composite over earlier ones.
 | `audio CONTENT [loop] [volume MOD]` | Play file from theme audio pool |
 | `audio stop` | Stop grammar-driven theme audio |
 
-`CONTENT` is `primary`, `secondary`, or `runtime` (choose a side at effect firing).
+`CONTENT` is `primary`, `secondary`, or `either` (a fresh random theme-side choice at effect firing, unrelated to clocks). The former `runtime` spelling remains a compatibility alias.
 There are two live theme sides. `alternate [chance P]` is also accepted by `image`
 and standalone `anim`: it keeps statement-local toggle state. Without chance it
 flips each selection; with chance it flips probabilistically while still selecting
 every time. It does not mean `secondary`.
 
-Ordinary image `chance` skips selection on a miss; the existing register can still
-draw. Text chance also gates visibility. Chance is quantized to 100 buckets and
+Ordinary image `chance` skips selection on a miss; the existing held image can still
+render. Text chance also gates visibility. Chance is quantized to 100 buckets and
 clamped to 1..99 percent; 0 and 1 do not mean guaranteed exclusion/inclusion. Omit
 chance for an unconditional effect. Burst's `chance 1/N` is a separate mechanism.
 
-Registers use the nearest pattern scope. `Scene.cur` addresses an enclosing
-pattern's register; sibling scopes are not directly addressable. Cadences and
-burst branches share their enclosing register scope; ramp segments currently
-create their own. Reading a register never written anywhere in scope warns.
-Registers start empty. `copy` makes a snapshot; later automatic theme refreshes
-update live selections but preserve snapshots.
+Each pattern has a private held image. Cadences and burst branches use their
+nearest enclosing pattern's image; ramp segments have their own image scope.
+Use separate nested patterns for independent image lanes, with one image subject
+per lane. General containers may still group images, words, captions and other
+layers. Lane contents start empty and survive schedule resets; automatic theme
+refreshes update the held selection.
+
+**Migration:** authored `image ... -> NAME`, `draw NAME` and `copy A -> B` were
+removed. Replace separate named images with nested pattern lanes. Flash Text now
+uses two 128-frame lanes offset by 64 frames: an opaque lower lane and a fading
+upper lane. Its first image is immediately opaque and both lanes follow live
+theme refreshes. Arbitrary frozen image snapshots have no authorable equivalent.
+Clock names (`every ... -> cut`, `burst -> phase`) remain supported; they identify
+motion/timing references and do not expose image storage.
 
 Animation selection is shared: the last animation load determines which theme's
-streamer `anim` draws use. This is not a bank of animation registers. If animation
+streamer `anim` draws use. The streamer is shared across image lanes. If animation
 is unavailable, the renderer falls back to that draw's still with the same
 zoom/origin/alpha values.
 
-Main text, subtext, and captions have separate shared paths, not copyable registers.
+`image ... anim every Nth` loads animation and advances its counter at every
+statement firing, even on a non-animated cut or a missed trailing image chance.
+Nth gates drawing the animation; it does not gate the load. Runtime theme choice
+is independent for the image pull and animation load.
+
+Ramp migration: generated segments formerly received separate hidden counters
+and toggles. This could make `anim every 4th` produce no animated cuts for three
+whole passes, then animate every cut on the fourth, and make plain `alternate`
+hold one side throughout a ramp. Hidden state now follows the authored statement
+across successive segments, matching ordinary cadence behavior. Existing patterns
+that relied on the old expansion artifact will change; local clocks and still
+lane ownership are unchanged.
+
+Main text, subtext, and captions have separate shared paths, not independent image lanes.
 Image-style text crossfades are unsupported. `word`/`line` rendering uses origin/zoom;
 their parsed alpha/fade/env values are not applied by that path. Subtext/captions
 use alpha/origin, not zoom. `show` gates visibility on any draw.
@@ -226,7 +252,7 @@ schedule correctness or visible motion.
 ## Grammar
 
 This compact grammar describes author syntax; the semantic constraints above
-still apply. `NAME` is an identifier, `REG` is `NAME` or `NAME.NAME`, `UINT` an
+still apply. `NAME` is an identifier, `UINT` an
 unsigned integer, and `NUMBER` a numeric literal. Files use `#` line comments.
 
 ```ebnf
@@ -242,13 +268,12 @@ burst_option = "period" UINT "f" | "chance 1/" UINT | "cooldown" UINT "f"
              | "duration" UINT "f" [ ".." UINT "f" ] ;
 branch       = ( "base" | "burst" ) [ "->" NAME ] "{" body "}"
              | "enter" "{" { effect } "}" ;
-content      = "primary" | "secondary" | "runtime" ;
+content      = "primary" | "secondary" | "either" | "runtime" ;
 image_content = content | "alternate" [ chance ] ;
 chance       = "chance" ( NUMBER | "(" NUMBER ")" ) ;
-effect       = "image" image_content [ "->" REG ] { param }
+effect       = "image" image_content { param }
                [ "anim" [ "every" UINT [ "st" | "nd" | "rd" | "th" ] ] ] [ chance ]
              | ( "word" | "line" | "caption" | "subtext" ) content { param } [ chance ]
-             | "draw" REG { param } [ "anim" ] | "copy" REG "->" REG
              | "anim" image_content | "spiral" [ "speed" mod ]
              | "look" "{" { "spiral" { ( "type" | "width" ) "=" UINT } } "}"
              | "warp" { ( "amplitude" | "wavelength" | "speed" ) mod } | "drunk" mod
@@ -269,7 +294,7 @@ ease         = "linear" | "late" | "early" ;
 No user `set`, `inc`, `roll`, or `when` statement; no explicit `render` block;
 no `beat` modulator, general scheduling expression, or parent-clock mutation.
 Internal AST/effect names are not extra DSL syntax. More than two simultaneous
-themes, text registers, shared named alternation, and sample-accurate audio
+themes, independent text lanes, shared named alternation, and sample-accurate audio
 synchronization are not implemented.
 
 `--lint` parses, compiles, and samples expressions. Phase execution tests exercise

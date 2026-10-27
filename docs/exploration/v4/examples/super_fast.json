@@ -1,0 +1,106 @@
+{
+  "root": {
+    "children": [
+      {
+        "node": {
+          "children": [
+            {
+              "exit": {
+                "check_every": 8,
+                "probability": {
+                  "denominator": 12,
+                  "numerator": 1
+                }
+              },
+              "node": {
+                "children": [
+                  {
+                    "node": {
+                      "cadence": 8,
+                      "children": [
+                        {
+                          "node": {
+                            "op": "image",
+                            "source": "either",
+                            "zoom": {
+                              "curve": {
+                                "from": 0.0625,
+                                "scope": "local",
+                                "to": 0.1875
+                              }
+                            }
+                          }
+                        }
+                      ],
+                      "kind": "parallel"
+                    }
+                  }
+                ],
+                "kind": "parallel"
+              }
+            },
+            {
+              "node": {
+                "children": [
+                  {
+                    "node": {
+                      "animation": {
+                        "every": 1
+                      },
+                      "op": "image",
+                      "source": "either",
+                      "zoom": {
+                        "curve": {
+                          "from": 0.1,
+                          "scope": "local",
+                          "to": 0.7
+                        }
+                      }
+                    }
+                  }
+                ],
+                "duration": {
+                  "max": 128,
+                  "min": 64,
+                  "step": 8
+                },
+                "kind": "parallel"
+              }
+            }
+          ],
+          "kind": "random",
+          "select": {
+            "allow_self": false,
+            "cooldown": 64,
+            "first": 0,
+            "order": "round_robin"
+          }
+        }
+      },
+      {
+        "node": {
+          "cadence": 8,
+          "children": [
+            {
+              "node": {
+                "op": "word",
+                "selection_probability": 0.25,
+                "source": "primary"
+              }
+            }
+          ],
+          "kind": "parallel"
+        }
+      },
+      {
+        "node": {
+          "op": "spiral",
+          "speed": 3
+        }
+      }
+    ],
+    "duration": 2048,
+    "kind": "parallel"
+  },
+  "version": 4
+}

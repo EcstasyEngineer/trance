@@ -24,3 +24,7 @@ vcpkg_installed/
 system.cfg
 system.json
 imgui.ini
+
+# Python tooling bytecode is regenerated locally.
+__pycache__/
+*.py[cod]

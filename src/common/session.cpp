@@ -482,6 +482,134 @@ trance_pb::Entrainment default_entrainment_bed()
   return entrainment;
 }
 
+namespace
+{
+  // Preset order is stable for the F2 selector and command listing.
+  // Roles label matching layers in the UI; only numeric values are persisted.
+  template <int N>
+  BedPreset bed_preset(const char* name, const BedPresetLayer (&layers)[N])
+  {
+    return BedPreset{name, layers, N};
+  }
+
+  const BedPresetLayer kBimboDrone[] = {
+      {"high", 312.f, 5.f, 0.f, 3.f},
+      {"low", 60.f, 3.25f, -6.f, 3.f},
+  };
+  const BedPresetLayer kReactor[] = {
+      {"high", 300.f, 7.f, 0.f, 4.f},
+      {"mid_high", 225.f, 4.6f, -4.f, 3.5f},
+      {"mid_low", 165.f, 3.3f, -8.f, 3.f},
+      {"low", 90.f, 2.55f, -14.f, 2.5f},
+  };
+  const BedPresetLayer kDescent[] = {
+      {"theta", 200.f, 5.f, 0.f, 4.f},
+      {"deep_theta", 120.f, 3.25f, -3.f, 3.f},
+      {"delta", 55.f, 2.55f, -6.f, 2.f},
+  };
+  const BedPresetLayer kDreamy[] = {
+      {"root", 200.f, 6.f, -2.f, 4.f},
+      {"third", 250.f, 4.5f, -4.f, 3.5f},
+      {"fifth", 300.f, 3.4f, -2.f, 3.f},
+      {"maj7", 375.f, 2.6f, -8.f, 2.5f},
+  };
+  const BedPresetLayer kCelestial[] = {
+      {"root", 200.f, 6.f, 0.f, 4.f},
+      {"third", 250.f, 4.5f, -4.f, 3.5f},
+      {"sharp4", 281.25f, 3.4f, -9.f, 3.f},
+      {"octave", 400.f, 2.6f, -9.f, 2.5f},
+  };
+  const BedPresetLayer kWarm[] = {
+      {"root", 200.f, 6.f, -2.f, 4.f},
+      {"third", 250.f, 4.5f, -4.f, 3.5f},
+      {"fifth", 300.f, 3.4f, -2.f, 3.f},
+      {"h7", 350.f, 2.6f, -7.f, 2.5f},
+  };
+  const BedPresetLayer kFloating[] = {
+      {"a", 200.f, 6.f, -2.f, 4.f},
+      {"b", 250.f, 4.5f, -4.f, 3.5f},
+      {"c", 312.5f, 3.4f, -4.f, 3.f},
+      {"d", 390.625f, 2.6f, -9.f, 2.5f},
+  };
+  const BedPresetLayer kSacred[] = {
+      {"root", 180.f, 6.f, 0.f, 4.f},
+      {"fifth", 270.f, 4.5f, -4.f, 3.5f},
+      {"octave", 360.f, 3.4f, -6.f, 3.f},
+      {"twelfth", 450.f, 2.6f, -10.f, 2.5f},
+  };
+
+  const BedPreset kPresets[] = {
+      bed_preset("bimbo-drone", kBimboDrone),
+      bed_preset("reactor", kReactor),
+      bed_preset("descent", kDescent),
+      bed_preset("dreamy", kDreamy),
+      bed_preset("celestial", kCelestial),
+      bed_preset("warm", kWarm),
+      bed_preset("floating", kFloating),
+      bed_preset("sacred", kSacred),
+  };
+  static_assert(sizeof(kPresets) / sizeof(kPresets[0]) == 8, "eight conditioner presets");
+}
+
+int bed_preset_count()
+{
+  return static_cast<int>(sizeof(kPresets) / sizeof(kPresets[0]));
+}
+
+const BedPreset& bed_preset_at(int index)
+{
+  return kPresets[index];
+}
+
+const BedPreset* find_bed_preset(const std::string& name)
+{
+  for (const auto& preset : kPresets) {
+    if (name == preset.name) {
+      return &preset;
+    }
+  }
+  return nullptr;
+}
+
+const BedPreset* match_bed_preset(const trance_pb::Entrainment& entrainment)
+{
+  if (entrainment.layer_size() == 0) {
+    return nullptr;
+  }
+  for (const auto& preset : kPresets) {
+    if (preset.layer_count != entrainment.layer_size()) {
+      continue;
+    }
+    bool same = true;
+    for (int i = 0; i < preset.layer_count; ++i) {
+      const auto& layer = entrainment.layer(i);
+      const auto& want = preset.layers[i];
+      if (layer.center_hz() != want.center_hz || layer.pulse_hz() != want.pulse_hz ||
+          layer.amplitude_db() != want.amplitude_db || layer.binaural_hz() != want.binaural_hz) {
+        same = false;
+        break;
+      }
+    }
+    if (same) {
+      return &preset;
+    }
+  }
+  return nullptr;
+}
+
+void apply_bed_preset(trance_pb::Entrainment& entrainment, const BedPreset& preset)
+{
+  entrainment.clear_layer();
+  for (int i = 0; i < preset.layer_count; ++i) {
+    const auto& src = preset.layers[i];
+    auto* layer = entrainment.add_layer();
+    layer->set_center_hz(src.center_hz);
+    layer->set_pulse_hz(src.pulse_hz);
+    layer->set_amplitude_db(src.amplitude_db);
+    layer->set_binaural_hz(src.binaural_hz);
+  }
+}
+
 bool is_enabled(const trance_pb::PlaylistItem_NextItem& next,
                 const std::map<std::string, std::string>& variables)
 {

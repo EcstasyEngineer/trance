@@ -58,6 +58,8 @@ VERBS = [
     ("bed layer add", True),
     ("bed layers", True),            # read-back (#60): the R the layers' CRUD was missing
     ("bed layer remove 2", True),    # removes the layer just added (default bed has 2)
+    ("bed presets", True),
+    ("bed preset sacred", True),     # overwrite layers; master left alone
     # Content selection (#59). The theme verbs are driven separately below, against a theme
     # name read out of `status` -- there is no name to hardcode that every session has.
     ("visuals", True),
@@ -80,6 +82,8 @@ VERBS = [
     ("bed master potato", False),    # non-numeric -> err
     ("bed layer 99 carrier 300", False),  # bad index -> err
     ("bed layer 0 bogus 1", False),  # unknown field -> err
+    ("bed preset not-a-preset", False),  # unknown name -> err, bed unchanged
+    ("bed preset", False),           # missing name -> err
     ("visual not_a_visual_zzz", False),   # unknown visual name -> err (lists the valid ones)
     ("visual", False),               # missing arg -> err
     ("theme pin not_a_theme_zzz", False),  # unknown theme -> err
@@ -167,6 +171,48 @@ def main():
             passed = well_formed and (ok == expect_ok)
             tag = "  ok " if passed else "FAIL "
             print(f"{tag} {line!r:32} -> {reply!r}")
+            if not passed:
+                failures += 1
+
+        # Preset read-back checks exercise actual dispatch and protobuf state,
+        # including an unknown name while the bed is absent.
+        def ask_bed(line):
+            sock.sendall((line + "\n").encode("utf-8"))
+            return reader.readline().rstrip("\n")
+
+        bed_checks = []
+        listing = ask_bed("bed presets")
+        bed_checks.append(("preset list/order", listing ==
+                           "ok presets=bimbo-drone,reactor,descent,dreamy,celestial,warm,floating,sacred",
+                           listing))
+        ask_bed("bed master -33")
+        ask_bed("bed preset sacred")
+        sacred = ask_bed("bed layers")
+        bed_checks.append(("preset replaces layers; retains master",
+                           "layers=4 master_db=-33" in sacred and
+                           "[0] carrier=180 binaural=4 pulse=6" in sacred and
+                           "[3] carrier=450 binaural=2.5 pulse=2.6 level=-10" in sacred,
+                           sacred))
+        rejected = ask_bed("bed preset not-a-preset")
+        after = ask_bed("bed layers")
+        bed_checks.append(("unknown preset leaves bed unchanged",
+                           rejected.startswith("err ") and after == sacred, after))
+        ask_bed("bed off")
+        absent = ask_bed("bed layers")
+        rejected = ask_bed("bed preset not-a-preset")
+        after = ask_bed("bed layers")
+        bed_checks.append(("unknown preset leaves absent bed unchanged",
+                           rejected.startswith("err ") and after == absent, after))
+        applied = ask_bed("bed preset bimbo-drone")
+        restored = ask_bed("bed layers")
+        bed_checks.append(("preset enables an absent bed with default master",
+                           applied == "ok preset=bimbo-drone layers=2" and
+                           "layers=2 master_db=-28(default)" in restored and
+                           "[0] carrier=312 binaural=3 pulse=5" in restored and
+                           "[1] carrier=60 binaural=3 pulse=3.25 level=-6" in restored,
+                           restored))
+        for label, passed, detail in bed_checks:
+            print(f"{'  ok ' if passed else 'FAIL '} {label!r:32} -> {detail!r}")
             if not passed:
                 failures += 1
         # One reply inspected for CONTENT rather than framing: status's xr= field. On a

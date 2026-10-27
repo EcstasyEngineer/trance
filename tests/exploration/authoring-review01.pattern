@@ -1,0 +1,2 @@
+# Same-line children intentionally exercise structural statement boundaries.
+pattern schedule_review for 128f seq loop 2 { every 16f -> beat offset 4f { image runtime } pattern child for 32f { every 4f { word primary } } every ramp 24f -> 4f steps 4 ease early -> cut { image primary } }

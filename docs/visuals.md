@@ -1,9 +1,9 @@
 # Visuals
 
-Every built-in and custom visual uses the v3 pattern compiler. A visual schedules
-content effects; its program supplies themes, speed, colors, and an entrainment
-beat period. See [authoring](authoring-v3-patterns.md), the
-[grammar](spec-grammar-v3.md), and [runtime](engine-today.md).
+All eight builtins use the native V4 AST compiler. Custom visuals accept V4 JSON exclusively through the same source loader. A program supplies themes,
+speed, colors and entrainment. See the [V4 grammar](spec-grammar-v4.md),
+[native runtime](engine-today.md), and
+[composer](exploration/authoring/README.md).
 
 ## Built-ins
 
@@ -13,12 +13,12 @@ beat period. See [authoring](authoring-v3-patterns.md), the
 | `slow_flash` | `slow_flash` | Slow and fast flashing phases. |
 | `sub_text` | `sub_text` | Image with scrolling subtext. |
 | `flash_text` | `flash_text` | Image crossfade with text. |
-| `simple` | `parallel` | Single-image visual. |
+| `simple` | `parallel` | Two staggered primary/secondary image lanes. |
 | `super_parallel` | `super_parallel` | Three staggered image layers. |
 | `animation` | `animation` | Animation and a crossfading image layer. |
 | `super_fast` | `super_fast` | Rapid base cuts, bounded bursts, randomized word/animation accents. |
 
-Sources: [builtin_patterns_v3.cpp](../src/trance/visual/builtin_patterns_v3.cpp).
+Sources: [builtin_patterns_v4.cpp](../src/trance/visual/builtin_patterns_v4.cpp).
 These express current intended effects; their frame sequences are not a
 compatibility contract with retired hand-coded visuals.
 
@@ -39,25 +39,24 @@ diagnostic rather than silently choosing another visual.
 
 ## Nested timing
 
-Timed patterns retain their declared span and provide local clocks. Nested
-schedules contribute to their enclosing cadence, including when nested under
-sampled ramps. Bursts own child schedules: branch entry restarts the schedule,
-direct effects fire on entry, and explicit `every` constructs repeat inside it.
-Burst curves follow the sampled occurrence duration.
+V4 has three composition kinds: parallel, sequential and random. One occurrence
+scheduler handles their timing, cadence/ramp, phase offsets, explicit repetition,
+sampled lifetimes and child completion. A finished finite child remains inactive
+until its owner restarts it. Random patterns expose random or round-robin order,
+self-selection, cooldown and probability checks on child edges.
 
-A curve's `over NAME` selects a clock to read. Reading an ancestor clock does not
-replace child scheduling. The grammar reference defines clock scope and how an
-indefinite base can obtain a meaningful timed curve.
+Local motion clocks are distinct from total elapsed program duration. Structured
+curves can read local, scene or named ancestor progress.
 
 ## Pipeline and diagnostics
 
 ```text
-v3 source → parser/lowering → Node tree + generated render statements
-          → compiler → Cycler tree → effects/registers → per-frame rendering
+V4 JSON AST → native compiler → occurrence scheduler + output state
+            → per-frame rendering
 ```
 
-Effects update registers and content slots; render statements read those and
-cycler state for alpha, zoom, and motion. Image registers are pattern-scoped.
+Scheduled selections update output state; rendering reads that state and
+occurrence clocks for opacity, zoom, and motion. Each image owns its capture.
 Text and theme audio have fewer independent content slots.
 
 F1 shows the cycler tree and active phase labels. Theme stars identify visible

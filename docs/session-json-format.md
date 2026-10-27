@@ -14,7 +14,7 @@ behavior, including limitations; future model replacement is not assumed.
 | `*.session.json` | Session; any `.json` basename is accepted. |
 | `./default.json` | Default session, created from the working directory on a no-argument cold start. |
 | `./system.json` | Default machine settings path; an optional second positional argument selects another. |
-| `*.pattern` | Plain-text v3 pattern source, referenced by the session. |
+| `*.pattern` | V4 JSON AST pattern source, referenced by the session. |
 | `*.trance` | Exported standard ZIP with `session.json` at its root. |
 
 The session file's parent is the media root. Media, audio, pattern, and scan paths
@@ -236,13 +236,13 @@ as needed; omitted numeric/color settings use validated protobuf defaults.
 
 ## 4. Pattern files
 
-Custom patterns use external plain-text v3 files. JSON has no inline
+Custom patterns use external V4 JSON AST files. Session JSON has no inline
 `source_text` key. Identity comes from `name`, not the filename, and multiple
 entries may reference the same file.
 
 A missing/unreadable file fails session loading. Invalid source syntax is a
 different error: the director skips that custom visual and surfaces a warning.
-See [authoring](authoring-v3-patterns.md) and [grammar](spec-grammar-v3.md).
+See [V4 authoring and grammar](spec-grammar-v4.md).
 
 ## 5. Saving
 

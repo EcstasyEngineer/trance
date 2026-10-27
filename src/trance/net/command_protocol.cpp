@@ -263,10 +263,20 @@ namespace command_protocol
       }
       cmd.value = field;
       cmd.verb = Verb::kBedLayerSet;
+    } else if (verb == "bed" && tokens.size() == 2 && tokens[1] == "presets") {
+      cmd.verb = Verb::kBedPresets;
+    } else if (verb == "bed" && tokens.size() == 3 && tokens[1] == "preset") {
+      cmd.verb = Verb::kBedPreset;
+      cmd.value = tokens[2];
+    } else if (verb == "bed" && tokens.size() >= 2 && tokens[1] == "preset") {
+      cmd.ok = false;
+      cmd.error = "usage: bed preset NAME (and `bed presets` to list)";
+      return cmd;
     } else if (verb == "bed") {
       cmd.ok = false;
-      cmd.error = "usage: bed on|off | bed layers | bed master DB | bed layer add | "
-                  "bed layer remove I | bed layer I carrier|binaural|pulse|level VALUE";
+      cmd.error = "usage: bed on|off | bed presets | bed preset NAME | bed layers | "
+                  "bed master DB | bed layer add | bed layer remove I | "
+                  "bed layer I carrier|binaural|pulse|level VALUE";
       return cmd;
     } else {
       cmd.ok = false;

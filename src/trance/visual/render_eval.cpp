@@ -39,6 +39,7 @@ namespace
 
 namespace pattern
 {
+#ifdef TRANCE_LEGACY_ORACLE
   std::vector<RenderStmt> default_render_block()
   {
     // Used when a pattern carries no render block: draw the "current" image with a
@@ -62,6 +63,8 @@ namespace pattern
     stmts.push_back(text);
     return stmts;
   }
+
+#endif
 
   void eval_render(const std::vector<RenderStmt>& stmts, VisualRender& api, const Registers& regs,
                    const NodeMap& nodes, const Cycler* root)
@@ -96,7 +99,7 @@ namespace pattern
             std::max(0.0f, std::min(1.0f, eval_num(st.speed, 0.0, regs, nodes, root))));
         break;
       case RenderStmt::Op::Warp:
-        // v3 wave warp: amp in zoom, wavelength in origin, speed in speed. Set once per frame;
+        // Wave warp: amp in zoom, wavelength in origin, speed in speed. Set once per frame;
         // image draws later in the block read it. amp 0 => no displacement.
         // Skipped outright on every pass after the frame's first: set_warp advances the
         // wave's time base, so calling it per pass would animate two or three times too

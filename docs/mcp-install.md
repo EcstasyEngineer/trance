@@ -56,6 +56,8 @@ Arguments below are JSON object fields; tools with none accept an empty object.
 | `mute_on`, `mute_off` | — | `mute on|off` |
 | `bed_on`, `bed_off` | — | `bed on|off` |
 | `bed_layers` | — | `bed layers` |
+| `bed_presets` | — | `bed presets` |
+| `bed_preset` | `name`: string | `bed preset NAME` |
 | `bed_master` | `db`: number | `bed master DB` |
 | `bed_layer_add` | — | `bed layer add` |
 | `bed_layer_remove` | `index`: integer | `bed layer remove I` |
@@ -63,7 +65,7 @@ Arguments below are JSON object fields; tools with none accept an empty object.
 
 ## Controller behavior
 
-Read `status`, `themes`, `visuals`, or `bed_layers` before changing state.
+Read `status`, `themes`, `visuals`, `bed_layers`, or `bed_presets` before changing state.
 Wait for a theme pin to load before judging its screenshot. Text pins supply
 content only where the current visual already draws text.
 

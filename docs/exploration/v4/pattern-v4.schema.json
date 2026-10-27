@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:trance:pattern:experimental-v4",
+  "title": "Experimental three-kind pattern AST",
+  "description": "Shape schema. tools/pattern_v4.py additionally validates ownership, references and timing constraints.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "root"],
+  "properties": {
+    "version": {"const": 4},
+    "root": {"$ref": "#/$defs/pattern"}
+  },
+  "$defs": {
+    "frames": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+    "probability": {
+      "oneOf": [
+        {"type": "number", "minimum": 0, "maximum": 1},
+        {"type": "object", "additionalProperties": false, "required": ["numerator", "denominator"], "properties": {
+          "numerator": {"type": "integer", "minimum": 0},
+          "denominator": {"type": "integer", "minimum": 1}
+        }}
+      ]
+    },
+    "duration": {
+      "oneOf": [
+        {"$ref": "#/$defs/frames"},
+        {"type": "object", "additionalProperties": false, "required": ["min", "max", "step"], "properties": {
+          "min": {"$ref": "#/$defs/frames"}, "max": {"$ref": "#/$defs/frames"}, "step": {"$ref": "#/$defs/frames"}
+        }}
+      ]
+    },
+    "scalar": {
+      "oneOf": [
+        {"type": "number"},
+        {"type": "object", "additionalProperties": false, "required": ["curve"], "properties": {
+          "curve": {"type": "object", "additionalProperties": false, "required": ["from", "to"], "properties": {
+            "from": {"type": "number"}, "to": {"type": "number"},
+            "ease": {"enum": ["linear", "early", "late"]}, "scope": {"type": "string"}
+          }}
+        }},
+        {"type": "object", "additionalProperties": false, "required": ["sum"], "properties": {
+          "sum": {"type": "array", "minItems": 2, "maxItems": 8, "items": {"$ref": "#/$defs/scalar"}}
+        }}
+      ]
+    },
+    "opacity": {
+      "oneOf": [
+        {"$ref": "#/$defs/scalar"},
+        {"type": "object", "additionalProperties": false, "required": ["triangle"], "properties": {
+          "triangle": {"type": "object", "additionalProperties": false, "required": ["from", "peak", "to"], "properties": {
+            "from": {"type": "number"}, "peak": {"type": "number"}, "to": {"type": "number"}
+          }}
+        }}
+      ]
+    },
+    "cadence": {
+      "oneOf": [
+        {"$ref": "#/$defs/frames"},
+        {"type": "object", "additionalProperties": false, "required": ["ramp"], "properties": {
+          "ramp": {"type": "object", "additionalProperties": false, "required": ["from", "to", "steps", "ease"], "properties": {
+            "from": {"$ref": "#/$defs/frames"}, "to": {"$ref": "#/$defs/frames"},
+            "steps": {"$ref": "#/$defs/frames"}, "ease": {"enum": ["linear", "early", "late"]}
+          }}
+        }}
+      ]
+    },
+    "edge": {
+      "type": "object", "additionalProperties": false, "required": ["node"],
+      "properties": {
+        "node": {"oneOf": [{"$ref": "#/$defs/pattern"}, {"$ref": "#/$defs/output"}]},
+        "exit": {"type": "object", "additionalProperties": false, "required": ["probability", "check_every"], "properties": {
+          "probability": {"$ref": "#/$defs/probability"}, "check_every": {"$ref": "#/$defs/frames"}
+        }}
+      }
+    },
+    "pattern": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "children"],
+      "properties": {
+        "kind": {"enum": ["parallel", "sequential", "random"]},
+        "children": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/edge"}},
+        "id": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "not": {"enum": ["local", "scene", "this", "self"]}},
+        "duration": {"$ref": "#/$defs/duration"},
+        "repeat": {"oneOf": [{"$ref": "#/$defs/frames"}, {"const": "forever"}]},
+        "cadence": {"$ref": "#/$defs/cadence"},
+        "offset": {"type": "integer", "minimum": 0},
+        "select": {"type": "object", "additionalProperties": false, "required": ["order", "allow_self", "first"], "properties": {
+          "order": {"enum": ["random", "round_robin"]}, "allow_self": {"type": "boolean"},
+          "first": {"type": "integer", "minimum": 0}, "cooldown": {"type": "integer", "minimum": 0}
+        }}
+      }
+    },
+    "output": {
+      "type": "object", "additionalProperties": false, "required": ["op"],
+      "properties": {
+        "op": {"enum": ["image", "word", "line", "caption", "subtext", "spiral"]},
+        "source": {"enum": ["primary", "secondary", "either", "alternate"]},
+        "flip_probability": {"$ref": "#/$defs/probability"},
+        "selection_probability": {"$ref": "#/$defs/probability"},
+        "zoom": {"$ref": "#/$defs/scalar"}, "zoom_baseline": {"$ref": "#/$defs/scalar"},
+        "opacity": {"$ref": "#/$defs/opacity"}, "speed": {"$ref": "#/$defs/scalar"},
+        "visibility": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number", "minimum": 0, "maximum": 1}},
+        "animation": {"type": "object", "additionalProperties": false, "required": ["every"], "properties": {"every": {"$ref": "#/$defs/frames"}}},
+        "envelope": {"type": "object", "additionalProperties": false, "required": ["in", "hold", "out"], "properties": {
+          "in": {"$ref": "#/$defs/frames"}, "hold": {"type": "integer", "minimum": 0}, "out": {"$ref": "#/$defs/frames"}
+        }}
+      }
+    }
+  }
+}

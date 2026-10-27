@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
 
 jobs:
@@ -68,6 +68,29 @@ jobs:
       - name: Test
         shell: pwsh
         run: ctest --test-dir build/windows-msvc -C Release --output-on-failure -LE gpu
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Composer browser checks
+        shell: pwsh
+        run: |
+          npm install --prefix build/browser-qa playwright@1.62.1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:NODE_PATH = Join-Path $pwd "build/browser-qa/node_modules"
+          node tests/authoring_v4_test.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/exploration/v4_static_composer_qa.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $composerServer = Start-Process python -ArgumentList "tools/authoring_server.py", "--port", "8766" -PassThru -WindowStyle Hidden
+          try {
+            Start-Sleep -Seconds 2
+            node tests/exploration/v4_native_browser_qa.cjs
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Stop-Process -Id $composerServer.Id -ErrorAction SilentlyContinue
+          }
 
       - uses: actions/upload-artifact@v4
         with:

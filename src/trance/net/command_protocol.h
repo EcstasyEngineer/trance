@@ -73,6 +73,11 @@ namespace command_protocol
     // irreversible and a changed `level` unrestorable, because nothing could read a
     // layer's parameters back. Read-only.
     kBedLayers,
+    // Conditioner beds. `bed presets` lists the names; `bed preset NAME` replaces
+    // every layer and leaves master_db alone. An unknown name fails at execution,
+    // before any write.
+    kBedPresets,
+    kBedPreset,
   };
 
   struct ParsedCommand {
@@ -80,6 +85,7 @@ namespace command_protocol
     // Populated depending on verb: kOverlayOpacity -> number; kLoadPattern/kScreenshot ->
     // value (the file path); kBedMaster -> number; kBedLayerRemove -> index;
     // kBedLayerSet -> index + value (field name: carrier|binaural|pulse|level) + number.
+    // kBedPreset -> value (the preset name, one token).
     // The free-text verbs put the whole rest of the line in `value`, un-tokenized:
     // kLoadPatternSource (v3 source), kThemePin (comma-separated theme names),
     // kVisual (a built-in or custom pattern name), kTextPin (comma-separated words).

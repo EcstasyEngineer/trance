@@ -1,0 +1,80 @@
+{
+  "root": {
+    "children": [
+      {
+        "node": {
+          "cadence": 64,
+          "children": [
+            {
+              "node": {
+                "animation": {
+                  "every": 1
+                },
+                "op": "image",
+                "source": "either",
+                "zoom": {
+                  "curve": {
+                    "from": 0,
+                    "scope": "local",
+                    "to": 0.625
+                  }
+                }
+              }
+            }
+          ],
+          "kind": "parallel"
+        }
+      },
+      {
+        "node": {
+          "cadence": 64,
+          "children": [
+            {
+              "node": {
+                "envelope": {
+                  "hold": 16,
+                  "in": 8,
+                  "out": 8
+                },
+                "op": "image",
+                "source": "secondary",
+                "zoom": {
+                  "curve": {
+                    "from": 0.5,
+                    "scope": "local",
+                    "to": 0.625
+                  }
+                }
+              }
+            }
+          ],
+          "kind": "parallel",
+          "offset": 48
+        }
+      },
+      {
+        "node": {
+          "cadence": 32,
+          "children": [
+            {
+              "node": {
+                "op": "caption",
+                "source": "either"
+              }
+            }
+          ],
+          "kind": "parallel"
+        }
+      },
+      {
+        "node": {
+          "op": "spiral",
+          "speed": 3
+        }
+      }
+    ],
+    "duration": 1024,
+    "kind": "parallel"
+  },
+  "version": 4
+}

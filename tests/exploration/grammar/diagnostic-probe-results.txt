@@ -1,0 +1,15 @@
+pattern scene for 8f {} trailing_words
+  ok=1 warnings=0 draws=0 error=
+pattern scene for 8f {} pattern ignored for 8f { image primary }
+  ok=1 warnings=0 draws=0 error=
+pattern scene for 8f { copy cur -> prev image primary }
+  ok=1 warnings=0 draws=1 error=
+pattern scene for 8f { image primary zoom [this.progres] }
+  ok=1 warnings=0 draws=1 error=
+pattern scene for 8f { image primary anim every 0th }
+  ok=1 warnings=0 draws=1 error=
+missing.progress => 0
+mystery(0.75) => 0.75
+1 trailing => 1
+(-1)^0.5 => -nan(ind)
+1 / 0 => 0

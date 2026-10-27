@@ -15,7 +15,7 @@ namespace
 
   // Resolve an effect's slot to the concrete ThemeBank side used this firing. A non-empty
   // slot_reg reads the bool from a scalar register (a toggle/flag used as a selector);
-  // Runtime (and the DSL's `random`) rolls at fire time. Image effects store this beside
+  // The authored `either` source rolls at fire time. Image effects store this beside
   // the image register so later draws/copies keep exact debug metadata.
   pattern::Slot resolved_slot(const pattern::Effect& e, const pattern::Registers& regs)
   {
@@ -89,12 +89,12 @@ namespace
       api.change_text(static_cast<VisualControl::SplitType>(e.split), slot_bool(e, regs));
       break;
     case K::Anim:
-      // Record the slot as well as loading it: the draw side reads regs.anim_slot to know
-      // which streamer to pull the frame from. Without that the load and the draw disagree
-      // and every `anim` renders the primary streamer -- `anim secondary` and the `alternate`
-      // ping-pong were invisible on screen even though the load was correct.
+#ifdef TRANCE_LEGACY_ORACLE
       regs.anim_slot = resolved_slot(e, regs);
       api.change_animation(regs.anim_slot == pattern::Slot::Secondary);
+#else
+      api.change_animation(resolved_slot(e, regs) == pattern::Slot::Secondary);
+#endif
       break;
     case K::Themes:
       // Fire-and-forget by design: patterns request a swap, they don't depend on it
@@ -119,6 +119,14 @@ namespace
     case K::Toggle:
       regs.scalars[e.target] ^= 1;
       break;
+    case K::Chance: {
+      // Exact endpoints and rational odds; these are authored V4 policies.
+      const uint32_t denominator = e.probability_denominator;
+      const uint32_t numerator = e.probability_numerator;
+      regs.scalars[e.target] = numerator && denominator
+          && (numerator >= denominator || random(denominator) < numerator) ? 1 : 0;
+      break;
+    }
     case K::Roll:
       if (!e.choices.empty()) {
         regs.scalars[e.target] = e.choices[random(e.choices.size())];
@@ -135,6 +143,7 @@ namespace
       }
       break;
     }
+#ifdef TRANCE_LEGACY_ORACLE
     case K::Copy: {
       regs.images[e.target] = regs.images[e.src];
       auto it = regs.image_slots.find(e.src);
@@ -152,6 +161,7 @@ namespace
       regs.image_gens.erase(e.target);
       break;
     }
+#endif
     case K::SpiralSet:
       api.set_spiral(static_cast<uint32_t>(e.ivalue), static_cast<uint32_t>(e.mod_literal));
       break;
@@ -164,7 +174,7 @@ namespace
       api.play_theme_audio(path, e.force);
       // A literal `volume` modulator (no curve/expr) is applied once here, at fire time;
       // a curve/expr volume instead rides the per-frame RenderStmt{Op::AudioVolume} the
-      // parser emits alongside this effect (see pattern_parser_v3.cpp / render_eval.cpp).
+      // parser emits alongside this effect (see pattern_parser_v4.cpp / render_eval.cpp).
       // rate < 0 is the "no volume written" sentinel: keep the channel's current volume
       // (initially full). rate == 0 is an explicit, honored mute.
       if (e.rate >= 0.f) {
@@ -197,10 +207,13 @@ CompiledVisual::CompiledVisual(VisualControl& api, const pattern::Node& root,
   };
   set_cycler(pattern::compile(root, make_action, _node_map));
 
-  // Render is data: the block's [expr] params are evaluated each frame against the
-  // registers + named cycler nodes (render_eval.cpp). An empty block falls back to a
-  // single-image default so playback never shows a blank frame.
+  // Render is data: compiled parameters read capture state and occurrence clocks.
+#ifdef TRANCE_LEGACY_ORACLE
   auto stmts = render_block.empty() ? pattern::default_render_block() : render_block;
+#else
+  // An empty V4 document has no outputs. Do not synthesize historical layers.
+  auto stmts = render_block;
+#endif
   set_render([this, stmts, &api](VisualRender& render) {
     // Once per FRAME, on its first pass -- never per pass. A refresh mid-frame would let
     // the two eyes draw DIFFERENT images from the same registers (spec trap 1).

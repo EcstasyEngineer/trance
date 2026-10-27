@@ -1,3 +1,5 @@
+> **Archived: pre-V4 design.** This page is historical and is not a supported language reference. Use the [V4 grammar](spec-grammar-v4.md); V3 source is rejected by the current player.
+
 # Pattern authoring roadmap
 
 These are proposed improvements, recorded after the September 2026 grammar and
@@ -10,6 +12,12 @@ Follow-up is tracked in [issue #66](https://github.com/EcstasyEngineer/trance/is
 The aim is a reliable loop: describe an idea, produce a pattern, validate it,
 preview it, and revise it. Both people and automation should use the same
 compiler and receive the same useful diagnostics.
+
+The [visual authoring exploration](exploration/README.md) evaluates a hybrid
+schedule-block/value-node interface against the current runtime. It includes a
+standalone interactive prototype, grammar-only visibility-pulse recipes,
+composition findings and executable checks. It remains an experiment rather
+than a shipped editor.
 
 ## First milestone: trustworthy authoring feedback
 
@@ -44,9 +52,9 @@ restarting the player. No separate approximation of the grammar in the tools.
   demonstration with a clear media contract. Include a few carefully explained
   examples that compose existing primitives. Avoid introducing a package manager,
   general scripting language or macro system before a concrete need appears.
-- **Independently owned layers.** Images already have named registers; text and
+- **Independently owned layers.** Images have independently retained pattern scopes; text and
   animation still have shared runtime state. Two independently fading text lines
-  are a concrete reason to add text handles. Establish ownership, copy behavior
+  are a concrete reason to establish text ownership. Establish selection behavior
   and lifetime for text first, then animation if needed.
 
 ## Timing: extend only for a demonstrated use case

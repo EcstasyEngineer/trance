@@ -20,7 +20,7 @@
 #include <trance/visual/builtin_visuals.h>
 #include <trance/visual/cyclers.h>
 #include <trance/visual/pattern_compiler.h>
-#include <trance/visual/pattern_parser_v3.h>
+#include <trance/visual/pattern_parser.h>
 #include <trance/visual/render_eval.h>
 #include <atomic>
 #include <chrono>
@@ -650,6 +650,42 @@ std::string execute_command(const command_protocol::ParsedCommand& cmd, Director
     }
     apply_program_change();
     return command_protocol::format_ok();
+  }
+  case Verb::kBedPresets: {
+    std::ostringstream out;
+    out << "presets=";
+    for (int i = 0; i < bed_preset_count(); ++i) {
+      if (i) {
+        out << ",";
+      }
+      out << bed_preset_at(i).name;
+    }
+    return command_protocol::format_ok(out.str());
+  }
+  case Verb::kBedPreset: {
+    auto* program = active_program();
+    if (!program) {
+      return command_protocol::format_err("bed: no active session program");
+    }
+    const BedPreset* preset = find_bed_preset(cmd.value);
+    if (!preset) {
+      std::ostringstream err;
+      err << "bed preset: unknown preset: " << cmd.value << " (";
+      for (int i = 0; i < bed_preset_count(); ++i) {
+        if (i) {
+          err << ", ";
+        }
+        err << bed_preset_at(i).name;
+      }
+      err << ")";
+      return command_protocol::format_err(err.str());
+    }
+    // Same overwrite as the F2 combo: layers only. master_db is not written,
+    // including the 0-means-default sentinel on a bed that was off.
+    apply_bed_preset(*program->mutable_entrainment(), *preset);
+    apply_program_change();
+    return command_protocol::format_ok("preset=" + std::string(preset->name) +
+                                       " layers=" + std::to_string(preset->layer_count));
   }
   case Verb::kUnknown:
     break;
@@ -1498,7 +1534,7 @@ namespace
 
   bool lint_pattern(const std::string& label, const std::string& source, uint32_t locked)
   {
-    auto pr = patternv3::parse(source, locked);
+    auto pr = pattern::parse_source(source, locked);
     if (!pr.ok) {
       std::cout << "FAIL  " << label << ": " << pr.error << std::endl;
       return false;
@@ -1549,7 +1585,7 @@ namespace
     bool ok = true;
     for (const auto& visual : builtin_visuals()) {
       if (!lint_pattern(std::string{"builtin "} + visual.name,
-                        builtin::pattern_source_v3(visual.type), 0)) {
+                        builtin::pattern_source_v4(visual.type), 0)) {
         ok = false;
       }
     }

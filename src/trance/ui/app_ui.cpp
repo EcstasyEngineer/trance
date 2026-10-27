@@ -8,7 +8,7 @@
 #include <trance/theme_bank.h>
 #include <trance/visual/builtin_patterns.h>
 #include <trance/visual/builtin_visuals.h>
-#include <trance/visual/pattern_parser_v3.h>
+#include <trance/visual/pattern_parser.h>
 #include <algorithm>
 #include <cctype>
 #include <iostream>
@@ -577,12 +577,12 @@ void AppUi::draw_builtin_body(Director& director, uint32_t type, const char* blu
     director.force_builtin_visual(type);
   }
   ImGui::SameLine();
-  // Built-in sources are compile-time constants (builtin_patterns_v3.cpp) -- shown
+  // Built-in sources are compile-time constants (builtin_patterns_v4.cpp) -- shown
   // read-only, as the modding-language reference for writing a custom pattern. Copy
   // is the intended path to editing one: paste into a new custom pattern below.
   // Returned by value; ReadOnly means InputTextMultiline never writes through the
   // pointer, so handing it this frame-local buffer is safe.
-  std::string source = builtin::pattern_source_v3(type);
+  std::string source = builtin::pattern_source_v4(type);
   if (ImGui::Button("Copy")) {
     ImGui::SetClipboardText(source.c_str());
   }
@@ -810,13 +810,8 @@ void AppUi::draw_visuals_section(Director& director)
   if (ImGui::Button("+ New pattern")) {
     auto* added = program->add_custom_visual_pattern();
     added->set_name(unique_pattern_name(*program));
-    // Minimal valid v3 source: one pattern span with one cadence drawing a primary
-    // image. Named to match so `pattern NAME` and the proto name agree on sight
-    // (Director carries the proto's name as authoritative either way).
-    added->set_source_text("pattern " + added->name() + " for 1024f {\n"
-                           "  every 64f { image primary zoom (curve 0 -> 0.375) }\n"
-                           "  spiral speed 2\n"
-                           "}\n");
+    // New custom patterns use the same native V4 AST as builtins and the composer.
+    added->set_source_text(R"({"version":4,"root":{"kind":"parallel","duration":1024,"cadence":64,"children":[{"node":{"op":"image","source":"primary","zoom":{"curve":{"from":0,"to":0.375}}}},{"node":{"op":"spiral","speed":2}}]}})");
     added->set_random_weight(1);
     added->set_enabled(true);
     // New rows compile immediately so the lint line starts out truthful, and the
@@ -884,7 +879,7 @@ void AppUi::draw_visuals_section(Director& director)
       }
     }
 
-    // Live lint: patternv3::parse is pure and cheap enough to run on edit, but not
+    // Live lint: V4 parsing is pure and cheap enough to run on edit, but not
     // per frame for every row -- cache the diagnostic and only re-parse when the row
     // changed (or was never linted). Parsed with locked_period_frames 0: the beat
     // period is Director's to supply, and a `locked` length would report a spurious
@@ -903,7 +898,7 @@ void AppUi::draw_visuals_section(Director& director)
         message = "empty name (a load-time error)";
       }
       if (message.empty()) {
-        auto parsed = patternv3::parse(pattern->source_text(), 0);
+        auto parsed = pattern::parse_source(pattern->source_text(), 0);
         if (!parsed.ok) {
           message = parsed.error;
         }
@@ -1749,6 +1744,31 @@ void AppUi::draw_entrainment_section(Audio& audio)
   // Absent/empty entrainment block = no bed (the JSON contract, session_json.cpp).
   // "Enable bed" is what keeps that contract from locking new users out: it writes
   // the stock default bed into the program, no hand-edited JSON required.
+  // The preset combo is the same overwrite the `bed preset` verb does: clear the
+  // layers, write that preset's numbers, leave master dB alone. Role names are
+  // not stored; they show only while the live layers still match.
+  bool commit = false;
+  const bool has_layers = program->entrainment().layer_size() > 0;
+  const BedPreset* matched = has_layers ? match_bed_preset(program->entrainment()) : nullptr;
+  const char* preview = matched ? matched->name : (has_layers ? "custom" : "none");
+  ImGui::SetNextItemWidth(180.f);
+  if (ImGui::BeginCombo("bed preset", preview)) {
+    for (int i = 0; i < bed_preset_count(); ++i) {
+      const BedPreset& preset = bed_preset_at(i);
+      const bool selected = matched == &preset;
+      if (ImGui::Selectable(preset.name, selected) && !selected) {
+        apply_bed_preset(*program->mutable_entrainment(), preset);
+        matched = &bed_preset_at(i);
+        commit = true;
+      }
+      if (selected) {
+        ImGui::SetItemDefaultFocus();
+      }
+    }
+    ImGui::EndCombo();
+  }
+  ImGui::TextDisabled("Replaces every layer. Master level stays.");
+
   const bool bed_on = program->entrainment().layer_size() > 0;
   if (!bed_on) {
     ImGui::TextUnformatted("bed: off");
@@ -1781,7 +1801,6 @@ void AppUi::draw_entrainment_section(Audio& audio)
   // Sliders write the proto per drag tick (no side effects) and COMMIT on release:
   // the commit reconfigures the live stream (stop, recalibrate, play) and re-pushes
   // the program for the `locked` beat clock, neither of which belongs on every tick.
-  bool commit = false;
 
   // Display the effective master (0 in the proto means the -28 default); the first
   // edit writes an explicit value, so UI-touched beds never rely on the sentinel.
@@ -1798,7 +1817,11 @@ void AppUi::draw_entrainment_section(Audio& audio)
     auto* layer = entrainment->mutable_layer(i);
     ImGui::PushID(i);
     ImGui::Separator();
-    ImGui::Text("layer %d", i);
+    if (matched && i < matched->layer_count) {
+      ImGui::Text("layer %d  %s", i, matched->layers[i].role);
+    } else {
+      ImGui::Text("layer %d", i);
+    }
     ImGui::SameLine();
     if (ImGui::SmallButton("remove")) {
       remove_index = i;

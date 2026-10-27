@@ -19,8 +19,8 @@ see [engine-today.md](engine-today.md).
    `PlaylistRunner`, and the UI/control surfaces.
 3. `PlaylistRunner` selects programs and playlist transitions. The main loop
    applies their media/audio effects and reconciles runtime control requests.
-4. `Director` parses built-in and custom v3 sources. A selected source becomes a
-   `CompiledVisual`: a schedule tree, registers, and an ordered render block.
+4. `Director` compiles V4 builtins and V4 custom sources. A selected source becomes a
+   `CompiledVisual`: an occurrence schedule, private image captures, and an ordered render block.
 5. Content ticks call `Director::update()` and advance animation playback.
    Presentation calls `Director::render()`, which evaluates the render block for
    each output pass.
@@ -36,7 +36,7 @@ session JSON + pattern files
             |
             v
          Director -----> CompiledVisual
-            |             | schedule + registers + render expressions
+            |             | occurrences + output state + render expressions
             |             v
             |          VisualApiImpl <---- ThemeBank
             |             |               images / text / fonts / theme audio
@@ -67,8 +67,7 @@ There are several time domains:
   spiral rates expressed relative to 60 Hz. Multiple eye/desktop passes reuse
   that frame's state.
 - **Audio time:** playback and synthesis have their own audio-stream timing.
-  Grammar beat lengths are a frame-count snapshot derived from the program's
-  pulsed entrainment layer, not sample-accurate audio callbacks.
+  V4 timing is expressed in integer content frames, not sample-accurate audio callbacks.
 
 These distinctions matter when investigating a stall: a held image, a stalled
 schedule, a non-advancing render expression, and an animation waiting for a

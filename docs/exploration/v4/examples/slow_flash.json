@@ -1,0 +1,112 @@
+{
+  "root": {
+    "children": [
+      {
+        "node": {
+          "children": [
+            {
+              "node": {
+                "cadence": 64,
+                "children": [
+                  {
+                    "node": {
+                      "animation": {
+                        "every": 2
+                      },
+                      "op": "image",
+                      "source": "primary",
+                      "zoom": {
+                        "curve": {
+                          "from": 0,
+                          "scope": "local",
+                          "to": 0.5
+                        }
+                      }
+                    }
+                  }
+                ],
+                "kind": "parallel"
+              }
+            },
+            {
+              "node": {
+                "cadence": 64,
+                "children": [
+                  {
+                    "node": {
+                      "op": "caption",
+                      "source": "primary"
+                    }
+                  }
+                ],
+                "kind": "parallel"
+              }
+            },
+            {
+              "node": {
+                "op": "spiral",
+                "speed": 2
+              }
+            }
+          ],
+          "duration": 1024,
+          "kind": "parallel"
+        }
+      },
+      {
+        "node": {
+          "children": [
+            {
+              "node": {
+                "cadence": 8,
+                "children": [
+                  {
+                    "node": {
+                      "op": "image",
+                      "source": "secondary",
+                      "zoom": {
+                        "curve": {
+                          "from": 0,
+                          "scope": "fast_section",
+                          "to": 0.8
+                        }
+                      }
+                    }
+                  }
+                ],
+                "kind": "parallel"
+              }
+            },
+            {
+              "node": {
+                "cadence": 16,
+                "children": [
+                  {
+                    "node": {
+                      "op": "word",
+                      "source": "secondary"
+                    }
+                  }
+                ],
+                "kind": "parallel"
+              }
+            },
+            {
+              "node": {
+                "op": "spiral",
+                "speed": 4
+              }
+            }
+          ],
+          "duration": 512,
+          "id": "fast_section",
+          "kind": "parallel"
+        }
+      }
+    ],
+    "duration": 1536,
+    "kind": "sequential",
+    "repeat": 2
+  },
+  "version": 4
+}

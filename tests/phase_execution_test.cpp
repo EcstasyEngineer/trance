@@ -1,8 +1,10 @@
+#include "support/legacy_builtins.h"
+// Clock probes use real runtime image selections, independently of primary/secondary pick assertions.
 // Phase ownership cannot be checked by --lint: these assertions observe effects,
 // activation and render values across transitions. No media, window or GL context.
 #include <trance/visual/builtin_patterns.h>
 #include <trance/visual/pattern_compiler.h>
-#include <trance/visual/pattern_parser_v3.h>
+#include "support/pattern_parser_v3.h"
 #include <trance/visual/render_eval.h>
 #include <common/util.h>
 #include <cmath>
@@ -110,9 +112,9 @@ void phase_clock(uint32_t duration, bool animation)
           + std::to_string(duration) + "f { base { image primary } burst -> held { image secondary "
           + "zoom (curve 0.1 -> 0.7) "
           + (animation ? "anim " : "")
-          + "draw cur zoom (curve 0 -> 1 over scene) "
-            "draw cur zoom (curve 0 -> 1 over phase) "
-            "every 8f { draw cur zoom (curve 0.1 -> 0.7 over held) } } } }");
+          + "image runtime zoom (curve 0 -> 1 over scene) "
+            "image runtime zoom (curve 0 -> 1 over phase) "
+            "every 8f { image runtime zoom (curve 0.1 -> 0.7 over held) } } } }");
   run.compile();
   const auto period = duration + 32;
   for (run.frame = 0; run.frame < period + duration; ++run.frame) {
@@ -213,7 +215,7 @@ void bounded_pattern_clocks()
 pattern scene for 25f {
   every 8f -> cut {
     image primary zoom (curve 0 -> 1)
-    draw cur zoom (curve 0 -> 1 over scene)
+    image runtime zoom (curve 0 -> 1 over scene)
   }
 })");
   run.compile();
@@ -282,7 +284,7 @@ void nested_cadence_ownership()
 pattern scene for 64f {
   every 16f {
     every 6f { image primary zoom (curve 0 -> 1) }
-    draw cur zoom [this.frame]
+    image runtime zoom [this.frame]
   }
 })");
   run.compile();
@@ -334,7 +336,7 @@ void sampled_durations()
 pattern scene for 8192f {
   burst period 8f chance 1/1 cooldown 32f duration 64f..128f {
     base {}
-    burst { image secondary zoom (curve 0 -> 1) draw cur zoom [this.length] }
+    burst { image secondary zoom (curve 0 -> 1) image runtime zoom [this.length] }
   }
 })");
   run.compile();
@@ -364,6 +366,68 @@ pattern scene for 8192f {
     previous = active;
   }
   require(lengths.size() > 1, "fixture exercises more than one sampled duration");
+}
+
+void composition_order_and_scope()
+{
+  Run run(R"(
+pattern scene for 12f {
+  pattern child for 4f { image primary zoom 0.25 }
+  image secondary zoom 0.75
+})");
+  run.compile();
+  require(run.parsed.render_block.size() == 2,
+          "nested image and owner image each retain a draw");
+  require(run.parsed.render_block[0].image_reg != run.parsed.render_block[1].image_reg,
+          "nested patterns isolate identically spelled cur registers");
+  for (run.frame = 0; run.frame < 13; ++run.frame) {
+    run.root->advance();
+    require(run.visible_zooms() == std::vector<double>({0.25, 0.75}),
+            "render layers retain lexical order, independently of entry-effect order");
+  }
+  require(run.picks(Slot::Primary) == std::vector<uint32_t>({0, 4, 8, 12}),
+          "short nested patterns repeat while the owner runs");
+  require(run.picks(Slot::Secondary) == std::vector<uint32_t>({0, 12}),
+          "direct owner effects run once per owner occurrence");
+  for (const auto at : {0u, 12u}) {
+    std::vector<Slot> slots;
+    for (const auto& event : run.events)
+      if (event.frame == at && event.kind == Kind::Image) slots.push_back(event.slot);
+    require(slots == std::vector<Slot>({Slot::Secondary, Slot::Primary}),
+            "owner entry precedes child entry even when authored after the child");
+  }
+
+  Run shared(R"(
+pattern scene for 12f {
+  every 4f { image primary }
+  every 6f { image secondary }
+})");
+  shared.compile();
+  require(shared.parsed.render_block[0].image_reg == shared.parsed.render_block[1].image_reg,
+          "sibling cadences share their enclosing pattern's default register");
+  for (shared.frame = 0; shared.frame < 12; ++shared.frame) shared.root->advance();
+  require(shared.picks(Slot::Primary) == std::vector<uint32_t>({0, 4, 8})
+              && shared.picks(Slot::Secondary) == std::vector<uint32_t>({0, 6}),
+          "sibling cadence schedules remain independent while their resource is shared");
+}
+
+void offset_capture_and_owner_clipping()
+{
+  Run run(R"(
+pattern scene for 13f {
+  every 8f offset 2f { image primary zoom [this.frame] }
+})");
+  run.compile();
+  require(run.events.empty(), "offset construction must not perform media effects");
+  for (run.frame = 0; run.frame < 26; ++run.frame) {
+    run.root->advance();
+    const auto zooms = run.visible_zooms();
+    require(zooms.size() == 1, "offset is a phase shift, not a visibility delay");
+    close(zooms.front(), double(((run.frame % 13) + 6) % 8),
+          "offset pre-roll resets at the owner's clipped boundary");
+  }
+  require(run.picks(Slot::Primary) == std::vector<uint32_t>({2, 10, 15, 23}),
+          "suppressed pre-roll can leave a visible register empty until its first real entry");
 }
 
 void validation()
@@ -417,7 +481,7 @@ void validation()
   require(patternv3::parse(source("", nested, "24f")).ok,
           "a controller inside a fixed-duration phase has a valid normalized enclosing span");
   require(patternv3::parse(source("", "burst -> inner period 4f duration 8f { base {} "
-      "burst { image primary zoom [inner.frame] draw cur zoom (curve 0 -> 1 over scene) } }")).ok,
+      "burst { image primary zoom [inner.frame] image runtime zoom (curve 0 -> 1 over scene) } }")).ok,
           "nested controllers retain elapsed time and explicit parent-clock access");
 }
 
@@ -466,6 +530,8 @@ int main()
     bounded_pattern_clocks();
     nested_cadence_ownership();
     sampled_durations();
+    composition_order_and_scope();
+    offset_capture_and_owner_clipping();
     validation();
     super_fast(8);
     super_fast(16);

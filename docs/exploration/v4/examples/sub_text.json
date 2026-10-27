@@ -1,0 +1,53 @@
+{
+  "root": {
+    "children": [
+      {
+        "node": {
+          "cadence": 64,
+          "children": [
+            {
+              "node": {
+                "animation": {
+                  "every": 3
+                },
+                "op": "image",
+                "source": "either",
+                "zoom": {
+                  "curve": {
+                    "from": 0,
+                    "scope": "local",
+                    "to": 0.375
+                  }
+                }
+              }
+            }
+          ],
+          "kind": "parallel"
+        }
+      },
+      {
+        "node": {
+          "cadence": 32,
+          "children": [
+            {
+              "node": {
+                "op": "subtext",
+                "source": "secondary"
+              }
+            }
+          ],
+          "kind": "parallel"
+        }
+      },
+      {
+        "node": {
+          "op": "spiral",
+          "speed": 4
+        }
+      }
+    ],
+    "duration": 1024,
+    "kind": "parallel"
+  },
+  "version": 4
+}

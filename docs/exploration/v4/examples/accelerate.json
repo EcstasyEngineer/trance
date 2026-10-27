@@ -1,0 +1,83 @@
+{
+  "root": {
+    "children": [
+      {
+        "node": {
+          "cadence": {
+            "ramp": {
+              "ease": "early",
+              "from": 56,
+              "steps": 140,
+              "to": 12
+            }
+          },
+          "children": [
+            {
+              "node": {
+                "animation": {
+                  "every": 4
+                },
+                "flip_probability": 0.5,
+                "op": "image",
+                "source": "alternate",
+                "zoom": {
+                  "sum": [
+                    {
+                      "curve": {
+                        "from": 0,
+                        "scope": "scene",
+                        "to": 0.4
+                      }
+                    },
+                    {
+                      "curve": {
+                        "from": 0,
+                        "scope": "local",
+                        "to": 0.1
+                      }
+                    }
+                  ]
+                },
+                "zoom_baseline": {
+                  "curve": {
+                    "from": 0,
+                    "scope": "scene",
+                    "to": 0.4
+                  }
+                }
+              }
+            },
+            {
+              "node": {
+                "op": "word",
+                "selection_probability": 0.5,
+                "source": "primary",
+                "visibility": [
+                  0,
+                  0.25
+                ]
+              }
+            }
+          ],
+          "duration": 2048,
+          "kind": "parallel"
+        }
+      },
+      {
+        "node": {
+          "op": "spiral",
+          "speed": {
+            "curve": {
+              "from": 1,
+              "scope": "scene",
+              "to": 4
+            }
+          }
+        }
+      }
+    ],
+    "duration": 2048,
+    "kind": "parallel"
+  },
+  "version": 4
+}

@@ -1,4 +1,4 @@
-#include <trance/visual/pattern_parser_v3.h>
+#include "pattern_parser_v3.h"
 
 #include <cctype>
 #include <cmath>
@@ -241,8 +241,8 @@ namespace
   {
     if (w == "primary") return Slot::Primary;
     if (w == "secondary") return Slot::Secondary;
-    if (w == "runtime") return Slot::Runtime;
-    throw ParseError{"unknown content '" + w + "' (want primary|secondary|runtime)", at};
+    if (w == "either" || w == "runtime") return Slot::Runtime;
+    throw ParseError{"unknown content '" + w + "' (want primary|secondary|either)", at};
   }
 
   // ---- parser ---------------------------------------------------------------
@@ -262,7 +262,6 @@ namespace
                              effect(Effect::Kind::SpiralNew)});
       Node root = group(Node::Type::One, {std::move(init), std::move(body)});
 
-      check_register_resolution();
 
       out.root = std::move(root);
       out.render_block = std::move(_render);
@@ -285,11 +284,8 @@ namespace
     // reject a window that overruns it -- a compile-time read, no runtime change.
     struct Scope { std::string name; std::string cid; uint32_t len = 0; bool phase = false; };
     std::vector<Scope> _clocks;
-    // Register scopes (patterns ONLY): bare reg names qualify against the top.
+    // Private image scopes (patterns ONLY): each lane owns one held image.
     std::vector<Scope> _regs;
-    std::set<std::string> _written;  // qualified register names written (Image/Copy target)
-    std::vector<std::pair<std::string, std::size_t>> _read;  // (qualified reg, pos) for the resolve check
-
     std::string loc(std::size_t pos) const
     {
       std::size_t line = 1, col = 1;
@@ -351,35 +347,12 @@ namespace
                        at};
     }
 
-    // Qualify a register reference. Bare `name` -> "<enclosing-pattern-cid>$name". Qualified
-    // "Pat.name" -> "<Pat-cid>$name" (Pat resolved in the register-scope stack). This is the
-    // whole of the lexical-scoping mechanism -- compile-time string
-    // transformation, no runtime change.
-    std::string qualify_reg(const std::string& ref, std::size_t at)
+    // Image storage is private to the nearest pattern lane. Authors compose
+    // independent held images by nesting patterns, never by naming storage.
+    std::string lane_image(std::size_t at) const
     {
-      const auto dot = ref.find('.');
-      if (dot == std::string::npos) {
-        if (_regs.empty()) throw ParseError{"register '" + ref + "' outside any pattern", at};
-        return _regs.back().cid + "$" + ref;
-      }
-      const std::string pat = ref.substr(0, dot);
-      const std::string nm = ref.substr(dot + 1);
-      for (auto it = _regs.rbegin(); it != _regs.rend(); ++it) {
-        if (it->name == pat) return it->cid + "$" + nm;
-      }
-      throw ParseError{"qualified register '" + ref + "': no pattern named '" + pat + "' in scope",
-                       at};
-    }
-
-    void check_register_resolution()
-    {
-      for (const auto& r : _read) {
-        if (!_written.count(r.first)) {
-          // A register drawn/copied-from but never written anywhere would silently render an
-          // empty image (the render_eval silent-zero footgun). Fail loud instead.
-          _warnings.push_back(loc(r.second) + ": register is read but never written (draws empty)");
-        }
-      }
+      if (_regs.empty()) throw ParseError{"image outside any pattern", at};
+      return _regs.back().cid + "$cur";
     }
 
     std::string display_reg(const std::string& qreg) const
@@ -488,17 +461,6 @@ namespace
       }
       if (paren) _c.expect(')');
       return result;
-    }
-
-    // A register reference: a bare name `cur` or a qualified `Other.reg`.
-    std::string read_reg()
-    {
-      std::string s = _c.word();
-      if (_c.peek_char() == '.') {
-        _c.expect('.');
-        s += "." + _c.word();
-      }
-      return s;
     }
 
     // Optional `over NAME`; returns the resolved clock id (this-clock if absent).
@@ -711,7 +673,7 @@ namespace
           ") / " + fnum(fall) + "), 1))";
     }
 
-    // Parse one statement inside a pattern/cadence body. Schedule effects (image pulls, copies)
+    // Parse one statement inside a pattern/cadence body. Schedule effects (image pulls, audio, state)
     // are appended to `sink`; nested schedule subtrees are appended to `children`; draws also
     // append a RenderStmt to _render. `span` is the enclosing length (for bare draws fired once).
     void parse_statement(uint32_t span, std::vector<Effect>& sink, std::vector<Node>& children)
@@ -771,22 +733,8 @@ namespace
         push_render(rs);
         return;
       }
-      if (kw == "copy") {
-        _c.word();
-        const std::size_t sat = _c.pos();
-        const std::string s = read_reg();
-        _c.expect('-');
-        _c.expect('>');
-        const std::size_t dat = _c.pos();
-        const std::string d = read_reg();
-        Effect e = effect(Effect::Kind::Copy);
-        e.src = qualify_reg(s, sat);
-        e.target = qualify_reg(d, dat);
-        _read.push_back({e.src, sat});
-        _written.insert(e.target);
-        sink.push_back(e);
-        return;
-      }
+      if (kw == "copy" || kw == "draw")
+        throw ParseError{"named image storage was removed; use independent pattern image lanes", at};
       if (kw == "audio") {
         parse_audio(sink);
         return;
@@ -808,8 +756,7 @@ namespace
         sink.push_back(e);
         return;
       }
-      if (kw == "image" || kw == "word" || kw == "line" || kw == "caption" || kw == "subtext" ||
-          kw == "draw") {
+      if (kw == "image" || kw == "word" || kw == "line" || kw == "caption" || kw == "subtext") {
         parse_draw(span, sink);
         return;
       }
@@ -926,15 +873,16 @@ namespace
     //                        flip over the two sides -- i.e. exactly uniform-random theme per
     //                        image, but as a stateful walk rather than a per-fire re-roll.
     //
-    // The register is statement-scoped by construction (a fresh minted name per call), so two
-    // alternating draws in one pattern keep independent phase. A named/shared form
+    // Hidden state belongs to the authored operation, not each expansion of a ramp body.
+    // Absolute source position keeps reparsed segments on one alternating stream while two
+    // different authored draws retain independent phase. A named/shared form
     // (`alternate as NAME`) is deliberately NOT implemented this pass.
     //
     // Returns the qualified register name, and appends the Toggle (plus its chance Roll, if
     // any) to `pre` -- which the caller must push into the effect list ahead of the draw.
     std::string parse_alternate(std::vector<Effect>& pre)
     {
-      const std::string reg = "_alt" + std::to_string(_idc++);
+      const std::string reg = "_alt" + std::to_string(_c.pos());
       Effect toggle = effect(Effect::Kind::Toggle);
       toggle.target = reg;
       if (_c.peek_word() == "chance") {
@@ -953,27 +901,6 @@ namespace
       const std::size_t at = _c.pos();
       const std::string kw = _c.word();
 
-      // `draw REG [params] [anim]`: draw an existing register without pulling a new
-      // image. Trailing `anim` renders the streamer's animation layer instead of the
-      // still (pure render -- no change-animation effect; pair with a standalone
-      // `anim <content>` statement, e.g. in a burst `enter` block, to pick WHICH).
-      if (kw == "draw") {
-        const std::size_t rat = _c.pos();
-        const std::string ref = read_reg();
-        const std::string qreg = qualify_reg(ref, rat);
-        _read.push_back({qreg, rat});
-        RenderStmt rs;
-        rs.op = RenderStmt::Op::Image;
-        rs.image_reg = qreg;
-        parse_params(rs);
-        if (_c.peek_word() == "anim") {
-          _c.word();
-          rs.has_anim = true;
-        }
-        push_render(rs);
-        return;
-      }
-
       const std::size_t cat = _c.pos();
       const std::string content = _c.word();
       // `alternate` (E4) is a content word only where a slot is resolved at FIRE time from a
@@ -985,7 +912,7 @@ namespace
       if (content == "alternate") {
         if (kw != "image") {
           throw ParseError{"`alternate` content is available on `image` draws (and the standalone "
-                           "`anim`); " + kw + " takes primary|secondary|runtime",
+                           "`anim`); " + kw + " takes primary|secondary|either",
                            cat};
         }
         alt_reg = parse_alternate(pre);
@@ -994,17 +921,13 @@ namespace
       }
 
       if (kw == "image") {
-        std::string reg = "cur";
-        if (_c.accept('-')) {
-          _c.expect('>');
-          reg = read_reg();
-        }
-        const std::string qreg = qualify_reg(reg, at);
+        if (_c.peek_char() == '-')
+          throw ParseError{"image destinations were removed; use independent pattern image lanes", _c.pos()};
+        const std::string qreg = lane_image(at);
         Effect e = effect(Effect::Kind::Image);
         e.slot = slot;
         e.slot_reg = alt_reg;
         e.target = qreg;
-        _written.insert(qreg);
         RenderStmt rs;
         rs.op = RenderStmt::Op::Image;
         rs.image_reg = qreg;
@@ -1068,6 +991,7 @@ namespace
                     std::vector<Effect>& extra)
     {
       if (_c.peek_word() != "anim") return;
+      const std::size_t authored_at = _c.pos();
       _c.word();
       rs.has_anim = true;
       Effect load = effect(Effect::Kind::Anim);
@@ -1079,9 +1003,10 @@ namespace
         const uint32_t n = _c.uint_lit();
         const std::string suf = _c.peek_word();
         if (suf == "st" || suf == "nd" || suf == "rd" || suf == "th") _c.word();
-        const std::string ctr = "_actr" + std::to_string(_idc);
-        const std::string flag = "_anim" + std::to_string(_idc);
-        ++_idc;
+        // A ramp reuses this authored statement across distinct local clocks. Count
+        // firings across those cuts, just like an ordinary repeating cadence.
+        const std::string ctr = "_actr" + std::to_string(authored_at);
+        const std::string flag = "_anim" + std::to_string(authored_at);
         Effect pulse = effect(Effect::Kind::Pulse);
         pulse.target = ctr;
         pulse.mod_literal = static_cast<int32_t>(n);
@@ -1098,6 +1023,7 @@ namespace
       Effect none = effect(Effect::Kind::Set);
       none.target = "";
       if (_c.peek_word() != "chance") return none;
+      const std::size_t authored_at = _c.pos();
       _c.word();
       const bool paren = _c.accept('(');
       const float p = _c.number_lit();
@@ -1105,7 +1031,7 @@ namespace
       uint32_t ones = static_cast<uint32_t>(std::lround(100.0 * double(p)));
       if (ones < 1) ones = 1;
       if (ones > 99) ones = 99;
-      const std::string creg = "_chance" + std::to_string(_idc++);
+      const std::string creg = "_chance" + std::to_string(authored_at);
       Effect roll = effect(Effect::Kind::Roll);
       roll.target = creg;
       for (uint32_t k = 0; k < 100; ++k) roll.choices.push_back(k < ones ? 1 : 0);
@@ -1229,7 +1155,7 @@ namespace
       // own tiny clock+register scope (like a nested pattern) so `this`/bare modulators anchor
       // to that segment and `push_render` gates its draws by its own `.active`. Re-parsing the
       // captured span (rather than deep-copying an AST) reuses every existing statement-parsing
-      // path (draw/copy/state/nested-pattern) with zero new code for effect kinds -- the cost is
+      // path (image/text/state/nested-pattern) with zero new code for effect kinds -- the cost is
       // O(steps) reparse of one small body, paid once at load time, not per frame.
       _c.expect('{');
       const std::size_t body_open = _c.pos();

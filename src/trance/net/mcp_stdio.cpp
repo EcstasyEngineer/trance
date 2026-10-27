@@ -235,6 +235,19 @@ namespace
            return "bed layer " + std::to_string(int_arg(args, "index")) + " " + field + " " +
                num_str(num_arg(args, "value"));
          }},
+        {"bed_presets",
+         "List the entrainment bed preset names. Each name is a valid bed_preset argument. "
+         "Read-only.",
+         obj_schema(), [](const json&) { return std::string{"bed presets"}; }},
+        {"bed_preset",
+         "Replace the bed's layers with the named preset. Overwrites; does not merge, and "
+         "does not change the master level. An unknown name is an error and leaves the bed "
+         "unchanged.",
+         obj_schema({{"name",
+                      {{"type", "string"},
+                       {"description", "preset name from bed_presets"}}}},
+                    {"name"}),
+         [](const json& args) { return "bed preset " + str_arg(args, "name"); }},
     };
     return table;
   }

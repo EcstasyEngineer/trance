@@ -15,6 +15,32 @@ namespace trance_pb
   class Theme;
 }
 
+// One binaural bed preset. Numeric layers only.
+// role is a display label; nothing in the proto stores it.
+struct BedPresetLayer {
+  const char* role;
+  float center_hz;
+  float pulse_hz;
+  float amplitude_db;
+  float binaural_hz;
+};
+
+struct BedPreset {
+  const char* name;
+  const BedPresetLayer* layers;
+  int layer_count;
+};
+
+// Stable preset order, not sorted.
+int bed_preset_count();
+const BedPreset& bed_preset_at(int index);
+// nullptr when name is not one of the eight.
+const BedPreset* find_bed_preset(const std::string& name);
+// nullptr when the layers are empty or not an exact preset.
+const BedPreset* match_bed_preset(const trance_pb::Entrainment& entrainment);
+// Replaces layers. Does not write master_db.
+void apply_bed_preset(trance_pb::Entrainment& entrainment, const BedPreset& preset);
+
 // The stock binaural + isochronic bed every brand-new session gets
 // (set_default_program), exposed so the F2 Audio section's "Enable bed" can hand the
 // same bed to a session whose JSON has no entrainment block -- absent block = no bed,

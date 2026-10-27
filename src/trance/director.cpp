@@ -8,7 +8,7 @@
 #include <trance/visual/api.h>
 #include <trance/visual/builtin_patterns.h>
 #include <trance/visual/compiled_visual.h>
-#include <trance/visual/pattern_parser_v3.h>
+#include <trance/visual/pattern_parser.h>
 #include <trance/visual/cyclers.h>
 #include <trance/visual/visual.h>
 #include <algorithm>
@@ -121,21 +121,20 @@ void Director::build_builtin_patterns()
   // reconfigure, which is fine -- the bed is static per program.
   uint32_t locked_frames = locked_period_frames(*_program);
   for (uint32_t t = 1; t <= 8; ++t) {
-    // v3 (docs/spec-grammar-v3.md) is the only grammar: two nouns (pattern, effect) and one
-    // rule, lowering to the same pattern::Node + RenderStmt IR the compiler always ran.
-    std::string v3_source = builtin::pattern_source_v3(t);
+    // Builtins compile native V4 ASTs; custom sources retain V3 compatibility.
+    std::string v3_source = builtin::pattern_source_v4(t);
     if (v3_source.empty()) {
       continue;
     }
-    auto v3 = patternv3::parse(v3_source, locked_frames);
+    auto v3 = pattern::parse_source(v3_source, locked_frames);
     if (!v3.ok) {
       // Built-in sources are compile-time constants, so a parse failure is a build bug --
       // fail fast and loud rather than risk a null visual at selection time.
-      throw std::runtime_error("built-in v3 pattern " + std::to_string(t) +
+      throw std::runtime_error("built-in V4 pattern " + std::to_string(t) +
                                " failed to parse: " + v3.error);
     }
     for (const auto& w : v3.warnings) {
-      std::cerr << "v3 built-in " << t << " warning: " << w << std::endl;
+      std::cerr << "V4 built-in " << t << " warning: " << w << std::endl;
     }
     pattern::Parsed parsed;
     parsed.name = std::move(v3.name);
@@ -166,7 +165,7 @@ void Director::rebuild_custom_patterns()
       continue;
     }
 
-    auto v3 = patternv3::parse(src.source_text(), locked_frames);
+    auto v3 = pattern::parse_source(src.source_text(), locked_frames);
     if (!v3.ok) {
       // A custom pattern that fails to parse is surfaced and skipped -- not a crash, and
       // not a silent black screen: the rest of the program's visuals still play.
@@ -174,7 +173,7 @@ void Director::rebuild_custom_patterns()
       continue;
     }
     for (const auto& w : v3.warnings) {
-      std::cerr << "custom v3 pattern '" << src.name() << "' warning: " << w << std::endl;
+      std::cerr << "custom pattern '" << src.name() << "' warning: " << w << std::endl;
     }
     pattern::Parsed parsed;
     // Carry the proto's name/weight (authoritative) over the in-source ones.
@@ -203,7 +202,7 @@ void Director::update()
   _visual->cycler()->advance();
   log_playback_state();
   if (_visual->cycler()->complete()) {
-    change_visual(_visual->cycler()->length());
+    change_visual(_visual->cycler()->elapsed_length());
   }
   _renderer.update();
 }
@@ -295,7 +294,7 @@ std::string Director::force_pattern_from_source(const std::string& source, const
   // Same parse path + locked-beat-period source as rebuild_custom_patterns(): themes and
   // entrainment still come from the session/program, only the visual schedule is forced.
   const uint32_t locked_frames = locked_period_frames(*_program);
-  auto v3 = patternv3::parse(source, locked_frames);
+  auto v3 = pattern::parse_source(source, locked_frames);
   if (!v3.ok) {
     return v3.error;
   }
@@ -907,7 +906,7 @@ void Director::select_visual(uint32_t length)
   }
   _last_custom_index = -1;
   _custom_visual_name.clear();
-  // Every built-in VisualType is now a compiled v3 pattern (builtin_patterns_v3.cpp); the enum
+  // Every built-in VisualType is now a compiled V4 pattern; the enum
   // value still identifies it for the overlay. A type with no compiled source (e.g. NONE)
   // leaves the current visual in place.
   auto compiled = _builtin_compiled.find(t);

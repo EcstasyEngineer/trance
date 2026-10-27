@@ -1,6 +1,5 @@
 #include <trance/visual/pattern_compiler.h>
 #include <trance/visual/cyclers.h>
-#include <memory>
 #include <vector>
 
 namespace
@@ -33,66 +32,12 @@ namespace
         kids.push_back(compile_impl(k, make_action, node_map));
       }
     };
-    switch (n.type) {
-    case Node::Type::Action: {
-      // The leaf's behaviour comes from the caller's MakeAction (no-op for a pure timer);
-      // an ActionCycler without one is just a counter.
-      std::function<void()> fn = make_action ? make_action(n) : std::function<void()>{};
-      // `divide N`: run the effects only every Nth firing. The counter is bounded
-      // state owned here, so every MakeAction (tests + engine) gets it identically.
-      if (fn && n.divide > 1) {
-        auto counter = std::make_shared<uint32_t>(0);
-        uint32_t div = n.divide;
-        std::function<void()> inner = fn;
-        fn = [inner, counter, div] {
-          if ((*counter)++ % div == 0) {
-            inner();
-          }
-        };
-      }
-      c = fn ? new ActionCycler{n.length, fn} : new ActionCycler{n.length};
-      break;
-    }
-    case Node::Type::Seq: {
-      std::vector<Cycler*> kids;
-      compile_children(kids);
-      c = new SequenceCycler{kids};
-      break;
-    }
-    case Node::Type::Par: {
-      std::vector<Cycler*> kids;
-      compile_children(kids);
-      c = new ParallelCycler{kids};
-      break;
-    }
-    case Node::Type::One: {
-      std::vector<Cycler*> kids;
-      compile_children(kids);
-      c = new OneShotCycler{kids};
-      break;
-    }
-    case Node::Type::Rep:
-      c = new RepeatCycler{n.count, compile_impl(n.children.at(0), make_action, node_map)};
-      break;
-    case Node::Type::Off:
-      c = new OffsetCycler{n.count, compile_impl(n.children.at(0), make_action, node_map)};
-      break;
-    case Node::Type::Phase: {
-      std::vector<Cycler*> kids;
-      compile_children(kids);
-      auto entry = make_action ? make_action(n) : std::function<void()>{};
-      c = new PhaseCycler{n.length, std::move(entry), std::move(kids), n.sequence};
-      break;
-    }
-    case Node::Type::Burst: {
-      auto* base = static_cast<PhaseCycler*>(compile_impl(n.children.at(0), make_action, node_map));
-      auto* burst = static_cast<PhaseCycler*>(compile_impl(n.children.at(1), make_action, node_map));
-      BurstCycler::Params p{n.length, n.burst_period, n.burst_chance_den,
-                            n.burst_cooldown, n.burst_dur_min, n.burst_dur_max};
-      c = new BurstCycler{p, base, burst};
-      break;
-    }
-    }
+    std::vector<Cycler*> kids;
+    compile_children(kids);
+    auto entry = make_action ? make_action(n) : std::function<void()>{};
+    auto* occurrence = new OccurrenceCycler{n, std::move(entry), std::move(kids)};
+    if (node_map && !n.id.empty()) (*node_map)[n.id + "_local"] = occurrence->local_clock();
+    c = occurrence;
 
     if (!n.phase.empty()) {
       c->set_phase(n.phase.c_str());

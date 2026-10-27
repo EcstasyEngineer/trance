@@ -18,7 +18,7 @@
 //     same shape as a Themes row: a weight row (on/off, pin, weight, effective share)
 //     followed by the name as an expander. A built-in's expander holds Force now, Copy
 //     and its read-only v3 grammar source (the modding-language reference); a custom
-//     pattern's holds its editable name + word-wrapped source, live patternv3::parse
+//     pattern's holds its editable name + word-wrapped source, live native V4 parse
 //     lint, Apply/Force now/Remove. A built-in with no visual_type row at all still
 //     draws (at weight 0) and materializes its entry on first touch, so a session that
 //     omits one can still force it and add it back. Forcing goes through
@@ -55,7 +55,10 @@
 //     editing Program::entrainment in place. "Enable bed" writes the stock default
 //     bed (default_entrainment_bed) into a program whose JSON has no entrainment
 //     block -- absent block = no bed, and this button is what keeps that from
-//     locking the feature behind hand-edited JSON. Slider edits write the proto per
+//     locking the feature behind hand-edited JSON. A bed-preset combo overwrites
+//     the layers with one conditioner preset (apply_bed_preset) and does not
+//     change master dB. Role names are UI-only and show only while the layers
+//     still match that preset. Slider edits write the proto per
 //     drag tick but commit (fire on_program_change, which also refreshes the live
 //     bed via Audio::SetEntrainment) on RELEASE, so the stream isn't restarted per
 //     tick. Persisted by the autosave, same as every other program edit.
@@ -330,7 +333,7 @@ private:
   // Last force_pattern_from_source() parse error, shown inline in the Visuals section
   // until the next click. Empty when nothing failed.
   std::string _last_pattern_error;
-  // Per-custom-pattern-row lint, keyed by row index: "" = OK, else the patternv3
+  // Per-custom-pattern-row lint, keyed by row index: "" = OK, else the V4 parser
   // "line:col: message" (or a duplicate/empty-name complaint). Cached so parse only
   // runs when a row's name/source actually changed, not every frame; invalidated by
   // erasing the row's entry, and cleared wholesale when row indices shift.

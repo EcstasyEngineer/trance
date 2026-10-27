@@ -1,0 +1,4 @@
+# Select animation once; visibility pulses do not reload or pause its streamer.
+pattern held_animation for 48f {
+  image primary show [this.frame % 12 < 3] anim
+}

@@ -1,0 +1,7 @@
+# Each interrupt entry selects once; visibility never reselects within the hold.
+pattern nested_gate for 23f {
+  burst period 2f chance 1/1 cooldown 4f duration 10f {
+    base {}
+    burst { image primary show [this.frame % 6 < 3] }
+  }
+}

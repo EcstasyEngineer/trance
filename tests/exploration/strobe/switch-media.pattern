@@ -1,0 +1,4 @@
+# Continuous visible content, selecting the other theme side every 6 ticks.
+pattern switch_media for 48f {
+  every 6f { image alternate }
+}

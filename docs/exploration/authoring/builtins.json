@@ -1,0 +1,68 @@
+{
+  "builtins": [
+    {
+      "id": 1,
+      "key": "accelerate",
+      "name": "accelerate",
+      "sourcePatternName": "accelerate",
+      "sourcePath": "src/trance/visual/builtin_patterns_v3.cpp",
+      "source": "\npattern accelerate for 2048f {\n  every ramp 56f -> 12f steps 140 ease early {\n    image alternate chance 0.5 zoom [0.4 * accelerate.progress + 0.1 * this.progress] origin (curve 0 -> 0.4 over accelerate) anim every 4th\n    word primary show 0..0.25 chance 0.5\n  }\n  spiral speed (curve 1 -> 4 over accelerate)\n}"
+    },
+    {
+      "id": 2,
+      "key": "slow_flash",
+      "name": "slow_flash",
+      "sourcePatternName": "slow_flash",
+      "sourcePath": "src/trance/visual/builtin_patterns_v3.cpp",
+      "source": "\npattern slow_flash for 1536f loop 2 seq {\n  pattern slow for 1024f {\n    every 64f { image primary zoom (curve 0 -> 0.5) anim every 2nd }\n    every 64f { caption primary }\n    spiral speed 2\n  }\n  pattern fast for 512f {\n    every 8f  { image secondary zoom (curve 0 -> 0.8 over fast) }\n    every 16f { word secondary }\n    spiral speed 4\n  }\n}"
+    },
+    {
+      "id": 3,
+      "key": "sub_text",
+      "name": "sub_text",
+      "sourcePatternName": "sub_text",
+      "sourcePath": "src/trance/visual/builtin_patterns_v3.cpp",
+      "source": "\npattern sub_text for 1024f {\n  every 64f { image either zoom (curve 0 -> 0.375) anim every 3rd }\n  every 32f { subtext secondary }\n  spiral speed 4\n}"
+    },
+    {
+      "id": 4,
+      "key": "flash_text",
+      "name": "flash_text",
+      "sourcePatternName": "flash_text",
+      "sourcePath": "src/trance/visual/builtin_patterns_v3.cpp",
+      "source": "\npattern flash_text for 1024f {\n  pattern back for 1024f {\n    every 128f { image secondary zoom (curve 0 -> 0.8) }\n  }\n  pattern front for 1024f {\n    every 128f offset 64f {\n      image secondary fade inout zoom (curve 0 -> 0.8)\n    }\n  }\n  every 64f { word secondary }\n  every 32f { caption primary }\n  spiral speed 2\n}"
+    },
+    {
+      "id": 5,
+      "key": "parallel",
+      "name": "parallel",
+      "sourcePatternName": "simple",
+      "sourcePath": "src/trance/visual/builtin_patterns_v3.cpp",
+      "source": "\npattern simple for 2048f {\n  every 64f { image either zoom (curve 0 -> 0.5) anim every 3rd }\n  every 32f { caption primary }\n  spiral speed 3\n}"
+    },
+    {
+      "id": 6,
+      "key": "super_parallel",
+      "name": "super_parallel",
+      "sourcePatternName": "super_parallel",
+      "sourcePath": "src/trance/visual/builtin_patterns_v3.cpp",
+      "source": "\npattern super_parallel for 1152f {\n  pattern back for 1152f {\n    every 96f { image primary zoom (curve 0 -> 0.875) anim every 2nd }\n  }\n  pattern middle for 1152f {\n    every 96f offset 32f { image primary alpha 0.5 zoom (curve 0 -> 0.875) }\n  }\n  pattern front for 1152f {\n    every 96f offset 64f { image secondary alpha 0.33 zoom (curve 0 -> 0.875) }\n  }\n  every 32f { word either }\n  spiral speed 3\n}"
+    },
+    {
+      "id": 7,
+      "key": "animation",
+      "name": "animation",
+      "sourcePatternName": "animation",
+      "sourcePath": "src/trance/visual/builtin_patterns_v3.cpp",
+      "source": "\npattern animation for 1024f {\n  pattern motion for 1024f {\n    every 64f { image either zoom (curve 0 -> 0.625) anim }\n  }\n  pattern visit for 1024f {\n    every 64f offset 48f { image secondary env in 8f hold 16f out 8f zoom (curve 0.5 -> 0.625) }\n  }\n  every 32f { caption either }\n  spiral speed 3\n}"
+    },
+    {
+      "id": 8,
+      "key": "super_fast",
+      "name": "super_fast",
+      "sourcePatternName": "super_fast",
+      "sourcePath": "src/trance/visual/builtin_patterns_v3.cpp",
+      "source": "\npattern super_fast for 2048f {\n  burst period 8f chance 1/12 cooldown 64f duration 64f..128f {\n    base {\n      every 8f { image either zoom (curve 0.0625 -> 0.1875) }\n    }\n    burst { image either zoom (curve 0.1 -> 0.7) anim }\n  }\n  every 8f { word primary chance 0.25 }\n  spiral speed 3\n}"
+    }
+  ]
+}

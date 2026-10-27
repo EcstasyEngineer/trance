@@ -40,7 +40,9 @@ namespace pattern
     // `anim runtime` / `anim alternate` stable -- re-deciding per frame would re-roll the
     // random slot and flip the ping-pong mid-draw. Primary by default so a pattern that
     // draws `anim` without ever loading one behaves exactly as it did before.
+#ifdef TRANCE_LEGACY_ORACLE
     Slot anim_slot = Slot::Primary;
+#endif
   };
 }
 

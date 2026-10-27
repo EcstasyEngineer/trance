@@ -20,12 +20,10 @@ and AIFF. Pause freezes playback and fade clocks; mute preserves underlying gain
 
 ## Theme audio
 
-A theme's `audio_path` pool supplies recorded files to the pattern language's
-`audio` effect. One dedicated object is separate from indexed playlist channels.
-Starting another track replaces this slot's current audio. Pattern volume is
-0–1, clamped. The slot initially has full volume, then retains the last volume
-set across subsequent tracks; a bare audio draw does not reset it. See the
-[grammar](spec-grammar-v3.md) for scheduling and curves.
+Theme metadata can contain an `audio_path` pool, and the engine retains a dedicated
+theme-audio slot separate from playlist channels. V4 visual patterns do not expose
+an audio output operation. Use playlist audio events for recorded playback and
+program entrainment settings for synthesized beds.
 
 ## Synthesized bed
 

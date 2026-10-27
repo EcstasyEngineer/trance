@@ -1,3 +1,5 @@
+> **Archived: pre-V4 design.** This page is historical and is not a supported language reference. Use the [V4 grammar](spec-grammar-v4.md); V3 source is rejected by the current player.
+
 # Authoring visual patterns
 
 Write one v3 pattern in a UTF-8 `.pattern` file. Comments start with `#`.
@@ -132,33 +134,31 @@ burst-body effects. Timed work belongs in `burst`, not `enter`. Fractional `env`
 works in sampled bursts; frame envelopes and ramps need a fixed duration. See
 the [burst reference](spec-grammar-v3.md#burst-phases).
 
-## Crossfade with image registers
+## Crossfade with two image lanes
 
 ```text
 pattern dissolve for 512f {
-  every 64f {
-    copy cur -> prev
-    draw prev zoom (curve 0.4 -> 0.8)
-    image secondary -> cur fade in zoom (curve 0 -> 0.4)
+  pattern back for 512f {
+    every 128f { image secondary zoom (curve 0 -> 0.8) }
+  }
+  pattern front for 512f {
+    every 128f offset 64f { image secondary fade inout zoom (curve 0 -> 0.8) }
   }
 }
 ```
 
-The old image draws first; the new one fades in above it. Initially `prev` is
-empty; thereafter each image continues its zoom after the copy. Registers belong
-to the nearest pattern, so siblings can each use `cur`. Cadences/burst branches
-share that scope. `scene.cur` can address an enclosing pattern's register.
-Text does not have equivalent copyable registers.
+Each pattern scope retains its own image. The opaque lower lane changes while
+covered; the upper changes while transparent. The first image appears opaque.
+Both lanes refresh on theme changes. Explicit image destinations, copy and draw
+statements have been removed; use a separate image scope for each retained image.
 
 ## Show, fade, and alternate
 
 ```text
 pattern accents for 512f {
-  every 64f {
-    image primary anim
-    image secondary -> still env in 8f hold 16f out 8f
-    word primary show 0f..8f
-  }
+  pattern motion for 512f { every 64f { image primary anim } }
+  pattern visit for 512f { every 64f { image secondary env in 8f hold 16f out 8f } }
+  every 64f { word primary show 0f..8f }
 }
 ```
 

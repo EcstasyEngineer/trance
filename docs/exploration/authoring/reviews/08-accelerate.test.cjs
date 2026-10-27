@@ -1,0 +1,40 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const G=require('../grammar.js');
+const {chromium}=require('playwright');
+(async()=>{
+ const source=JSON.parse(fs.readFileSync('docs/exploration/authoring/builtins.json','utf8')).builtins.find(x=>x.key==='accelerate').source;
+ const cpp=fs.readFileSync('src/trance/visual/builtin_patterns_v3.cpp','utf8');
+ assert.equal(cpp.match(/kAccelerate = R"\(([\s\S]*?)\)";/)[1].replaceAll('\r',''),source);
+ const doc=G.parse(source);assert.deepEqual(doc.errors,[]);assert.equal(G.serialize(doc),source);
+ const root=doc.children[0], ramp=root.children[0], image=ramp.children[0], word=ramp.children[1], spiral=root.children[1];
+ assert.deepEqual([root.kind,ramp.kind,image.kind,word.kind,spiral.kind],['pattern','ramp','image','word','spiral']);
+ const fieldMap=n=>Object.fromEntries(G.fields(n).filter(x=>x.start!==x.end).map(x=>[x.key,x.value]));
+ const fields={root:fieldMap(root),ramp:fieldMap(ramp),image:fieldMap(image),word:fieldMap(word),spiral:fieldMap(spiral)};
+ assert.equal(fields.root.name,'accelerate');assert.equal(fields.root.length,'2048f');
+ assert.equal(fields.ramp.steps,'140');assert.equal(fields.ramp.ease,'early');assert.equal(fields.ramp.target,'cut');
+ assert.equal(fields.image.alternateChance,'0.5');assert.equal(fields.image.zoom,'[0.4 * accelerate.progress + 0.1 * this.progress]');
+ assert.equal(fields.image.origin,'(curve 0 -> 0.4 over accelerate)');assert.equal(fields.image.animation,'anim every 4th');
+ assert.equal(fields.word.show,'0..0.25');assert.equal(fields.word.chance,'0.5');assert.equal(fields.spiral.speed,'(curve 1 -> 4 over accelerate)');
+ const browser=await chromium.launch({channel:'msedge',headless:true});const page=await browser.newPage();
+ const consoleErrors=[];page.on('pageerror',e=>consoleErrors.push(e.message));
+ await page.goto('http://127.0.0.1:8766');await page.waitForFunction(()=>window.TranceComposer);
+ await page.selectOption('#builtin-picker','1');
+ assert.equal(await page.evaluate(()=>TranceComposer.getSource()),source);
+ const before=await page.evaluate(()=>{const r=TranceComposer.getDocument().children[0];return {root:r.id,ramp:r.children[0].id,image:r.children[0].children[0].id,word:r.children[0].children[1].id,spiral:r.children[1].id};});
+ const visibleFields={};
+ for(const [kind,id] of Object.entries(before)){await page.evaluate(id=>TranceComposer.selectNode(id),id);visibleFields[kind]=await page.locator('#inspector [data-field]').evaluateAll(es=>Object.fromEntries(es.map(x=>[x.dataset.field,x.value])));}
+ const baseline=await page.evaluate(async source=>await(await fetch('/api/validate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source})})).json(),source);
+ assert.equal(baseline.ok,true,JSON.stringify(baseline));
+ async function change(id,key,value){await page.evaluate(id=>TranceComposer.selectNode(id),id);const f=page.locator('#inspector [data-field="'+key+'"]');await f.fill(value);await f.dispatchEvent('change');}
+ await change(before.ramp,'steps','128');
+ await change(before.image,'alternateChance','0.3');
+ await change(before.word,'show','0..0.2');
+ const changed=await page.evaluate(()=>TranceComposer.getSource());
+ assert.equal(changed,source.replace('steps 140','steps 128').replace('alternate chance 0.5','alternate chance 0.3').replace('show 0..0.25','show 0..0.2'));
+ await page.click('#validate');await page.waitForFunction(()=>document.querySelector('#validation-summary').textContent.startsWith('Compiler accepted'));
+ const after={summary:await page.locator('#validation-summary').textContent(),diagnostics:await page.locator('#diagnostics').textContent()};
+ assert.deepEqual(consoleErrors,[]);
+ console.log(JSON.stringify({fields,visibleFields,baseline,mutations:['ramp.steps 140 -> 128','image.alternateChance 0.5 -> 0.3','word.show 0..0.25 -> 0..0.2'],changed,after,consoleErrors},null,2));
+ await browser.close();
+})().catch(e=>{console.error(e);process.exit(1)});

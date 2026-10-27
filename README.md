@@ -6,7 +6,7 @@ is the primary platform; Linux/WSL is experimental.
 
 ## Start playing
 
-1. Download and extract a [release](../../releases/latest).
+1. Download and extract a [release](https://github.com/EcstasyEngineer/trance/releases/latest).
 2. Run `trance.exe path/to/my.session.json`, or launch with no session argument
    to create `default.json` from media in the working directory.
 3. Press **F2** to edit, **M** to mute, or **Escape** to quit.
@@ -24,9 +24,11 @@ changes, cues, branches, and subroutines). Media paths resolve relative to the
 session file. Scan themes include added files on the next load. Legacy upstream
 `.session` files migrate to JSON without replacing the original.
 
-All eight built-ins use the v3 pattern language available to custom patterns.
-It composes timed effects, nested schedules, curves, and burst interruptions.
-See the [authoring guide](docs/authoring-v3-patterns.md).
+All eight built-ins and custom visuals use the same V4 JSON abstract syntax tree
+(AST). Three composition modes—parallel, sequential, and random—combine timed
+images, animation accents, text and spirals. V3 pattern text is no longer accepted.
+Use the [visual composer](https://ecstasyengineer.github.io/trance/) to edit and
+export patterns, or read the [V4 grammar](docs/spec-grammar-v4.md).
 
 ```powershell
 # Play, force a built-in, or force a custom source.
@@ -77,10 +79,11 @@ checks. Attachment, pacing, colors, and recovery are not hardware-verified.
 | JSON fields | [Session JSON](docs/session-json-format.md) |
 | Built-ins and selection | [Visuals](docs/visuals.md) |
 | Music, theme audio, synthesis | [Audio](docs/audio.md) |
-| Write patterns | [Authoring](docs/authoring-v3-patterns.md), [grammar](docs/spec-grammar-v3.md) |
-| Planned authoring improvements | [Roadmap](docs/authoring-roadmap.md), [tracking issue #66](https://github.com/EcstasyEngineer/trance/issues/66) |
+| Compose patterns | [Composer](docs/exploration/authoring/README.md), [V4 grammar](docs/spec-grammar-v4.md) |
+| Release changes | [V4.0 release notes](RELEASE_NOTES.md) |
 | Implementation | [Architecture](docs/architecture.md), [engine](docs/engine-today.md) |
 | Guarantees and gaps | [Architecture maturity](docs/architecture-maturity.md) |
+| Historical investigations | [Archive index](docs/archive/README.md) |
 
 ## Build and test
 

@@ -20,14 +20,17 @@ cmake --build --preset windows-release
 ctest --test-dir build/windows-msvc -C Release --output-on-failure
 ```
 
-| Check | What it exercises | What it does not establish |
+| Check | What it exercises | Limits |
 |---|---|---|
-| `grammar_lint` | `trance --lint`: all eight built-ins parse and compile; render expressions are evaluated at the first, middle, and last schedule frames with basic numeric bounds. | Effects use a no-op callback and empty registers. Three sampled states do not cover every branch, transition, random outcome, or frame. |
-| `phase_execution_test` | Real parser/compiler/cyclers, exact pattern lifetimes, nested cadence ownership, entry order, branch exclusivity, child resets, clipping, sampled clocks, parent-clock reads, and SuperFast zoom expressions. | Its lightweight recorder is not production `run_effect`; it does not decode media, render pixels, or prove arbitrary nesting correct. |
-| `compiled_visual_test` | Production image capture and refresh effects: initially empty or stale captures recover when media becomes ready, copies remain snapshots, and later render passes preserve selections. | Uses a recording media/render API; no actual decoding, GPU rendering or concurrency. |
-| `playlist_runner_test` | Internal playlist transitions and stack behavior. | Complete live-loop, audio, UI, transport, or scheduling behavior. |
-| `session_json_test` | Session/system JSON mapping, validation cases, and legacy import behavior. | Every filesystem failure or every possible malformed input. |
-| `theme_bank_test` | Real synthetic media, theme selection, content isolation, fallback, failed-decode cache accounting and small-cache continuity. | Complete cross-thread race coverage or all real media codecs/files. |
+| `grammar_lint` | Production V4 builtin validation and sampled render-expression checks. | Does not explore every transition or random outcome. |
+| `v4_parser_test` | Native AST acceptance, diagnostics and execution bounds. | Is not a media decoder or pixel comparison. |
+| `v4_runtime_test` | Parallel/sequential/random nesting, durations, repetitions, cadence, offsets, sampled holds, exits and clipping. | Finite test cases do not prove every possible AST. |
+| `v4_native_execution_test` | Production compiler/render recording against builtin reference traces; private images and theme/animation coherence. | Recording calls do not establish decoded media or final GPU pixels. |
+| `compiled_visual_test` | Production capture and refresh effects, stale selections and repeat-render invariance. | Uses recording media/render APIs. |
+| `phase_execution_test`, `animation_accent_composition_test`, `leapfrog_composition_test`, `strobe_composition_test` | Historical behavior oracles and targeted composition regressions. | Legacy source support in a test does not imply language support in the executable. |
+| `playlist_runner_test`, `session_json_test` | Playlist transitions, session serialization and validation. | Not complete live-loop or filesystem coverage. |
+| `bed_preset_test` | Synthesized preset lookup, application and matching. | Not a listening or sound-device test. |
+| `theme_bank_test` | Synthetic media, selection, fallback and cache behavior with a GL context. | Not complete codec or threading coverage. |
 
 `theme_bank_test` needs a working GL context, although it does not open a window.
 It is labelled `gpu` and can exit successfully with a skip message when a context
@@ -35,7 +38,7 @@ is unavailable. Inspect that output before describing it as exercised. The
 Windows CI workflow runs CTest with `-LE gpu`; it excludes this test.
 
 `trance --lint path/to/session.session.json` also loads custom pattern sources and
-uses each program's entrainment beat period. `--lint --pattern path/to/pattern.v3`
+uses each program's entrainment beat period. `--lint --pattern path/to/pattern.pattern`
 checks a standalone source. A successful lint run is a useful authoring check,
 not a substitute for the behavioral tests above.
 
@@ -70,13 +73,12 @@ or the final projection is wrong.
   delays, and audio have related but distinct time domains.
 - Reading a parent clock is separate from owning or advancing a child schedule.
   Test both when changing nesting.
-- Schedule reset and scalar/image-register lifetime are separate contracts.
+- Schedule reset and selection-counter/captured-image lifetime are separate contracts.
   Do not infer one from the other.
 - Theme loading crosses threads. Headless schedule tests cannot establish its
   race freedom.
-- The language exposes two live theme sides, shared text state, and shared
-  animation selection state. Multiple draw statements do not imply independent
-  media players.
+- The language exposes two live theme sides and shared text channels. Each image
+  has a private capture, while same-side animations share a decoder/player.
 - F2 edits autosave. JSON serialization, sidecar information and live-state
   mutation must be considered together when changing the editor.
 

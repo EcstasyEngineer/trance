@@ -15,7 +15,7 @@ class CompiledVisual : public Visual
 {
 public:
   // `render_block` is the data-driven render (run by render_eval.cpp). An empty block
-  // falls back to pattern::default_render_block().
+  // draws nothing, matching a document with no output nodes.
   CompiledVisual(VisualControl& api, const pattern::Node& root,
                  const std::vector<pattern::RenderStmt>& render_block);
 

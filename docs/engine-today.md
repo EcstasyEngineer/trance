@@ -1,164 +1,64 @@
-# Visual runtime model
+# Visual runtime
 
-The v3 language lowers to a schedule tree plus an ordered render block. The
-schedule chooses media and updates state. The render block reads that state and
-draws it. A new language feature must have a concrete lowering to those parts,
-or explicitly require a runtime change.
+The released visual language is the [V4 JSON AST](spec-grammar-v4.md). Built-ins,
+custom session patterns, CLI source loading, F2 editing and the composer use the
+same native frontend. It does not lower through V3 text. Historical parsers and
+schedulers are retained under test support as comparison oracles, not linked into
+the player.
 
-The [language reference](spec-grammar-v3.md) defines syntax;
-[visuals.md](visuals.md) maps the implementation. This page explains the model.
+## Compilation and execution
 
-## Schedule, state, rendering
+`pattern_parser_v4.cpp` validates the AST and produces occurrence nodes, content
+selection effects and ordered render statements. `compiler.cpp` constructs the
+runtime schedule; `cyclers.cpp` advances V4 occurrences. `CompiledVisual` applies
+effects through `VisualControl` and evaluates drawing through `VisualRender`.
 
-`pattern_parser_v3.cpp` produces `pattern::Node` and `pattern::RenderStmt` data.
-`pattern_compiler.cpp` turns nodes into `Cycler` objects. `CompiledVisual`
-connects the nodes' ordered effects to `VisualControl` and owns their registers.
-`render_eval.cpp` evaluates the render statements against current clocks and
-registers, then calls `VisualRender`.
+One occurrence scheduler handles parallel, sequential and random composition.
+Parallel advances unfinished children together. Sequential advances one finite
+child after another. Random advances one selected child, with completion or
+chance exits driving transitions. Every composition can nest every other mode.
+Inactive branches do not consume content selections or random values.
 
-Selecting an image and drawing an image are separate operations. An image
-effect captures a selection into a register when its schedule fires. A render
-statement can then draw that register every frame with changing zoom or opacity,
-without selecting a different image. `show` hides a draw; it does not stop that
-draw's selection schedule.
+Timing properties belong to occurrences: duration, sampled duration, repetition,
+cadence, ramp and phase offset. A bounded parent clips its descendants. A completed
+child stays inactive until an owner restart. Explicit repetition controls loops;
+an enclosing duration does not silently repeat a completed sequence.
 
-The runtime can select images, animations, text, fonts and themes; control theme
-audio; and draw images, text, captions, subtext and spirals with supported numeric
-parameters. Warp and theme-audio volume also have render-time parameters. Scalar
-effects support bounded internal state such as chance flags, alternating sides,
-and every-Nth accents. These IR operations are not all public grammar verbs.
+## Clocks and persistent state
 
-## Clocks and ownership
+Content frames advance at the program's configured frame rate. Local progress
+refers to an occurrence's active cadence interval or ramp segment. Scene progress
+refers to the root. Curves can read an explicit ancestor's occurrence progress
+without changing scheduling ownership. Total elapsed program duration remains
+distinct from the progress of one repeated iteration.
 
-A cycler has a length, position, active flag, and children. On each content tick,
-the root advances the parts of the tree it owns. After the first advance,
-`frame == 0`; `progress == frame / length`. A finite N-frame occurrence therefore
-visits `0, 1/N, ..., (N-1)/N`, not an extra endpoint frame at 1.
+Phase offsets pre-roll clocks with selection effects suppressed. They do not
+preload media. Cadence resets local motion, but authored animation counters,
+alternate-side state and captured images have longer lifetimes. Rendering another
+desktop or eye pass must not select media or advance these counters.
 
-| Node | Scheduling rule |
-|---|---|
-| `Action` | Fire ordered effects on frame zero of each period. |
-| `OneShot` | Advance unfinished children together; duration is their maximum length. |
-| `Parallel` | Advance children together, allowing repeats; duration is their least common multiple. |
-| `Sequence` | Advance one child at a time; duration is the sum of child lengths. |
-| `Repeat` | Repeat one child a fixed number of times. |
-| `Offset` | Start a child at a phase offset; pre-roll suppresses effects. |
-| `Phase` | Run entry effects once and advance owned child schedules during a bounded occurrence. |
-| `Burst` | Choose between a base phase and a sampled-duration phase; advance only the chosen branch. |
+## Outputs and resources
 
-Language scopes and runtime nodes are related but distinct. Clock names resolve
-lexically while parsing; compiled node IDs identify the clocks read by render
-expressions. A child may read an ancestor without sharing that ancestor's
-scheduling state.
+Each image output owns a private captured selection, even when several images
+are direct children of one parallel pattern. Authors do not name registers or
+write copy/draw operations. A stale capture can refresh from its current theme
+generation. Flash Text uses two offset lanes rather than a copied outgoing image.
 
-A `pattern ... for Nf` owns exactly N frames per iteration. Its children run
-inside that lifetime and restart with it. An `every Nf` body with nested schedules
-likewise owns those children for each N-frame occurrence; ramp segments own their
-sampled segment lengths. Simple effect-only cadences can compile to action leaves
-without an extra wrapper. A sequence changes the order of children without
-extending the enclosing pattern's lifetime.
+`either` resolves the theme side once per image selection and uses it for both
+still fallback and animation. Rendering follows that image's captured side.
+Animation players remain shared per theme side; multiple same-side outputs do
+not obtain independent decoders. Text channels and the dedicated theme-audio slot
+also remain shared resources. The V4 language has six visual outputs and no
+audio output operation; playlist audio and synthesized beds belong to session
+and program configuration.
 
-For example, `pattern scene for 25f { every 8f { image primary } }` selects at
-frames 0, 8, 16 and 24. The last cut is clipped after one frame when the scene
-ends. The declared scene lasts 25 frames rather than being rounded down to three
-complete cuts. A cadence longer than its parent can still fire once and be
-clipped. Clock IDs remain distinct even when a scope contains only one child.
+Internal render expressions and generated state keys are implementation details.
+They are not another authoring language or a compatibility contract.
 
-A scene can also have a slow overall approach while images change every
-8 frames. The image's local curve restarts each cut; an expression reading
-`scene.progress`, or a curve using `over scene`, follows the larger scene.
-This already works across named enclosing scopes. There is no need for a new
-parent-timer feature to express a long envelope over short cuts.
+## Validation
 
-Clock access is read-only. `over NAME` selects which progress a curve reads; it
-does not reset the parent, change its speed, or replace the child's lifetime.
-Those would be separate features with different scheduling consequences.
-
-## Burst phases and the SuperFast repair
-
-A burst controller checks its probability on period boundaries. Durations and
-cooldowns are authored in frames, rounded up to whole controller periods. On
-entry, one duration is sampled and retained for that occurrence.
-
-- Direct branch effects fire once on entry. `enter` effects run before the
-  burst body's direct effects.
-- A branch owns its nested schedules. Inactive branches neither advance those
-  schedules nor make their media selections.
-- Re-entry resets child schedule positions. A child still running when the
-  branch ends is cut off at that boundary.
-- The burst's default curve clock is its sampled local duration. An explicit
-  timed child has its own clock and can use a named ancestor with `over NAME`.
-- The base can be interrupted by a random decision, so it has no known
-  normalized endpoint. Put repeating motion inside `every Nf`, use elapsed
-  frames, or explicitly name a finite ancestor. Bare base progress/length
-  expressions are rejected.
-
-A nested burst controller inside an indefinite base or sampled-duration branch
-also lacks a fixed enclosing length. Its controller `.progress`/`.length`
-cannot be used as a substitute for the owning phase's sampled clock. Use the
-named phase for that envelope; controller `.frame`/`.index` remain available.
-
-SuperFast uses an 8-frame local zoom for rapid cuts and a separate 64-128-frame
-zoom for the held burst image. The hold selects media once and changes its
-transform throughout the hold. Consequently a still substituted for a missing
-animation also moves. The correction concerns owned execution and local clocks,
-as well as authored curves; it is larger than merely counting another timer.
-
-Schedule reset does not imply clearing every piece of visual state. Registers
-belong to the compiled visual, and selector flags/counters have their own
-lifetime. Do not assume that re-entering a branch wipes stored images or every
-hidden scalar. Tests should state which state must restart.
-
-## Content and registers
-
-The live theme interface has two sides: `primary` and `secondary`. The grammar's
-`alternate` content selector toggles between those sides; it does not name a
-third theme. A program can rotate through many themes over time.
-
-`ThemeBank` selects from each theme's own content, including explicitly inherited
-content. Still/animation requests are preferences: when that kind is unavailable,
-the bank can use the other kind, then keep the side's last good frame. A theme
-with nothing available and no previous frame can still draw nothing.
-Failed decodes are excluded from cache capacity and reported separately in F1.
-A selection miss checks actual resident content before falling back, and a
-cache replacement must load successfully before its outgoing image is removed.
-
-Image registers also record their source side and its generation. When a theme
-changes, `CompiledVisual::refresh_stale_registers()` retries a current-theme pick
-on the first render pass until it succeeds. Initial empty captures and captures
-served from an old last-good fallback also retry, without waiting for another
-theme change or scheduled image effect. A `copy` register is a snapshot and
-is excluded from that automatic refresh, preserving the outgoing image in a
-crossfade.
-
-An animation-only theme is read through its live animation frame when drawn,
-so capturing an image does not freeze it permanently. Animation frame delays
-come from the file. The current animation selector is shared runtime state,
-not a separate independent video player for every named image register.
-
-Image registers are scoped to patterns. Cadences supply clock scopes without
-creating new image-register scopes, except sampled ramp segments, which currently
-have their own register scopes. Text is shared renderer state rather than
-an image-like text register file, so independent text crossfades are not
-available simply by copying an image recipe.
-
-## Playback and presentation
-
-Pattern counters use integer content ticks at `global_fps`; the application still
-has wall-clock timing, audio timing, and display pacing. See
-[architecture.md](architecture.md#timing-and-execution-ownership) for the split.
-
-Rendering may evaluate the same pattern for two eyes and a desktop output.
-Those evaluations must not run the schedule again. Accumulating render state
-such as spiral phase and warp time is advanced once using the frame's playback
-elapsed time. Content selection resolved for the frame is reused across output
-passes.
-
-## What verification establishes
-
-`--lint` checks parsing/compilation and samples expression evaluation; it does
-not establish execution correctness. `phase_execution_test` advances actual
-compiled schedules and checks phase entry, clipping, restart, clocks and
-SuperFast transforms with a lightweight effect recorder. It does not run real
-media decoding or GL drawing. These are regression tests, not a formal proof
-of all legal programs. See [coverage and limits](architecture-maturity.md).
+The native compiler rejects duplicate members, unknown fields, invalid scalar
+scopes and impossible or excessive timing. See [grammar bounds](spec-grammar-v4.md)
+and [test coverage](architecture-maturity.md). CPU recording tests compare
+schedule activity, selection, stacking, opacity and zoom; decoded frames, device
+timing and physical headset output require separate playback validation.

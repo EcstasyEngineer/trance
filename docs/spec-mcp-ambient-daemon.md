@@ -78,6 +78,8 @@ source but adds no text draw to a visual that does not already have one.
 | `mute on`, `mute off` | Global audio mute. |
 | `bed on`, `bed off` | Enable bed (seed default layers if absent) / remove its layers. |
 | `bed layers` | Read count, master level, and each layer's values. |
+| `bed presets` | List preset names. |
+| `bed preset NAME` | Replace every layer with that preset (carrier, binaural, pulse, level only). Master is unchanged. Unknown name: error, bed unchanged. |
 | `bed master DB` | Set bed master, clamped −60 to −6 dB; requires an active bed. |
 | `bed layer add` | Append a 200 Hz carrier, 3 Hz binaural, continuous, −6 dB layer; return new count. |
 | `bed layer remove I` | Remove zero-based layer I; return new count. |

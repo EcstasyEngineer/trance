@@ -23,6 +23,7 @@ struct Api : VisualControl, VisualRender {
   mutable unsigned refreshes = 0;
   bool first_pass = true;
   mutable std::vector<uint32_t> drawn;
+  mutable unsigned other_draws = 0;
 
   Image get_image(bool, bool* fresh) const override {
     if (fresh) *fresh = bool(current);
@@ -47,41 +48,28 @@ struct Api : VisualControl, VisualRender {
                                  ThemeSlot) const override { drawn.push_back(image.width()); }
   void render_image(const Image& image, float, float, float,
                     ThemeSlot) const override { drawn.push_back(image.width()); }
-  void render_text(float, float, float, float) const override {}
+  void render_text(float, float, float, float) const override { ++other_draws; }
   void render_subtext(float, float) const override {}
   void render_small_subtext(float, float) const override {}
-  void render_spiral() const override {}
+  void render_spiral() const override { ++other_draws; }
   void set_warp(float, float, float) override {}
   bool render_mutations_enabled() const override { return first_pass; }
   double render_mutation_frames() const override { return first_pass ? 1. : 0.; }
 };
 
-pattern::Node capture(bool snapshot)
+pattern::Node capture()
 {
   pattern::Node root;
-  root.type = pattern::Node::Type::Action;
   root.length = 64;
   pattern::Effect image;
   image.kind = pattern::Effect::Kind::Image;
   image.slot = pattern::Slot::Primary;
   root.effects.push_back(image);
-  if (snapshot) {
-    pattern::Effect copy;
-    copy.kind = pattern::Effect::Kind::Copy;
-    copy.src = "current";
-    copy.target = "previous";
-    root.effects.push_back(copy);
-  }
   return root;
 }
-std::vector<pattern::RenderStmt> draws(bool snapshot)
+std::vector<pattern::RenderStmt> draws()
 {
   std::vector<pattern::RenderStmt> result(1);
-  if (snapshot) {
-    pattern::RenderStmt previous;
-    previous.image_reg = "previous";
-    result.push_back(previous);
-  }
   return result;
 }
 void expect(CompiledVisual& visual, Api& api, std::vector<uint32_t> widths)
@@ -91,10 +79,20 @@ void expect(CompiledVisual& visual, Api& api, std::vector<uint32_t> widths)
   require(api.drawn == widths, "unexpected captured images on render");
 }
 
+void empty_render_is_empty()
+{
+  Api api;
+  pattern::Node root;
+  root.length = 64;
+  CompiledVisual visual(api, root, {});
+  visual.cycler()->advance();
+  visual.render(api);
+  require(api.drawn.empty() && !api.other_draws, "empty V4 render must not synthesize legacy layers");
+}
 void initial_empty_recovers()
 {
   Api api;
-  CompiledVisual visual(api, capture(false), draws(false));
+  CompiledVisual visual(api, capture(), draws());
   visual.cycler()->advance();
   expect(visual, api, {0});
   api.current = picture(2);
@@ -105,32 +103,32 @@ void initial_empty_recovers()
   expect(visual, api, {2});
   require(api.refreshes == calls, "a valid capture must not reshuffle every frame");
 }
-void fallback_retries_and_snapshot_stays()
+void fallback_retries_on_first_pass()
 {
   Api api;
   api.fallback = picture(1);
-  CompiledVisual visual(api, capture(true), draws(true));
+  CompiledVisual visual(api, capture(), draws());
   visual.cycler()->advance();
-  expect(visual, api, {1, 1});
+  expect(visual, api, {1});
   api.current = picture(2);
   const unsigned calls = api.refreshes;
   api.first_pass = false;
-  expect(visual, api, {1, 1});
+  expect(visual, api, {1});
   require(api.refreshes == calls, "later stereo passes must not refresh registers");
   api.first_pass = true;
-  expect(visual, api, {2, 1});
+  expect(visual, api, {2});
 
   ++api.generation;
   api.current = {};
-  expect(visual, api, {2, 1});
+  expect(visual, api, {2});
   api.current = picture(3);
-  expect(visual, api, {3, 1});
+  expect(visual, api, {3});
 }
 void empty_reselection_preserves_drawable_capture()
 {
   Api api;
   api.current = picture(2);
-  CompiledVisual visual(api, capture(false), draws(false));
+  CompiledVisual visual(api, capture(), draws());
   visual.cycler()->advance();
   expect(visual, api, {2});
   api.current = {};
@@ -144,8 +142,9 @@ void empty_reselection_preserves_drawable_capture()
 int main()
 {
   try {
+    empty_render_is_empty();
     initial_empty_recovers();
-    fallback_retries_and_snapshot_stays();
+    fallback_retries_on_first_pass();
     empty_reselection_preserves_drawable_capture();
     std::cout << "compiled image recovery checks passed\n";
     return 0;

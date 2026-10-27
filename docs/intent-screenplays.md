@@ -1,3 +1,5 @@
+> **Archived: pre-V4 design.** This page is historical and is not a supported language reference. Use the [V4 grammar](spec-grammar-v4.md); V3 source is rejected by the current player.
+
 # Built-in visual intent
 
 The built-ins are editable v3 recipes in
@@ -20,7 +22,7 @@ git show ae7d94c:src/trance/visual/visual.cpp
 | `accelerate` | A 2048-frame, 140-step accelerating cadence; overall approach plus small per-cut zoom; every fourth selection animates; probabilistic theme changes and short word windows. | The fast end should last long enough to feel sustained. Keep the scene's slow approach distinct from each cut's motion. |
 | `slow_flash` | Two repeats of a slow primary section and a fast secondary section. Slow images have 64-frame local zoom; fast images change every 8 frames and follow the whole fast section's zoom. | A caption/text call-and-response in the slow section, followed by blinking words in the fast section. Current text is simpler. |
 | `sub_text` | Runtime-selected images every 64 frames, every third selection animated, secondary subtext every 32 frames. | Alternating image themes, a word-by-word foreground phrase, and repeated subtext that slows across passes. Those older behaviors are not all present in the current recipe. |
-| `flash_text` | Secondary-image crossfades using `copy cur -> prev`; the outgoing layer continues zooming while the incoming layer fades in. Words and captions run on separate cadences. | Text reveals during only part of the dissolve, periodic theme changes, and occasional animated dissolves. Image crossfade does not imply independent text crossfade support. |
+| `flash_text` | Secondary-image crossfades using two scoped 128-frame image lanes offset by 64 frames; opaque lower and fading upper layers continue their own zoom. Words and captions run on separate cadences. | Text reveals during only part of the dissolve, periodic theme changes, and occasional animated dissolves. Image crossfade does not imply independent text crossfade support. |
 | `simple` | One image per 64 frames with local zoom, every third selection animated, and captions every 32 frames. | A resting rhythm with a whole phrase visible only during the middle half of a longer cycle. The current recipe has no large-text layer. |
 | `super_parallel` | Three 96-frame image layers offset by 0/32/64 frames, with alpha 1/0.5/0.33; an animation accent on the first layer and independent words. | Alternate layered passages with brief solo windows where one image is fully visible. The current recipe keeps the layers composited. |
 | `animation` | An animated base with a still overlay using an 8-frame rise, 16-frame hold, 8-frame fall and the rest absent, offset within a 64-frame period. | The animation must have intervals alone on screen. A whole-period triangular fade would leave the still overlay present for almost every frame. |
