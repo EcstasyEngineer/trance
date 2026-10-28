@@ -1,8 +1,11 @@
 # V4 visual grammar
 
-V4 is a JSON abstract syntax tree (AST), used directly by the native compiler and
-visual composer. There is no intermediate V3 source generation or V3 parser on
-the production path. Unknown properties are errors. V3 pattern text is rejected.
+V4 has a [compact text grammar](v4-text-grammar.md) and a JSON abstract syntax tree
+(AST). Both feed the same native compiler and visual composer. Text deliberately
+covers only features exercised by the eight built-ins, plus explicit child
+completion policies. Advanced JSON remains supported; formatting an unsupported
+AST as text reports an error without dropping fields. There is no intermediate
+V3 source generation or V3 parser. Unknown properties are errors; V3 is rejected.
 Existing session JSON remains a separate format; upgrading visual patterns does
 not require replacing themes, playlists or audio settings.
 
@@ -18,7 +21,8 @@ trance --lint --pattern=example.pattern
 trance --pattern=example.pattern my.session.json
 ```
 
-The filename extension does not determine the language: `.pattern` contains JSON.
+The filename extension does not determine the language: `.pattern` accepts V4
+text or JSON. The composer displays text by default and offers an explicit JSON view.
 Session custom-pattern entries reference these files by path. F2 source display,
 copy, new patterns and lint use the same V4 representation.
 
@@ -73,10 +77,30 @@ timed wrappers give instantaneous outputs that lifetime.
 | `cadence` | Positive interval between body activations, or `{ "ramp": { "from": 64, "to": 8, "steps": 8, "ease": "linear" } }`. |
 | `offset` | Phase shift in frames; it does not preload images or mean an inactive delay. |
 | `id` | Optional ancestor clock name for structured curves. |
+| `child_mode` | On parallel/sequential: `independent` (default), `loop`, or `wait`. |
 
-The root needs a finite lifetime. A parent clips its descendants. Finished finite
-children stay inactive until their owner restarts them; a longer parent does not
-implicitly repeat a sequence. Repeat is explicit. Ramp intervals are scaled and
+The root needs a finite lifetime. In independent mode a parent clips its
+descendants. Finished finite children stay inactive until their owner restarts
+them; a sequence may finish before its authored cap while retaining that cap as
+its modulation-clock span. A longer parent does not implicitly repeat a sequence.
+Exact inactive or clipped spans produce advisory diagnostics with AST paths;
+inactivity does not necessarily mean the entire screen is blank.
+
+Loop mode keeps a sequential child list cycling, or restarts each completed
+parallel child independently, until the parent's duration/cadence boundary. It
+does not add an idle transition tick. Repeating the parent and looping its
+children are separate choices.
+
+Wait mode derives the iteration clock from finite timed children: the sum for a
+sequence or maximum for parallel. Direct outputs follow the owner and do not
+gate completion; at least one timed composition child is required. The wait
+owner must omit `duration`, `repeat`, `cadence` and `offset`. Only exact static
+child lifetimes are accepted; sampled, random, forever or phase-controlled
+gating lifetimes are rejected rather than sampled speculatively. Nested wait
+groups and finite repeated children are supported. An outer bounded parent can
+still clip a wait group. There is no separate frame-calculation action.
+
+Repeat is explicit. Ramp intervals are scaled and
 rounded to fill the explicit duration, with at least one frame per step.
 
 Offset pre-roll advances clocks while suppressing selections and random draws.
@@ -175,7 +199,13 @@ Limits include four MiB source, 64 composition nesting levels, 4,096 children pe
 composition, 32 scalar nesting levels, two through eight sum terms, and signed
 32-bit positive frame ranges. Ramp steps are bounded to 65,536. Phase pre-roll is
 bounded to one million frames; nested sampled or ramp offsets can be rejected
-conservatively. Errors identify the relevant AST path.
+conservatively. Errors identify the relevant AST path. Text syntax errors identify
+line and column and enforce source, nesting and child limits before recursion.
+
+The player presents the final executed content frame before selecting the next
+visual on the following tick. Ready opaque Flash Text media has an opaque base;
+cold media loading and transparency in source images remain separate from its
+opacity schedule.
 
 See [runtime architecture](engine-today.md) and
 [validation coverage](architecture-maturity.md). Schedule traces establish

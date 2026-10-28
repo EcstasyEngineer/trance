@@ -198,6 +198,7 @@ add_executable(trance
   src/trance/visual/pattern_compiler.cpp
   src/trance/visual/pattern_parser_v4.cpp
   src/trance/visual/pattern_parser.cpp
+  src/trance/visual/pattern_text_v4.cpp
   src/trance/visual/render_eval.cpp
   src/trance/visual/visual.cpp)
 

@@ -24,11 +24,17 @@ changes, cues, branches, and subroutines). Media paths resolve relative to the
 session file. Scan themes include added files on the next load. Legacy upstream
 `.session` files migrate to JSON without replacing the original.
 
-All eight built-ins and custom visuals use the same V4 JSON abstract syntax tree
-(AST). Three composition modes—parallel, sequential, and random—combine timed
-images, animation accents, text and spirals. V3 pattern text is no longer accepted.
+All eight built-ins and custom visuals use the same V4 abstract syntax tree
+(AST). Write [compact V4 text](docs/v4-text-grammar.md) or edit its JSON form.
+Parallel, sequential, and random composition combine timed images, animation
+accents, text and spirals. V3 pattern text is no longer accepted.
 Use the [visual composer](https://ecstasyengineer.github.io/trance/) to edit and
 export patterns, or read the [V4 grammar](docs/spec-grammar-v4.md).
+
+The composer includes a frame timeline with an overview, zoom, pan and selectable
+nested lanes. Choose independent children, loop children to the parent boundary,
+or wait for finite children to finish. Diagnostics identify inactive spans and
+clipping; uncertain schedules remain labeled rather than guessed.
 
 ```powershell
 # Play, force a built-in, or force a custom source.

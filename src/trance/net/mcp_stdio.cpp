@@ -95,19 +95,18 @@ namespace
                     {"opacity"}),
          [](const json& args) { return "overlay opacity " + num_str(num_arg(args, "opacity")); }},
         {"load_pattern",
-         "Load and pin a v3 pattern from a source file, resolved ON THE TRANCE MACHINE "
+         "Load and pin a V4 text or JSON pattern from a source file, resolved ON THE TRANCE MACHINE "
          "(replaces the playing visual until unload_pattern). If you did not put that file "
          "on that machine yourself, use load_pattern_source instead.",
          obj_schema({{"file", {{"type", "string"}, {"description", "pattern source path"}}}},
                     {"file"}),
          [](const json& args) { return "load pattern " + str_arg(args, "file"); }},
         {"load_pattern_source",
-         "Load and pin a v3 pattern from source text sent over this connection -- no file "
-         "on the trance machine needed. Newlines are ordinary whitespace to the grammar, so "
-         "a one-line source is fine; write \\n where you need a real line break (only a `#` "
-         "comment requires one). A parse error comes back as the parser's line:col "
+         "Load and pin a V4 text or JSON pattern sent over this connection -- no file "
+         "on the trance machine needed. A one-line source is fine; write \\n where "
+         "you need a real line break. A parse error comes back as a located "
          "diagnostic and the playing visual is left alone. Released by unload_pattern.",
-         obj_schema({{"source", {{"type", "string"}, {"description", "v3 pattern source text"}}}},
+         obj_schema({{"source", {{"type", "string"}, {"description", "V4 text or JSON pattern"}}}},
                     {"source"}),
          [](const json& args) { return "load pattern source " + str_arg(args, "source"); }},
         {"unload_pattern",

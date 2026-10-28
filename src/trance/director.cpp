@@ -198,12 +198,14 @@ void Director::rebuild_custom_patterns()
 
 void Director::update()
 {
-  _visual_api->update();
-  _visual->cycler()->advance();
-  log_playback_state();
+  // Keep the final executed frame drawable. Selecting/resetting here on the next
+  // content tick avoids presenting a fresh, inactive visual at every boundary.
   if (_visual->cycler()->complete()) {
     change_visual(_visual->cycler()->elapsed_length());
   }
+  _visual_api->update();
+  _visual->cycler()->advance();
+  log_playback_state();
   _renderer.update();
 }
 

@@ -1,5 +1,7 @@
 #include <trance/visual/pattern_parser.h>
 #include <trance/visual/pattern_parser_v4.h>
+#include <trance/visual/pattern_text_v4.h>
+#include <stdexcept>
 namespace pattern {
 ParseResult parse_source(const std::string& source, uint32_t locked_period_frames)
 {
@@ -9,7 +11,11 @@ ParseResult parse_source(const std::string& source, uint32_t locked_period_frame
   if (first != std::string::npos && text[first] == '{')
     return patternv4::parse(text, locked_period_frames);
   ParseResult result;
-  result.error = "V3 text grammars are unsupported; provide a V4 JSON AST";
+  try {
+    return patternv4::parse(patternv4::parse_text_json(text), locked_period_frames);
+  } catch (const std::exception& e) {
+    result.error = e.what();
+  }
   return result;
 }
 }

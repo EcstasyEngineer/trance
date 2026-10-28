@@ -1,14 +1,16 @@
 # Visual runtime
 
-The released visual language is the [V4 JSON AST](spec-grammar-v4.md). Built-ins,
+The visual language accepts [compact V4 text](v4-text-grammar.md) and its
+[JSON AST](spec-grammar-v4.md). Built-ins,
 custom session patterns, CLI source loading, F2 editing and the composer use the
 same native frontend. It does not lower through V3 text. Retired parsers,
 schedulers and their comparison tests have been deleted.
 
 ## Compilation and execution
 
-`pattern_parser_v4.cpp` validates the AST and produces occurrence nodes, content
-selection effects and ordered render statements. `compiler.cpp` constructs the
+`pattern_text_v4.cpp` converts the small text syntax to the same AST.
+`pattern_parser_v4.cpp` validates it and produces occurrence nodes, content
+selection effects and ordered render statements. `pattern_compiler.cpp` constructs the
 runtime schedule; `cyclers.cpp` advances V4 occurrences. `CompiledVisual` applies
 effects through `VisualControl` and evaluates drawing through `VisualRender`.
 
@@ -20,8 +22,11 @@ Inactive branches do not consume content selections or random values.
 
 Timing properties belong to occurrences: duration, sampled duration, repetition,
 cadence, ramp and phase offset. A bounded parent clips its descendants. A completed
-child stays inactive until an owner restart. Explicit repetition controls loops;
-an enclosing duration does not silently repeat a completed sequence.
+child stays inactive until an owner restart in independent mode. `child_mode`
+selects independent, looping children to the parent boundary, or waiting for
+exact finite children to finish. Wait supplies a resolved iteration clock;
+unknown lifetimes fail validation. An enclosing duration does not silently
+repeat a completed independent sequence. Exact inactive/clipped spans are warnings.
 
 ## Clocks and persistent state
 
@@ -41,7 +46,12 @@ desktop or eye pass must not select media or advance these counters.
 Each image output owns a private captured selection, even when several images
 are direct children of one parallel pattern. Authors do not name registers or
 write copy/draw operations. A stale capture can refresh from its current theme
-generation. Flash Text uses two offset lanes rather than a copied outgoing image.
+generation. A capture record keeps its image, requested theme, generation and
+readiness together. Flash Text uses an opaque base and a phase-shifted overlay.
+
+Director selects a completed visual's successor at the next update, then advances
+it before drawing. This retains the outgoing terminal frame and avoids drawing
+an unentered replacement between different visuals.
 
 `either` resolves the theme side once per image selection and uses it for both
 still fallback and animation. Rendering follows that image's captured side.

@@ -22,17 +22,17 @@ namespace
 
   Image image_reg(const pattern::Registers& regs, const std::string& name)
   {
-    auto it = regs.images.find(name);
-    return it == regs.images.end() ? Image{} : it->second;
+    auto it = regs.captures.find(name);
+    return it == regs.captures.end() ? Image{} : it->second.image;
   }
 
   VisualRender::ThemeSlot image_slot_reg(const pattern::Registers& regs, const std::string& name)
   {
-    auto it = regs.image_slots.find(name);
-    if (it == regs.image_slots.end()) {
+    auto it = regs.captures.find(name);
+    if (it == regs.captures.end()) {
       return VisualRender::ThemeSlot::None;
     }
-    return it->second == pattern::Slot::Secondary ? VisualRender::ThemeSlot::Alternate
+    return it->second.requested_slot == pattern::Slot::Secondary ? VisualRender::ThemeSlot::Alternate
                                                   : VisualRender::ThemeSlot::Primary;
   }
 }

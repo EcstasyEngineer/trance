@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <string>
+#include <stdexcept>
 #include <vector>
 
 class VisualRender;
@@ -103,7 +105,12 @@ namespace pattern
         i = j;
         return true;
       }
-      double run() { return ternary(); }
+      double run() {
+        double value = ternary();
+        ws();
+        if (i != s.size()) throw std::invalid_argument("trailing render expression input");
+        return value;
+      }
       double ternary()
       {
         double c = b_or();
@@ -208,10 +215,15 @@ namespace pattern
           return v;
         }
         if (std::isdigit(static_cast<unsigned char>(s[i])) || s[i] == '.') {
-          std::size_t st = i;
-          while (i < s.size() && (std::isdigit(static_cast<unsigned char>(s[i])) || s[i] == '.'))
-            ++i;
-          return std::stod(s.substr(st, i - st));
+          const char* begin = s.c_str() + i;
+          char* end = nullptr;
+          // strtod preserves representable finite subnormals even when the C
+          // library reports ERANGE; stod may turn that condition into a throw.
+          const double value = std::strtod(begin, &end);
+          if (end == begin || !std::isfinite(value))
+            throw std::invalid_argument("invalid finite render number");
+          i += static_cast<std::size_t>(end - begin);
+          return value;
         }
         if (std::isalpha(static_cast<unsigned char>(s[i])) || s[i] == '_') {
           std::size_t st = i;
@@ -287,9 +299,9 @@ namespace pattern
     // its animation to the other streamer.
     Slot slot = Slot::Primary;
     if (!st.anim_image_reg.empty()) {
-      const auto captured = regs.image_slots.find(st.anim_image_reg);
-      if (captured == regs.image_slots.end()) return AnimDraw::Still;
-      slot = captured->second;
+      const auto captured = regs.captures.find(st.anim_image_reg);
+      if (captured == regs.captures.end()) return AnimDraw::Still;
+      slot = captured->second.requested_slot;
     }
     return slot == Slot::Secondary ? AnimDraw::Alternate : AnimDraw::Primary;
   }

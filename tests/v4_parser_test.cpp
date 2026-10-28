@@ -2,6 +2,10 @@
 #include <trance/visual/pattern_parser_v4.h>
 
 #include <iostream>
+#include <trance/visual/render_eval.h>
+#include <memory>
+#include <cmath>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 
@@ -71,6 +75,95 @@ int main()
                     "rational rounded");
         }
       require(exact, "probability missing");
+    }
+    // Wait is opt-in and supplies its exact effective clock span.
+    J wait = {{"kind", "sequential"}, {"child_mode", "wait"},
+              {"children", J::array({{{"node", node("parallel", 2)}},
+                                      {{"node", node("parallel", 3)}}})}};
+    auto inferred = patternv4::parse(document(wait).dump());
+    require(inferred.ok, inferred.error.c_str());
+    require(inferred.root.length == 5, "wait sequence sum");
+    pattern::NodeMap clocks;
+    std::unique_ptr<Cycler> scheduler(pattern::compile(inferred.root, {}, clocks));
+    for (unsigned i = 0; i < 5; ++i) scheduler->advance();
+    require(scheduler->complete() && scheduler->elapsed_length() == 5, "wait execution extent");
+    wait["kind"] = "parallel";
+    wait["children"].push_back({{"node", image()}});
+    inferred = patternv4::parse(document(wait).dump());
+    require(inferred.ok && inferred.root.length == 3, "wait max ignores output leaves");
+    for (const auto field : {"duration", "cadence", "offset", "repeat"}) {
+      auto invalid = wait; invalid[field] = 1; rejected(document(invalid));
+    }
+    auto invalid = wait; invalid["children"] = J::array({{{"node", image()}}});
+    rejected(document(invalid));
+    invalid = wait; invalid["children"][0]["node"]["duration"] =
+        {{"min", 2}, {"max", 4}, {"step", 1}};
+    rejected(document(invalid));
+    invalid = wait; invalid["children"][0]["node"]["repeat"] = "forever";
+    rejected(document(invalid));
+    invalid = wait; invalid["children"][0]["node"].erase("duration");
+    rejected(document(invalid));
+    invalid = wait; invalid["children"][0]["node"]["offset"] = 1;
+    rejected(document(invalid));
+    auto random_mode = node("random");
+    random_mode["select"] = {{"order", "random"}, {"allow_self", true}, {"first", 0}};
+    random_mode["children"] = J::array({{{"node", node()}}});
+    random_mode["child_mode"] = "independent";
+    rejected(document(random_mode));
+    auto clipped_wait = node("parallel", 2);
+    clipped_wait["children"] = J::array({{{"node", wait}}});
+    auto clipped_parse = patternv4::parse(document(clipped_wait).dump());
+    require(clipped_parse.ok, clipped_parse.error.c_str());
+    clocks.clear(); scheduler.reset(pattern::compile(clipped_parse.root, {}, clocks));
+    scheduler->advance(); scheduler->advance();
+    require(scheduler->complete() && scheduler->elapsed_length() == 2,
+            "independent ancestor clips longer wait child");
+    auto nested = wait; nested["kind"] = "sequential"; nested["children"].erase(2);
+    nested["children"][0]["node"] = wait;
+    inferred = patternv4::parse(document(nested).dump());
+    require(inferred.ok && inferred.root.length == 6, "nested wait exact lifetime");
+    auto capped = node("sequential", 20);
+    capped["children"] = J::array({{{"node", node("parallel", 2)}},
+                                   {{"node", node("parallel", 3)}}});
+    capped["repeat"] = 2;
+    wait["children"] = J::array({{{"node", capped}}});
+    inferred = patternv4::parse(document(wait).dump());
+    require(inferred.ok && inferred.root.length == 10, "wait uses actual repeated sequence lifetime");
+    auto warned = patternv4::parse(document(capped).dump());
+    require(warned.ok && !warned.warnings.empty(), "independent unused span advisory");
+    capped["duration"] = 4;
+    warned = patternv4::parse(document(capped).dump());
+    require(warned.ok && !warned.warnings.empty() &&
+            warned.warnings.back().find("clipped") != std::string::npos, "clipping remains advisory");
+    // Assert values produced by the actual lowering and evaluator, not lint success.
+    pattern::Registers regs;
+    for (const double value : {1e-5, 1e-7, 1e20, -1e-12, 1e-320, -1e-320,
+                               std::numeric_limits<double>::denorm_min()}) {
+      auto numeric = node(); numeric["children"][0]["node"]["opacity"] = value;
+      auto parsed = patternv4::parse(document(numeric).dump());
+      require(parsed.ok, parsed.error.c_str());
+      require(pattern::eval_expr(parsed.render_block[0].alpha, 0, regs, {}, nullptr) == value,
+              "scientific scalar changed during lowering");
+    }
+    auto curve = node("parallel", 4);
+    curve["children"][0]["node"]["opacity"] =
+        {{"curve", {{"from", 1e-7}, {"to", 3e-7}}}};
+    auto parsed_curve = patternv4::parse(document(curve).dump());
+    require(parsed_curve.ok, parsed_curve.error.c_str());
+    clocks.clear();
+    scheduler.reset(pattern::compile(parsed_curve.root, {}, clocks));
+    scheduler->advance();
+    require(pattern::eval_expr(parsed_curve.render_block[0].alpha, 0, regs, clocks,
+                              scheduler.get()) == 1e-7, "scientific curve start");
+    scheduler->advance(); scheduler->advance();
+    require(std::abs(pattern::eval_expr(parsed_curve.render_block[0].alpha, 0, regs, clocks,
+                                       scheduler.get()) - 2e-7) < 1e-22,
+            "scientific curve midpoint");
+    for (const auto malformed : {"1e", "1e+", "1e-", "1.2.3", "1e2tail"}) {
+      bool threw = false;
+      try { (void) pattern::eval_expr(malformed, 0, regs, {}, nullptr); }
+      catch (const std::exception&) { threw = true; }
+      require(threw, "malformed numeric prefix accepted");
     }
     J v = node();
     v["wat"] = 1;

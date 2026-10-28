@@ -4,6 +4,7 @@
 #include <trance/visual/compiled_visual.h>
 #include <trance/visual/cyclers.h>
 #include <trance/visual/pattern_parser_v4.h>
+#include <trance/visual/pattern_text_v4.h>
 #include <trance/visual/builtin_patterns.h>
 #include <common/util.h>
 #include <algorithm>
@@ -42,6 +43,9 @@ struct Api : VisualControl, VisualRender {
   unsigned loads = 0;
   bool first_pass = true;
   mutable std::vector<Draw> drawn;
+  mutable std::vector<double> other_draws;
+  std::vector<unsigned> text_selections;
+  float rotation = 0;
   Image get_image(bool alternate, bool* fresh) const override {
     picked_sides.push_back(alternate);
     ++picks;
@@ -53,14 +57,18 @@ struct Api : VisualControl, VisualRender {
   }
   uint32_t lane_generation(bool) const override { return 0; }
   const std::string& get_theme_audio(bool) const override { static std::string s; return s; }
-  void rotate_spiral(float) override {}
+  void rotate_spiral(float value) override { rotation += value; }
   void change_spiral() override {}
   void set_spiral(uint32_t, uint32_t) override {}
   void change_animation(bool alternate) override { ++loads; loaded_sides.push_back(alternate); }
   void change_font(bool) override {}
-  void change_text(SplitType, bool) override {}
-  void change_subtext(bool) override {}
-  void change_small_subtext(bool, bool) override {}
+  void change_text(SplitType split, bool side) override {
+    text_selections.push_back(10 + static_cast<unsigned>(split) * 2 + unsigned(side));
+  }
+  void change_subtext(bool side) override { text_selections.push_back(20 + unsigned(side)); }
+  void change_small_subtext(bool force, bool side) override {
+    text_selections.push_back(30 + unsigned(force) * 2 + unsigned(side));
+  }
   bool change_themes() override { return false; }
   void play_theme_audio(const std::string&, bool) override {}
   void stop_theme_audio() override {}
@@ -72,10 +80,16 @@ struct Api : VisualControl, VisualRender {
   void render_image(const Image& image, float alpha, float origin, float zoom, ThemeSlot) const override {
     drawn.push_back({image.width(), alpha, zoom, origin, Anim::NONE});
   }
-  void render_text(float, float, float, float) const override {}
-  void render_subtext(float, float) const override {}
-  void render_small_subtext(float, float) const override {}
-  void render_spiral() const override {}
+  void render_text(float a, float b, float c, float d) const override {
+    other_draws.insert(other_draws.end(), {1, a, b, c, d});
+  }
+  void render_subtext(float a, float b) const override {
+    other_draws.insert(other_draws.end(), {2, a, b});
+  }
+  void render_small_subtext(float a, float b) const override {
+    other_draws.insert(other_draws.end(), {3, a, b});
+  }
+  void render_spiral() const override { other_draws.insert(other_draws.end(), {4, rotation}); }
   void set_warp(float, float, float) override {}
   bool render_mutations_enabled() const override { return first_pass; }
   double render_mutation_frames() const override { return first_pass ? 1. : 0.; }
@@ -85,6 +99,8 @@ struct Api : VisualControl, VisualRender {
 struct Frame {
   std::vector<Draw> draws;
   unsigned picks, loads;
+  std::vector<double> other_draws;
+  std::vector<unsigned> text_selections;
 };
 std::vector<Frame> trace(const std::string& source, unsigned frames)
 {
@@ -97,11 +113,12 @@ std::vector<Frame> trace(const std::string& source, unsigned frames)
   result.reserve(frames);
   for (unsigned frame = 0; frame < frames; ++frame) {
     visual.cycler()->advance();
-    api.drawn.clear(); visual.render(api);
-    result.push_back({api.drawn, api.picks, api.loads});
-    api.first_pass = false; api.drawn.clear(); visual.render(api);
+    api.drawn.clear(); api.other_draws.clear(); visual.render(api);
+    result.push_back({api.drawn, api.picks, api.loads, api.other_draws, api.text_selections});
+    api.first_pass = false; api.drawn.clear(); api.other_draws.clear(); visual.render(api);
     require(api.drawn == result.back().draws && api.picks == result.back().picks
-            && api.loads == result.back().loads,
+            && api.loads == result.back().loads && api.other_draws == result.back().other_draws
+            && api.text_selections == result.back().text_selections,
             "second output pass changes draws, picks, or animation loads at " + std::to_string(frame));
     api.first_pass = true;
   }
@@ -171,6 +188,23 @@ void independent_animation_sides()
   std::cout << "PASS simultaneous primary/secondary animation ownership and immutable second pass\n";
 }
 
+void text_roundtrip_rendering()
+{
+  for (unsigned recipe = 1; recipe <= 8; ++recipe) {
+    const auto source = builtin::pattern_source_v4(recipe);
+    const auto lowered = patternv4::parse_text_json(patternv4::format_text_json(source));
+    const auto before = trace(source, 4225);
+    const auto after = trace(lowered, 4225);
+    for (size_t frame = 0; frame < before.size(); ++frame)
+      require(before[frame].draws == after[frame].draws &&
+              before[frame].picks == after[frame].picks &&
+              before[frame].loads == after[frame].loads &&
+              before[frame].other_draws == after[frame].other_draws &&
+              before[frame].text_selections == after[frame].text_selections,
+              "text roundtrip changed rendering/effects for recipe " + std::to_string(recipe) +
+              " at frame " + std::to_string(frame));
+  }
+}
 void restored_parallel()
 {
   // Parallel has two simultaneous image lanes with independent cadence and offset.
@@ -197,9 +231,14 @@ void restored_parallel()
         require(draws[1].animation == VisualRender::Anim::ANIM_ALTERNATE, "Parallel secondary animation uses wrong streamer");
     }
   }
-  const auto flash = trace(builtin::pattern_source_v4(4), 192);
+  const auto flash = trace(builtin::pattern_source_v4(4), 1025);
   require(flash[64].draws.size() == 2 && flash[64].draws[1].alpha == 0.f && flash[96].draws[1].alpha == .5f,
           "Flash Text must retain its distinct offset triangular dissolve");
+  for (const auto& frame : flash)
+    require(frame.draws.size() == 2 && frame.draws[0].width != 0 && frame.draws[0].alpha == 1.f,
+            "ready Flash Text must retain opaque base at every tick and root boundary");
+  require(flash[1023].draws[1].width != 0 && flash[1024].draws[1].width != 0,
+          "Flash Text outgoing overlay survives final tick and root restart");
   const auto super = trace(builtin::pattern_source_v4(6), 192);
   require(super[64].draws.size() == 3 && super[64].draws[1].alpha == .5f && super[64].draws[2].alpha == .33f,
           "Super Parallel must retain three simultaneous image lanes");
@@ -213,6 +252,7 @@ int main()
     coherent_either();
     independent_animation_sides();
     restored_parallel();
+    text_roundtrip_rendering();
     std::cout << "COVERAGE: production V4 parser -> compiled visual -> recording renderer.\n"
                  "EXCLUDED: media decoding, GPU pixels and wall-clock timing.\n";
     return 0;

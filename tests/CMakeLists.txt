@@ -87,6 +87,7 @@ set_tests_properties(theme_bank_test PROPERTIES LABELS gpu TIMEOUT 120)
 # Direct native V4 compilation/runtime checks (no text-lowering adapter).
 set(V4_NATIVE_SOURCES
   ${CMAKE_SOURCE_DIR}/src/trance/visual/pattern_parser_v4.cpp
+  ${CMAKE_SOURCE_DIR}/src/trance/visual/pattern_text_v4.cpp
   ${CMAKE_SOURCE_DIR}/src/trance/visual/pattern_compiler.cpp
   ${CMAKE_SOURCE_DIR}/src/trance/visual/cyclers.cpp)
 add_executable(v4_parser_test ${V4_NATIVE_SOURCES} v4_parser_test.cpp)
@@ -106,4 +107,19 @@ add_test(NAME v4_native_execution_test COMMAND v4_native_execution_test)
 
 target_sources(v4_native_execution_test PRIVATE ${CMAKE_SOURCE_DIR}/src/trance/visual/builtin_patterns_v4.cpp)
 target_sources(v4_parser_test PRIVATE ${CMAKE_SOURCE_DIR}/src/trance/visual/pattern_parser.cpp)
+
+add_executable(v4_text_test ${V4_NATIVE_SOURCES}
+  ${CMAKE_SOURCE_DIR}/src/trance/visual/pattern_parser.cpp
+  ${CMAKE_SOURCE_DIR}/src/trance/visual/builtin_patterns_v4.cpp
+  v4_text_test.cpp)
+target_link_libraries(v4_text_test PRIVATE common_lib trance_options)
+target_compile_definitions(v4_text_test PRIVATE
+  TRANCE_V4_TEXT_FIXTURES="${CMAKE_SOURCE_DIR}/tests/fixtures/v4-text.json")
+add_test(NAME v4_text_test COMMAND v4_text_test)
+
+find_program(TRANCE_NODE_EXECUTABLE node)
+if(TRANCE_NODE_EXECUTABLE)
+  add_test(NAME authoring_v4_text_test COMMAND ${TRANCE_NODE_EXECUTABLE}
+    ${CMAKE_SOURCE_DIR}/tests/authoring_v4_text_test.cjs)
+endif()
 

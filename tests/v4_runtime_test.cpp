@@ -72,6 +72,44 @@ void sequential_and_repeat()
   Run clipped(owner); clipped.tick(8);
   check(clipped.count("repeat") == 3 && clipped.root->complete(), "parent clips forever child");
 }
+void child_loops()
+{
+  auto seq = node(Kind::Sequential, 11, "root");
+  seq.child_mode = Node::ChildMode::Loop;
+  seq.children = {node(Kind::Parallel, 2, "a"), node(Kind::Parallel, 3, "b")};
+  Run run(seq); run.tick(11);
+  check(run.root->complete() && run.root->elapsed_length() == 11, "loop keeps owner cap");
+  check(run.count("a") == 3 && run.count("b") == 2, "loop restarts entire sequence");
+  std::vector<unsigned> a, b;
+  for (const auto& e : run.events) {
+    if (e.second == "a") a.push_back(e.first);
+    if (e.second == "b") b.push_back(e.first);
+  }
+  check(a == std::vector<unsigned>({0,5,10}) && b == std::vector<unsigned>({2,7}),
+        "sequence loop has no consumed boundary ticks");
+  seq.occurrence_kind = Kind::Parallel;
+  Run parallel(seq); parallel.tick(11);
+  check(parallel.count("a") == 6 && parallel.count("b") == 4,
+        "parallel children loop independently");
+  seq.cadence = 4;
+  Run cadence(seq); cadence.tick(11);
+  check(cadence.count("a") == 6 && cadence.count("b") == 5,
+        "loop restarts are bounded by cadence");
+}
+void throwing_factory()
+{
+  auto root = node(Kind::Parallel, 5, "root");
+  root.children = {node(Kind::Parallel, 2, "a"), node(Kind::Parallel, 3, "b")};
+  pattern::NodeMap clocks;
+  bool threw = false;
+  try {
+    std::unique_ptr<Cycler> compiled(pattern::compile(root, [](const Node& n) {
+      if (n.id == "b") throw std::runtime_error("injected factory failure");
+      return std::function<void()>{};
+    }, clocks));
+  } catch (const std::runtime_error&) { threw = true; }
+  check(threw && clocks.empty(), "failed compile does not publish dangling clock pointers");
+}
 Node selector(bool random_order = false)
 {
   auto n = node(Kind::Random, 100, "root"); n.select_random = random_order;
@@ -148,7 +186,8 @@ void clocks_offsets_sampling()
 int main()
 {
   try {
-    nesting_and_completion(); sequential_and_repeat(); selectors(); clocks_offsets_sampling();
+    nesting_and_completion(); sequential_and_repeat(); child_loops(); throwing_factory();
+    selectors(); clocks_offsets_sampling();
     std::cout << "V4 native occurrence runtime: all checks passed\n"; return 0;
   } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

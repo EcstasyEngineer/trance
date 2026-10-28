@@ -92,8 +92,8 @@ private:
 class OccurrenceCycler final : public Cycler
 {
 public:
-  OccurrenceCycler(const pattern::Node& spec, std::function<void()> entry,
-                   std::vector<Cycler*> children);
+  OccurrenceCycler(pattern::Node spec, std::function<void()> entry,
+                   std::vector<std::unique_ptr<Cycler>> children);
   uint32_t length() const override;
   uint32_t position() const override;
   bool complete() const override;

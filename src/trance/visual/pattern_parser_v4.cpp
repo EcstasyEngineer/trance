@@ -6,6 +6,7 @@
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <numeric>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -84,11 +85,52 @@ namespace
     uint32_t g = std::gcd(a, b);
     return {a / g, b / g};
   }
+  // Exact static lifetime only. This never samples or touches the scheduler/RNG.
+  std::optional<uint64_t> lifetime(const J& j, uint32_t inherited = 0)
+  {
+    if (!j.is_object() || !j.contains("kind") || !j.contains("children") ||
+        !j["children"].is_array()) return {};
+    const auto kind = j.value("kind", std::string{});
+    const auto mode = j.value("child_mode", std::string("independent"));
+    if (kind == "random" || j.contains("offset")) return {};
+    if (j.contains("repeat") && !j["repeat"].is_number_integer()) return {};
+    uint32_t cap = inherited;
+    if (j.contains("duration")) {
+      if (!j["duration"].is_number_integer()) return {};
+      cap = integer(j["duration"], "$", 1);
+    }
+    uint64_t extent = 0;
+    bool timed = false;
+    if (mode == "wait" || (kind == "sequential" && mode != "loop" && !j.contains("cadence"))) {
+      for (const auto& edge : j["children"]) {
+        if (!edge.is_object() || !edge.contains("node")) return {};
+        const auto& child = edge["node"];
+        if (child.contains("op")) continue;
+        timed = true;
+        auto length = lifetime(child, mode == "wait" ? 0 : cap);
+        if (!length) return {};
+        if (kind == "sequential") extent += *length;
+        else extent = std::max(extent, *length);
+      }
+      if (!timed) return {};
+      if (mode != "wait") {
+        if (!cap) return {};
+        extent = std::min<uint64_t>(extent, cap);
+      }
+    } else {
+      if (!cap) return {};
+      extent = cap;
+    }
+    if (j.contains("repeat")) extent *= integer(j["repeat"], "$", 1);
+    if (!extent || extent > limit) return {};
+    return extent;
+  }
   struct Parser {
     std::set<std::string> ids, generated;
     uint32_t serial = 0;
     std::string scene;
     std::vector<R> render;
+    std::vector<std::string> warnings;
     void reserve(const J& j, const std::string& p, uint32_t depth = 0)
     {
       if (depth > 64)
@@ -336,18 +378,19 @@ namespace
       render.push_back(r);
     }
     N node(const J& j, const std::string& p, std::vector<std::string> ancestors, uint32_t inherited,
-           uint32_t depth = 0)
+           uint32_t depth = 0, bool inherited_exact = false)
     {
       if (depth > 64)
         fail(p, "maximum nesting depth is 64");
       object(j, p, {"kind", "children"},
-             {"id", "duration", "repeat", "cadence", "offset", "select"});
+             {"id", "duration", "repeat", "cadence", "offset", "select", "child_mode"});
       N n;
       n.id = name(j);
       if (scene.empty())
         scene = n.id;
       ancestors.push_back(n.id);
       std::string kind = str(j["kind"], p);
+      n.phase = j.contains("id") ? n.id : kind;
       if (kind == "parallel")
         n.occurrence_kind = N::Composition::Parallel;
       else if (kind == "sequential")
@@ -356,6 +399,20 @@ namespace
         n.occurrence_kind = N::Composition::Random;
       else
         fail(p, "only parallel, sequential, random are composition kinds");
+      if (j.contains("child_mode")) {
+        const auto mode = str(j["child_mode"], p + ".child_mode");
+        if (kind == "random") fail(p, "child_mode belongs to parallel or sequential only");
+        if (mode == "loop") n.child_mode = N::ChildMode::Loop;
+        else if (mode == "wait") n.child_mode = N::ChildMode::Wait;
+        else if (mode != "independent") fail(p, "unknown child_mode");
+      }
+      if (n.child_mode == N::ChildMode::Wait) {
+        for (const auto field : {"duration", "cadence", "offset", "repeat"})
+          if (j.contains(field)) fail(p, std::string("wait must omit ") + field);
+        auto span = lifetime(j);
+        if (!span) fail(p, "wait needs at least one timed child with an exact finite lifetime");
+        n.length = static_cast<uint32_t>(*span);
+      }
       if (j.contains("duration")) {
         auto& d = j["duration"];
         if (d.is_object()) {
@@ -369,6 +426,8 @@ namespace
           n.length = integer(d, p, 1);
       }
       uint32_t span = n.length ? n.length : inherited;
+      const bool span_exact = n.child_mode == N::ChildMode::Wait ||
+          (j.contains("duration") ? j["duration"].is_number_integer() : inherited_exact);
       if (j.contains("repeat")) {
         if (!j.contains("duration"))
           fail(p, "repeat needs bounded iteration duration");
@@ -376,9 +435,7 @@ namespace
           n.repeat_forever = true;
         else
           n.repeat_count = integer(j["repeat"], p, 1);
-        if (!n.repeat_forever &&
-            uint64_t(n.duration_max ? n.duration_max : span) * n.repeat_count > limit)
-          fail(p, "repeated span overflows runtime frame range");
+
       }
       if (j.contains("offset"))
         n.offset = integer(j["offset"], p);
@@ -456,15 +513,46 @@ namespace
         if (child.contains("op")) {
           if (kind != "parallel" || edge.contains("exit"))
             fail(q, "outputs belong directly to parallel only");
-          output(child, q, n, ancestors, local);
+          output(child, q + ".node", n, ancestors, local);
         } else {
-          N k = node(child, q, ancestors, local ? local : span, depth + 1);
+          N k = node(child, q + ".node", ancestors, local ? local : span, depth + 1,
+                     span_exact && !n.cadence_ramp_steps);
           if ((kind == "sequential" || (kind == "random" && !exit.enabled)) &&
-              (!child.contains("duration") || k.repeat_forever))
+              ((!child.contains("duration") && k.child_mode != N::ChildMode::Wait) || k.repeat_forever))
             fail(q, "child needs finite duration and repeat, or random chance exit");
           n.children.push_back(std::move(k));
           n.child_exits.push_back(exit);
         }
+      }
+      if (!n.repeat_forever && n.repeat_count > 1 && !lifetime(j, inherited) &&
+          uint64_t(n.duration_max ? n.duration_max : span) * n.repeat_count > limit)
+        fail(p, "repeated span overflows runtime frame range");
+      // Advisory only: intentional clipping is valid. Emit exact, local spans
+      // only when cadence/phase/repetition cannot change these boundaries.
+      if (n.child_mode == N::ChildMode::Independent && kind != "random" && !j.contains("cadence") &&
+          !j.contains("offset") && span_exact && span) {
+        uint64_t cursor = 0;
+        bool exact = true;
+        for (size_t i = 0; i < children.size(); ++i) {
+          const auto& child = children[i]["node"];
+          if (child.contains("op")) continue;
+          auto extent = lifetime(child, kind == "sequential" && cursor < span
+              ? span - static_cast<uint32_t>(cursor) : span);
+          if (!extent) { exact = false; break; }
+          const uint64_t begin = kind == "sequential" ? cursor : 0;
+          const uint64_t end = begin + *extent;
+          const auto path = p + ".children[" + std::to_string(i) + "].node";
+          if (end > span)
+            warnings.push_back(path + ": clipped child span [" + std::to_string(span) +
+                "," + std::to_string(end) + ") by owner duration");
+          else if (kind == "parallel" && end < span)
+            warnings.push_back(path + ": inactive child span [" + std::to_string(end) +
+                "," + std::to_string(span) + ") within owner");
+          cursor = end;
+        }
+        if (exact && kind == "sequential" && cursor && cursor < span)
+          warnings.push_back(p + ": sequence completes at " + std::to_string(cursor) +
+              "; unused owner span [" + std::to_string(cursor) + "," + std::to_string(span) + ")");
       }
       return n;
     }
@@ -505,6 +593,7 @@ namespace patternv4
         if (p.ids.count(id + "_local") || p.generated.count(id + "_local"))
           fail("$.root", "id collides with internal local clock alias");
       result.render_block = std::move(p.render);
+      result.warnings = std::move(p.warnings);
       result.name = result.root.id;
       result.ok = true;
     } catch (const std::exception& e) {

@@ -51,9 +51,9 @@ def validate(source, executable, locked=0):
         except (ValueError, TypeError):
             return {"ok": False, "returncode": None, "stdout": "", "stderr": "",
                     "diagnostics": ["Invalid V4 JSON; source was not sent to the compiler."]}
-    else:
+    elif not re.match(r"v4\s*;", source.lstrip("\ufeff \t\r\n")):
         return {"ok": False, "returncode": None, "stdout": "", "stderr": "",
-                "diagnostics": ["V3 text grammars are unsupported; provide a V4 JSON AST."]}
+                "diagnostics": ["V3 text grammars are unsupported; provide V4 text or a V4 JSON AST."]}
     if not executable.is_file():
         return {"ok": False, "returncode": None, "stdout": "", "stderr": "",
                 "diagnostics": ["Release trance.exe is missing; build the supported windows-release preset."]}

@@ -9,6 +9,7 @@
 #include <trance/visual/builtin_patterns.h>
 #include <trance/visual/builtin_visuals.h>
 #include <trance/visual/pattern_parser.h>
+#include <trance/visual/pattern_text_v4.h>
 #include <algorithm>
 #include <cctype>
 #include <iostream>
@@ -16,6 +17,7 @@
 #include <cstdio>
 #include <string>
 #include <utility>
+#include <unordered_map>
 #include <vector>
 
 #pragma warning(push, 0)
@@ -582,7 +584,17 @@ void AppUi::draw_builtin_body(Director& director, uint32_t type, const char* blu
   // is the intended path to editing one: paste into a new custom pattern below.
   // Returned by value; ReadOnly means InputTextMultiline never writes through the
   // pointer, so handing it this frame-local buffer is safe.
-  std::string source = builtin::pattern_source_v4(type);
+  static std::unordered_map<uint32_t, std::string> source_cache;
+  auto cached = source_cache.try_emplace(type);
+  if (cached.second) {
+    cached.first->second = builtin::pattern_source_v4(type);
+    try {
+      cached.first->second = patternv4::format_text_json(cached.first->second);
+    } catch (const std::exception&) {
+      // Retain the exact JSON if a future built-in exceeds the small text subset.
+    }
+  }
+  std::string source = cached.first->second;
   if (ImGui::Button("Copy")) {
     ImGui::SetClipboardText(source.c_str());
   }
@@ -810,8 +822,9 @@ void AppUi::draw_visuals_section(Director& director)
   if (ImGui::Button("+ New pattern")) {
     auto* added = program->add_custom_visual_pattern();
     added->set_name(unique_pattern_name(*program));
-    // New custom patterns use the same native V4 AST as builtins and the composer.
-    added->set_source_text(R"({"version":4,"root":{"kind":"parallel","duration":1024,"cadence":64,"children":[{"node":{"op":"image","source":"primary","zoom":{"curve":{"from":0,"to":0.375}}}},{"node":{"op":"spiral","speed":2}}]}})");
+    added->set_source_text("v4;\nparallel for 1024 every 64 {\n"
+                           "  image primary zoom 0 -> 0.375;\n"
+                           "  spiral speed 2;\n}\n");
     added->set_random_weight(1);
     added->set_enabled(true);
     // New rows compile immediately so the lint line starts out truthful, and the

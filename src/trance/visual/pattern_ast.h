@@ -98,6 +98,8 @@ namespace pattern
     // V4 native occurrence scheduling. Zero length inherits the enclosing span.
     enum class Composition { Parallel, Sequential, Random };
     Composition occurrence_kind = Composition::Parallel;
+    enum class ChildMode { Independent, Loop, Wait };
+    ChildMode child_mode = ChildMode::Independent;
     uint32_t duration_max = 0, duration_step = 1;
     bool repeat_forever = false;
     uint32_t repeat_count = 1;

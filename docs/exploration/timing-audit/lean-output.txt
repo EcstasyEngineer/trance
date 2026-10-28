@@ -1,0 +1,4 @@
+'TimingAudit.completion_iff' depends on axioms: [propext, Classical.choice, Quot.sound]
+'TimingAudit.consumed_ticks' depends on axioms: [propext, Quot.sound]
+'TimingAudit.no_implicit_restart' depends on axioms: [propext]
+'TimingAudit.requested_tail' depends on axioms: [propext, Quot.sound]

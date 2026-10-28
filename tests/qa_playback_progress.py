@@ -73,9 +73,9 @@ def main():
                 raise AssertionError(f"missing active section {section}:\n{log}")
 
             def source(name):
-                return (f"pattern {name} for 60f seq {{ "
-                        "pattern opening for 30f { every 10f { image primary } } "
-                        "pattern closing for 30f { every 4f { image secondary } } }")
+                return (f"v4; sequence id {name} for 60 {{ "
+                        "parallel id opening for 30 every 10 { image primary; } "
+                        "parallel id closing for 30 every 4 { image secondary; } }")
 
             try:
                 send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {

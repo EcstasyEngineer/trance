@@ -54,16 +54,16 @@ namespace
       Image image = api.get_image(alternate, &from_current_theme);
       // A not-yet-ready lane must not erase a drawable capture. Keep it until the
       // current theme produces a replacement, just as refresh does after a swap.
-      if (image || !regs.images[e.target]) {
-        regs.images[e.target] = image;
-      }
-      regs.image_slots[e.target] = slot;
+      auto& capture = regs.captures[e.target];
+      if (image || !capture.image) capture.image = image;
+      capture.requested_slot = slot;
       // Stamp the lane generation this was pulled at, so a theme swap can be detected
       // later and the register refreshed rather than left holding a dead theme's frame.
       const uint32_t generation = api.lane_generation(alternate);
-      // A last-good fallback is drawable but not current. Leave its stamp behind
-      // so readiness within this same generation triggers another attempt.
-      regs.image_gens[e.target] = from_current_theme ? generation : generation - 1;
+      // A last-good fallback is drawable but not current. Keep that readiness
+      // explicit so this same generation can be retried.
+      capture.generation = generation;
+      capture.current = from_current_theme;
       break;
     }
     case K::Text:
@@ -155,33 +155,24 @@ void CompiledVisual::refresh_stale_registers(VisualControl& api)
   // is also why it is not hooked to the `themes` EFFECT -- the playlist's own swap
   // (main.cpp, swaps_to_match_theme) never runs a pattern effect at all, whereas the
   // lane generation is bumped by advance_theme, which every swap goes through.
-  for (auto& entry : _registers.images) {
-    auto gen = _registers.image_gens.find(entry.first);
-    if (gen == _registers.image_gens.end()) {
-      // No captured generation is available to compare.
-      continue;
-    }
-    auto slot = _registers.image_slots.find(entry.first);
-    if (slot == _registers.image_slots.end()) {
-      continue;
-    }
-    const bool alternate = slot->second == pattern::Slot::Secondary;
+  for (auto& entry : _registers.captures) {
+    auto& capture = entry.second;
+    const bool alternate = capture.requested_slot == pattern::Slot::Secondary;
     const uint32_t generation = api.lane_generation(alternate);
-    if (gen->second == generation && entry.second) {
-      continue;
-    }
+    if (capture.current && capture.generation == generation && capture.image) continue;
     // get_current_theme_image, NOT get_image: get_image's never-black fallback returns
     // the PREVIOUS theme's frame, which is indistinguishable from a real pick by
     // operator bool. Accepting one of those and stamping it with the new generation
     // would mark the register current while it still held the dead theme's image, and it
     // would never be retried -- reinstating the exact bug this fixes. An empty result
     // means the new theme has nothing yet: keep drawing what is there (never black) and
-    // leave the generation mismatched so the next frame tries again.
+    // leave readiness or generation stale so the next frame tries again.
     Image fresh = api.get_current_theme_image(alternate);
     if (!fresh) {
       continue;
     }
-    entry.second = fresh;
-    gen->second = generation;
+    capture.image = fresh;
+    capture.generation = generation;
+    capture.current = true;
   }
 }

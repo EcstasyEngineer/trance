@@ -1,0 +1,104 @@
+<div id="trance-timing-concepts" class="viz-carousel viz-dotted-background" aria-label="Pattern timeline designs">
+  <section data-variant="Frame strip" aria-label="Frame strip timeline">
+    <div class="tc-product" data-layout="strip" aria-label="Frame strip spacing"></div>
+  </section>
+  <section data-variant="Nested lanes" aria-label="Nested lanes timeline" hidden>
+    <div class="tc-product" data-layout="lanes" aria-label="Nested lanes spacing"></div>
+  </section>
+</div>
+<style>
+#trance-timing-concepts { color-scheme:light dark; }
+#trance-timing-concepts .tc-product { --tc-bg:light-dark(#f4f6fa,#11151b); --tc-panel:light-dark(#ffffff,#191e26); --tc-ink:light-dark(#202733,#e8edf4); --tc-muted:light-dark(#586475,#a9b4c5); --tc-line:light-dark(#ccd4df,#364252); --tc-a:light-dark(#cdbced,#67558e); --tc-b:light-dark(#a8d6c4,#396b58); --tc-warning:light-dark(#825000,#f1c579); background:var(--tc-bg); color:var(--tc-ink); font:14px/1.5 system-ui,sans-serif; border:1px solid var(--tc-line); border-radius:8px; padding:16px; min-height:520px; box-sizing:border-box; }
+#trance-timing-concepts * { box-sizing:border-box; }
+#trance-timing-concepts .tc-title { font-weight:600; font-size:17px; margin:0; }
+#trance-timing-concepts .tc-muted { color:var(--tc-muted); font-size:12px; }
+#trance-timing-concepts .tc-head { display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:14px; padding-right:80px; }
+#trance-timing-concepts .tc-controls { display:flex; flex-wrap:wrap; gap:10px 16px; align-items:end; margin:12px 0; }
+#trance-timing-concepts label { display:grid; gap:3px; font-size:12px; color:var(--tc-muted); min-width:0; }
+#trance-timing-concepts select,#trance-timing-concepts button,#trance-timing-concepts input { font:inherit; color:var(--tc-ink); accent-color:light-dark(#426c58,#9de5bd); }
+#trance-timing-concepts select,#trance-timing-concepts button { background:var(--tc-panel); border:1px solid var(--tc-line); border-radius:5px; padding:6px 9px; max-width:100%; }
+#trance-timing-concepts .tc-scenario { flex:1 1 250px; }
+#trance-timing-concepts .tc-zoom { flex:1 1 120px; }
+#trance-timing-concepts input[type=range] { width:100%; min-width:0; }
+#trance-timing-concepts .tc-overview { height:30px; position:relative; margin-top:14px; background:var(--tc-panel); }
+#trance-timing-concepts .tc-overview .tc-region { position:absolute; top:4px; bottom:4px; background:var(--tc-a); opacity:.65; }
+#trance-timing-concepts .tc-overview .tc-window { position:absolute; inset-block:0; border:2px solid var(--tc-ink); background:color-mix(in srgb,var(--tc-ink) 8%,transparent); pointer-events:none; }
+#trance-timing-concepts .tc-view { display:flex; justify-content:space-between; flex-wrap:wrap; gap:6px; font-size:12px; margin:7px 0 12px; color:var(--tc-muted); }
+#trance-timing-concepts .tc-lane { display:grid; grid-template-columns:112px minmax(0,1fr); align-items:center; min-height:46px; gap:9px; }
+#trance-timing-concepts .tc-lane-name { font-size:12px; overflow-wrap:anywhere; }
+#trance-timing-concepts .tc-lane-name small { display:block; color:var(--tc-muted); }
+#trance-timing-concepts .tc-track { height:32px; background:color-mix(in srgb,var(--tc-muted) 8%,transparent); position:relative; overflow:hidden; }
+#trance-timing-concepts .tc-segment { position:absolute; height:100%; display:flex; align-items:center; justify-content:center; font-size:12px; overflow:hidden; white-space:nowrap; }
+#trance-timing-concepts .tc-segment.a { background:var(--tc-a); }
+#trance-timing-concepts .tc-segment.b { background:var(--tc-b); }
+#trance-timing-concepts .tc-segment.owner { background:color-mix(in srgb,var(--tc-ink) 13%,var(--tc-panel)); }
+#trance-timing-concepts .tc-segment.idle { background:repeating-linear-gradient(135deg,transparent,transparent 5px,color-mix(in srgb,var(--tc-muted) 15%,transparent) 5px,color-mix(in srgb,var(--tc-muted) 15%,transparent) 7px); }
+#trance-timing-concepts .tc-playhead { position:absolute; height:100%; width:2px; background:var(--tc-ink); pointer-events:none; }
+#trance-timing-concepts .tc-axis { display:flex; justify-content:space-between; margin:8px 0 0 121px; color:var(--tc-muted); font-size:12px; }
+#trance-timing-concepts .tc-detail { min-height:44px; margin-top:12px; padding-top:10px; border-top:1px solid var(--tc-line); font-size:12px; }
+#trance-timing-concepts .tc-warning { color:var(--tc-warning); }
+#trance-timing-concepts .tc-bottom { display:flex; flex-wrap:wrap; gap:12px; margin-top:12px; }
+#trance-timing-concepts .tc-bottom label { flex:1 1 200px; }
+@media(max-width:480px) { #trance-timing-concepts .tc-product { padding:10px; min-height:620px; } #trance-timing-concepts .tc-lane { grid-template-columns:78px minmax(0,1fr); gap:6px; } #trance-timing-concepts .tc-axis { margin-left:84px; } #trance-timing-concepts .tc-head { padding-right:60px; } }
+</style>
+<script>
+(() => {
+  const root = document.getElementById('trance-timing-concepts');
+  let persisted = window.openai?.widgetState?.privateContent || {};
+  const scenarios = {
+    idle:{name:'Current · 2000f parent, A600 + B600',total:2000,a:600,b:600,repeat:false},
+    clip:{name:'Current · 1000f parent, A600 + B600',total:1000,a:600,b:600,repeat:false},
+    spare:{name:'Current · 1000f parent, A400 + B400',total:1000,a:400,b:400,repeat:false},
+    loop:{name:'Current · explicit repeat A600 + B600 to 2000f',total:2000,a:600,b:600,repeat:true},
+    derived:{name:'Proposed · infer duration from A600 + B600',total:1200,a:600,b:600,repeat:false,derived:true},
+    parallel:{name:'Current · parallel A600 and B1000 in 2000f',total:2000,a:600,b:1000,parallel:true}
+  };
+  root.querySelectorAll('.tc-product').forEach((product,index) => {
+    const key = 'tc-'+index;
+    product.innerHTML = `<div class="tc-head"><div><h3 class="tc-title">Pattern timeline</h3><div class="tc-muted">Design concept · frames · nested under a parallel root</div></div></div>
+      <div class="tc-controls"><label class="tc-scenario" for="${key}-scenario">Pattern<select id="${key}-scenario">${Object.entries(scenarios).map(([id,s])=>`<option value="${id}">${s.name}</option>`).join('')}</select></label>
+      <label class="tc-zoom" for="${key}-zoom">Zoom <output data-zoom-label>1×</output><input id="${key}-zoom" type="range" min="1" max="4" step="1" value="1"></label></div>
+      <div class="tc-overview" role="img" aria-label="Whole-pattern overview"><div class="tc-region"></div><div class="tc-window"></div></div>
+      <div class="tc-view"><span data-range></span><span data-end></span></div><div data-lanes></div><div class="tc-axis" data-axis></div>
+      <div class="tc-bottom"><label for="${key}-pan">Visible window<input id="${key}-pan" type="range" min="0" max="0" step="1" value="0"></label><label for="${key}-frame">Inspect frame <output data-frame-label>0</output><input id="${key}-frame" type="range" min="0" max="1999" step="1" value="0"></label></div>
+      <div class="tc-detail" aria-live="polite" data-detail></div>`;
+    const get = name => product.querySelector(name);
+    const select = get('select'), zoom = get('#'+key+'-zoom'), pan = get('#'+key+'-pan'), frame = get('#'+key+'-frame');
+    const design={rowSpacing:46};
+    function render() {
+      const s=scenarios[select.value], total=s.total, span=Math.ceil(total/Number(zoom.value));
+      pan.max=Math.max(0,total-span); pan.value=Math.min(Number(pan.value),Number(pan.max)); pan.disabled=Number(pan.max)===0;
+      frame.max=total-1; frame.value=Math.min(Number(frame.value),total-1);
+      const start=Number(pan.value), end=Math.min(total,start+span), f=Number(frame.value), events=[];
+      if(s.parallel) { events.push({name:'A',start:0,end:s.a,style:'a'},{name:'B',start:0,end:s.b,style:'b'}); }
+      else { for(let t=0;t<total;) { events.push({name:'A',start:t,end:Math.min(total,t+s.a),style:'a'}); t+=s.a; if(t<total) events.push({name:'B',start:t,end:Math.min(total,t+s.b),style:'b'}); t+=s.b; if(!s.repeat) break; } }
+      const natural=s.parallel?Math.max(s.a,s.b):s.a+s.b, finished=s.repeat?total:Math.min(total,natural), clipped=!s.parallel&&!s.repeat&&natural>total;
+      const lanes=[{name:s.derived?'Parent · inferred':'Parent',note:total+' frames',events:[{name:total+'f',start:0,end:total,style:'owner'}]}];
+      if(s.parallel || product.dataset.layout==='lanes') {
+        if(!s.parallel) lanes.push({name:'Sequence',note:s.repeat?'explicit repeat':finished+'f active',events:[{name:'',start:0,end:finished,style:'owner'}]});
+        lanes.push({name:'A',note:s.a+'f per occurrence',events:events.filter(e=>e.name==='A')},{name:'B',note:s.b+'f per occurrence',events:events.filter(e=>e.name==='B')});
+      } else lanes.push({name:'Sequence',note:'A → B',events});
+      if(finished<total) lanes.push({name:'Finished',note:'no child activity',events:[{name:(total-finished)+'f inactive',start:finished,end:total,style:'idle'}]});
+      const scale=t=>(t-start)/(end-start)*100;
+      get('[data-lanes]').innerHTML=lanes.map(lane=>`<div class="tc-lane" style="min-height:${design.rowSpacing}px"><div class="tc-lane-name">${lane.name}<small>${lane.note}</small></div><div class="tc-track">${lane.events.filter(e=>e.end>start&&e.start<end).map(e=>{const left=Math.max(0,scale(e.start)),right=Math.min(100,scale(e.end));return `<div class="tc-segment ${e.style}" style="left:${left}%;width:${right-left}%" aria-label="${lane.name} ${e.name}, frames ${e.start} to ${e.end} exclusive">${right-left>12?e.name:''}</div>`;}).join('')}${f>=start&&f<end?`<div class="tc-playhead" style="left:${scale(f)}%"></div>`:''}</div></div>`).join('');
+      get('[data-axis]').innerHTML=[start,Math.round((start+end)/2),end].map(t=>`<span>${t}f</span>`).join('');
+      get('[data-range]').textContent=`Viewing ${start}–${end}f of ${total}f`;
+      get('[data-zoom-label]').textContent=zoom.value+'×'; get('[data-frame-label]').textContent=f;
+      get('[data-end]').textContent=clipped?`B clipped by ${natural-total}f`:finished<total?`${total-finished}f inactive tail`:s.derived?'Duration follows children':'Parent boundary';
+      const region=get('.tc-region'); region.style.left='0'; region.style.width=finished/total*100+'%';
+      const windowMark=get('.tc-window'); windowMark.style.left=start/total*100+'%'; windowMark.style.width=(end-start)/total*100+'%';
+      const active=events.filter(e=>e.start<=f&&f<e.end).map(e=>e.name).join(' + ');
+      const warning=clipped?` B loses its final ${natural-total} frames.`:finished<total?` Children finish at ${finished}f; the parallel parent continues.`:'';
+      get('[data-detail]').innerHTML=`Frame ${f}: ${active||'children inactive'}. <span class="tc-warning">${warning}</span>${s.repeat?' Sequence: duration 1200f, repeat forever under the 2000f parent.':''}${s.derived?' Inferred parent duration is a proposed option.':''}`;
+    }
+    function restore(saved) { if(!saved || !scenarios[saved.scenario]) return; select.value=saved.scenario; zoom.value=saved.zoom||1; render(); pan.value=saved.pan||0; frame.value=saved.frame||0; render(); }
+    function changed() { render(); if(window.openai?.setWidgetState) { persisted={...persisted,[key]:{scenario:select.value,zoom:Number(zoom.value),pan:Number(pan.value),frame:Number(frame.value)}}; window.openai.setWidgetState({modelContent:{timelineDesign:product.dataset.layout,scenario:select.value},privateContent:persisted}).catch(()=>{}); } }
+    select.addEventListener('change',()=>{pan.value=0;frame.value=0;changed();});
+    [zoom,pan,frame].forEach(control=>control.addEventListener('input',changed));
+    render();
+    restore(persisted[key]);
+    window.addEventListener('openai:set_globals',event=>{const state=event.detail?.globals?.widgetState; if(state) { persisted=state.privateContent||{}; restore(persisted[key]); }});
+    if(globalThis.Tweak) { const tweak=new Tweak({container:product,onChange:render}); tweak.addSlider(design,'rowSpacing',{label:'Lane spacing',min:40,max:58,step:2,unit:'px'}); }
+  });
+})();
+</script>

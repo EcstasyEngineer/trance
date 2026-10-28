@@ -1,0 +1,10 @@
+root sequence: elapsed=1200 authored_length=2000 complete=1; A[0,600) B[600,1200)
+nested sequence under parallel: elapsed=2000 authored_length=2000 complete=1; A[0,600) B[600,1200) inactive[1200,2000)
+clipped sequence: elapsed=1000 authored_length=1000 complete=1; A[0,600) B[600,1000)
+explicit repeat 2: elapsed=2400 authored_length=2000 complete=1; A[0,600) B[600,1200) A[1200,1800) B[1800,2400)
+explicit cadence 1200: elapsed=2000 authored_length=2000 complete=1; A[0,600) B[600,1200) A[1200,1800) B[1800,2000)
+parallel finite children: elapsed=2000 authored_length=2000 complete=1; AB[0,600) inactive[600,2000)
+explicit nested forever: elapsed=2000 authored_length=2000 complete=1; A[0,600) B[600,1200) A[1200,1800) B[1800,2000)
+1000 parent, 400 plus 400: elapsed=1000 authored_length=1000 complete=1; A[0,400) B[400,800) inactive[800,1000)
+nested omitted sequential duration: elapsed=2000 authored_length=2000 complete=1; A[0,600) B[600,1200) inactive[1200,2000)
+PASS native parse -> compile -> scheduler: nine cases, two inference rejections, and exact boundaries

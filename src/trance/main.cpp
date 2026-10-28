@@ -1426,10 +1426,10 @@ int export_archive(const std::string& session_path, const std::string& archive_p
 DEFINE_string(export_archive, "", "export archive to this path");
 DEFINE_string(variables, "", "semicolon-separated list of key=value variable assignments");
 DEFINE_string(visual, "",
-              "force every visual selection to this one built-in (by its v3 name: accelerate, "
+              "force every visual selection to this one built-in (by name: accelerate, "
               "slow_flash, sub_text, flash_text, simple, super_parallel, animation, super_fast).");
 DEFINE_string(pattern, "",
-              "force every visual selection to a single v3 pattern loaded from this source file "
+              "force every visual selection to a V4 text or JSON pattern loaded from this file "
               "(parsed the same way as a program's custom_visual_pattern). Themes still come from "
               "the session/program as normal -- only the visual schedule is overridden. Mutually "
               "exclusive with --visual.");

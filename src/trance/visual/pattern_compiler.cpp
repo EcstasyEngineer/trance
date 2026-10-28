@@ -19,32 +19,26 @@ namespace
 
 namespace
 {
-  Cycler* compile_impl(const pattern::Node& n, const pattern::MakeAction& make_action,
-                       pattern::NodeMap* node_map)
+  std::unique_ptr<Cycler> compile_impl(pattern::Node n, const pattern::MakeAction& make_action,
+                                      pattern::NodeMap* node_map)
   {
-    using pattern::Node;
-    Cycler* c = nullptr;
-    auto compile_children = [&](std::vector<Cycler*>& kids) {
-      kids.reserve(n.children.size());
-      for (const auto& k : n.children) {
-        kids.push_back(compile_impl(k, make_action, node_map));
-      }
-    };
-    std::vector<Cycler*> kids;
-    compile_children(kids);
     auto entry = make_action ? make_action(n) : std::function<void()>{};
-    auto* occurrence = new OccurrenceCycler{n, std::move(entry), std::move(kids)};
-    if (node_map && !n.id.empty()) (*node_map)[n.id + "_local"] = occurrence->local_clock();
-    c = occurrence;
-
-    if (!n.phase.empty()) {
-      c->set_phase(n.phase.c_str());
-    }
-    if (n.image_slot != pattern::Slot::None) {
-      c->set_image_slot(to_hint(n.image_slot), n.image_label.c_str());
-    }
-    if (node_map && !n.id.empty()) {
-      (*node_map)[n.id] = c;
+    std::vector<std::unique_ptr<Cycler>> kids;
+    kids.reserve(n.children.size());
+    for (auto& child : n.children)
+      kids.push_back(compile_impl(std::move(child), make_action, node_map));
+    n.children.clear();
+    const auto id = n.id;
+    const auto phase = n.phase;
+    const auto slot = n.image_slot;
+    const auto label = n.image_label;
+    n.effects.clear();
+    auto c = std::make_unique<OccurrenceCycler>(std::move(n), std::move(entry), std::move(kids));
+    if (!phase.empty()) c->set_phase(phase.c_str());
+    if (slot != pattern::Slot::None) c->set_image_slot(to_hint(slot), label.c_str());
+    if (node_map && !id.empty()) {
+      (*node_map)[id + "_local"] = c->local_clock();
+      (*node_map)[id] = c.get();
     }
     return c;
   }
@@ -54,16 +48,19 @@ namespace pattern
 {
   Cycler* compile(const Node& n, const MakeAction& make_action, NodeMap& node_map)
   {
-    return compile_impl(n, make_action, &node_map);
+    NodeMap pending;
+    auto result = compile_impl(n, make_action, &pending);
+    for (const auto& entry : pending) node_map[entry.first] = entry.second;
+    return result.release();
   }
 
   Cycler* compile(const Node& n, const MakeAction& make_action)
   {
-    return compile_impl(n, make_action, nullptr);
+    return compile_impl(n, make_action, nullptr).release();
   }
 
   Cycler* compile(const Node& n)
   {
-    return compile_impl(n, MakeAction{}, nullptr);
+    return compile_impl(n, MakeAction{}, nullptr).release();
   }
 }

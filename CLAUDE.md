@@ -1,7 +1,7 @@
 # Working in this repository
 
-Trance is a C++17/SFML 3 visual media player with JSON sessions, a v3 pattern
-language, an ImGui editor, audio/entrainment, desktop overlays, TCP commands,
+Trance is a C++17/SFML 3 visual media player with JSON sessions, V4 text/AST
+patterns, browser and ImGui editors, audio/entrainment, desktop overlays, TCP commands,
 MCP over stdio, and an optional OpenXR output. There is one product executable
 and one renderer/window. Read the [architecture](docs/architecture.md) for the
 code map and the [README](README.md) for user-facing setup.
@@ -12,7 +12,7 @@ code map and the [README](README.md) for user-facing setup.
   to a special case for one built-in pattern.
 - Follow the supported CMake presets. Do not add bespoke build scripts or new
   build configurations; the configurations are Debug and Release.
-- This single-developer repository normally works on `master`. Do not invent a
+- This single-developer repository normally works on `main`. Do not invent a
   branch/review workflow unless the user requests one.
 - Keep new MSVC code warning-clean: the project uses `/W3 /WX`. Linux uses
   `-Wall -Wextra` without global `-Werror`.
@@ -44,9 +44,9 @@ skip is not media coverage.
 
 `--lint` parses/compiles built-ins and optional custom patterns, then samples
 render expressions at three schedule positions with no-op effects. It is not a
-formal proof or complete runtime test. `phase_execution_test` checks execution
-and clocks with an effect recorder; other CTests cover playlists, JSON and
-ThemeBank. See [validation coverage](docs/architecture-maturity.md).
+formal proof or complete runtime test. Native V4 tests check parsing, execution,
+clocks, text round-trips and recorded rendering; other CTests cover playlists,
+JSON and ThemeBank. See [validation coverage](docs/architecture-maturity.md).
 The live socket QA harness is `tests/qa_command_channel.py`, outside CTest.
 
 ## Visual architecture and invariants
@@ -54,22 +54,24 @@ The live socket QA harness is `tests/qa_command_channel.py`, outside CTest.
 The pipeline is:
 
 ```text
-v3 source -> pattern::Node + RenderStmt -> Cycler tree + registers -> render evaluation
+V4 text -> JSON AST -> pattern::Node + RenderStmt -> Cycler tree + captures -> render evaluation
 ```
 
-- `pattern_parser_v3.cpp` is the only language parser. Built-ins use that same
-  path in `builtin_patterns_v3.cpp`; there is no fallback to handwritten visual
-  classes or the retired SuperFast state machine.
+- `pattern_text_v4.cpp` provides the deliberately small text frontend;
+  `pattern_parser_v4.cpp` validates the shared AST. Built-ins in
+  `builtin_patterns_v4.cpp` use that native path. Text only exposes features used
+  by those eight recipes plus the explicit child completion policy extension.
+  V3 source is rejected. Unsupported JSON must never be formatted lossily.
 - `pattern_compiler.cpp` maps schedule nodes to runtime cyclers.
   `CompiledVisual` executes ordered effects; `render_eval` reads clocks and
   registers to draw. Keep scheduling and rendering separate.
-- Local occurrence ownership and clock selection are separate. A child retains
-  its schedule when a curve reads an ancestor with `over NAME`. A pattern owns
-  exactly its declared `for Nf` span per iteration; nested cadence bodies restart
-  with their cadence, and partial final cuts are clipped. Inactive burst
-  branches do not advance children; re-entry restarts their schedule clocks.
-  A base phase has no known endpoint, so normalized base motion needs an
-  explicit timed child or a finite named ancestor.
+- Local occurrence ownership and modulation clocks are separate. A curve can
+  read an ancestor without changing its schedule. Independent sequences may end
+  early while retaining their authored clock span. Loop children and wait for
+  children are mutually exclusive policies, not booleans. Wait uses exact finite
+  child completion; do not sample ahead or invent unknown totals. Cadence bodies
+  restart with cadence, and parent bounds clip descendants. Report inactive and
+  clipped spans without equating child inactivity with blank pixels.
 - Re-entry does not mean all scalar/image state is erased. State lifetime must
   be specified and tested independently from clock reset.
 - Grammar features must lower to concrete schedule, effect and render data.
@@ -81,16 +83,18 @@ v3 source -> pattern::Node + RenderStmt -> Cycler tree + registers -> render eva
 - Theme content selection stays within that theme and its explicit inheritance.
   Still/animation requests can fall back to the other kind, then to the side's
   last good frame. Preserve both isolation and fallback behavior.
-- Captured live images refresh on theme-generation changes; `copy` images are
-  snapshots and must retain their outgoing content for crossfades.
+- Each captured image keeps its image, requested slot, generation and readiness
+  together. Failed refresh retains the drawable image and retries. Flash Text
+  keeps an opaque base under the phase-shifted overlay; opposing source-over
+  fades alone do not guarantee full image coverage.
 - Multiple output passes must not advance schedules or accumulating render
   state multiple times. Content ticks, playback elapsed time, animation frame
   delays, and audio timing are distinct.
 - Built-ins preserve useful visual intent without requiring old frame-by-frame
   parity. Test the desired observable behavior, not a frozen compiled-tree shape.
 
-Syntax: [spec-grammar-v3.md](docs/spec-grammar-v3.md).
-Recipes: [authoring-v3-patterns.md](docs/authoring-v3-patterns.md).
+Syntax: [spec-grammar-v4.md](docs/spec-grammar-v4.md).
+Text: [v4-text-grammar.md](docs/v4-text-grammar.md).
 Runtime model: [engine-today.md](docs/engine-today.md).
 
 ## Session and UI boundaries

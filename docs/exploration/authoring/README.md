@@ -1,7 +1,8 @@
 # V4 visual composer
 
 Open the [hosted composer](https://ecstasyengineer.github.io/trance/) to edit all
-eight built-ins, compose your own visual and export a V4 `.pattern` JSON file.
+eight built-ins, compose your own visual and export a V4 text `.pattern` file or
+JSON AST. Text is the default view; unsupported advanced forms stay in JSON.
 The hosted page does not require a running player. It performs structural checks;
 use the native player for authoritative compilation and playback.
 
@@ -28,7 +29,7 @@ This wrapper is a lifetime convenience, not an image-storage requirement.
 
 Drag headers to move or reorder pieces. Select a block to edit, duplicate or
 delete it; undo and redo preserve the AST. Import/export reads and writes the same
-canonical JSON used by the native player. Full JSON remains editable, and invalid
+semantic AST used by the native player. Full JSON remains editable, and invalid
 drafts stay visible rather than being replaced with the last valid document.
 
 Timing controls include duration, sampled duration, repetition, cadence, ramps
@@ -37,6 +38,18 @@ cooldown and optional self-selection; child edges can exit by probability on a
 specified check interval. There are no default/interrupt phases or public
 controller clock names. Motion uses constants, curves, triangles and sums with
 local, scene or ancestor scopes.
+
+The Children selector is mutually exclusive: Independent, Loop children, or
+Wait for children. Independent reports exact inactive/clipped spans. Loop cycles
+the sequence or individual parallel children to their owner's boundary. Wait
+removes owner timing and uses exact finite timed children; unresolved lifetimes
+are rejected. Choosing a type never adds wrappers: use the explicit wrapping
+action and choose its frame count when validation calls for timed outputs.
+
+The timeline shares one proportional content-frame axis across nested lanes.
+Use the whole-pattern overview, zoom, pan and frame inspector; selecting a bar
+selects its block. Random/sample-controlled internals are labeled unresolved.
+It is a bounded schedule view, not animated media playback or a pixel guarantee.
 
 ## Media and built-ins
 

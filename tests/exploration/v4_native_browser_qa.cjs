@@ -11,13 +11,25 @@ const {chromium} = require('playwright');
     assert.equal(await page.locator('.palette-piece').count(),7);
     assert.deepEqual(await page.locator('.palette-piece').evaluateAll(es=>es.slice(0,1).map(e=>e.dataset.kind)),['parallel']);
     assert.equal(await page.locator('script[src="app.js"]').count(),0);
+    assert.equal(await page.inputValue('#source-format'),'text');
     for(let i=0;i<8;i++) {
       await page.selectOption('#builtin-picker',String(i));
-      const ast=JSON.parse(await page.inputValue('#source'));
+      assert.equal(await page.inputValue('#source-format'),'text');
+      const ast=await page.evaluate(()=>window.TranceV4Text.parse(document.querySelector('#source').value));
       assert.equal(ast.version,4);assert.ok(ast.root.kind);
       await page.click('#validate');
       await page.waitForFunction(()=>/compilation (passed|failed)/.test(document.querySelector('#validation-summary').textContent));
       assert.match(await page.locator('#validation-summary').textContent(),/passed/,`Built-in ${i}: ${await page.locator('#diagnostics').textContent()}`);
+    }
+    await page.selectOption('#source-format','json');
+    // Both policy schedules lower through the same canonical native AST route.
+    const finite=duration=>({kind:'parallel',duration,children:[{node:{op:'image',source:'primary',visibility:[0,1]}}]});
+    for(const policy of ['wait','loop']){
+      const root={kind:'sequential',child_mode:policy,children:[{node:finite(400)},{node:finite(400)}],...(policy==='loop'?{duration:1000}:{})};
+      await page.fill('#source',JSON.stringify({version:4,root}));await page.click('#apply-source');await page.click('#validate');
+      await page.waitForFunction(()=>/compilation (passed|failed)/.test(document.querySelector('#validation-summary').textContent));
+      assert.match(await page.locator('#validation-summary').textContent(),/passed/,await page.locator('#diagnostics').textContent());
+      assert.match(await page.locator('#timeline').textContent(),policy==='wait'?/authored axis 800f/:/authored axis 1000f/);
     }
     await page.click('#new-document');
     await page.locator('.palette-piece[data-kind="image"] button').click();
@@ -47,6 +59,8 @@ const {chromium} = require('playwright');
     await page.click('#new-document');
     await page.locator('.palette-piece[data-kind="parallel"]').dragTo(page.locator('.drop-slot.empty'));
     await page.locator('#inspector select[data-field="Pattern type"]').selectOption('random');
+    assert.equal(JSON.parse(await page.inputValue('#source')).root.children[0].node.children[0].node.op,'image');
+    await page.getByRole('button',{name:'Give outputs a duration',exact:true}).click();
     let ast=JSON.parse(await page.inputValue('#source'));assert.equal(ast.root.children[0].node.kind,'random');
     await page.locator('.block[data-path="[0]"] > .block-head').click();
     await page.locator('#inspector input[data-field="allow self"]').check();
@@ -55,6 +69,7 @@ const {chromium} = require('playwright');
     const rootEnd=page.locator('.block[data-path="[]"] > .block-children > .drop-slot').last();
     await page.locator('.palette-piece[data-kind="parallel"]').dragTo(rootEnd);
     await page.locator('#inspector select[data-field="Pattern type"]').selectOption('sequential');
+    await page.getByRole('button',{name:'Give outputs a duration',exact:true}).click();
     ast=JSON.parse(await page.inputValue('#source'));assert.equal(ast.root.children[1].node.kind,'sequential');
     await page.locator('.block[data-path="[1]"] > .block-head').dragTo(page.locator('.block[data-path="[0]"] > .block-children > .drop-slot').last());
     ast=JSON.parse(await page.inputValue('#source'));assert.equal(ast.root.children.length,1);assert.equal(ast.root.children[0].node.children[1].node.kind,'sequential');
@@ -88,6 +103,6 @@ const {chromium} = require('playwright');
     await page.click('#validate');await page.waitForFunction(()=>/compilation (passed|failed)/.test(document.querySelector('#validation-summary').textContent));
     assert.match(await page.locator('#validation-summary').textContent(),/passed/,await page.locator('#diagnostics').textContent());
     assert.deepEqual(errors,[]);
-    console.log('PASS: eight native V4 built-ins compile; drag nesting/moving; selector editing; sampled duration and chance exit; duplicate/delete/undo; JSON import/export; invalid source retained.');
+    console.log('PASS: eight readable-text native V4 built-ins compile; Wait and Loop policies + image visibility compile; explicit conversion wrapping; drag nesting/moving; selector editing; sampled duration and chance exit; duplicate/delete/undo; JSON import/export; invalid source retained.');
   } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

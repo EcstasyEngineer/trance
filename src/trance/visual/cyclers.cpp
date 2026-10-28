@@ -63,13 +63,11 @@ float Cycler::progress() const
   return static_cast<float>(frame()) / length();
 }
 
-OccurrenceCycler::OccurrenceCycler(const pattern::Node& spec, std::function<void()> entry,
-                                   std::vector<Cycler*> children)
-  : _spec(spec), _entry(std::move(entry)), _local(*this)
+OccurrenceCycler::OccurrenceCycler(pattern::Node spec, std::function<void()> entry,
+                                   std::vector<std::unique_ptr<Cycler>> children)
+  : _spec(std::move(spec)), _entry(std::move(entry)), _children(std::move(children)), _local(*this)
 {
-  _spec.children.clear();
-  for (auto* child : children) _children.emplace_back(child);
-  _span = std::max(1u, spec.length);
+  _span = std::max(1u, _spec.length);
   activate(false);
 }
 
@@ -206,17 +204,25 @@ void OccurrenceCycler::run_body(bool trigger_actions)
   for (auto& child : _children) child->activate(false);
   if (trigger_actions && !_body_position && _entry) _entry();
   if (_spec.occurrence_kind == Composition::Parallel) {
-    for (auto& child : _children) if (!child->complete()) {
-      child->activate(true);
-      child->advance(trigger_actions);
+    for (uint32_t i = 0; i < _children.size(); ++i) {
+      auto& child = _children[i];
+      if (child->complete() && _spec.child_mode == pattern::Node::ChildMode::Loop)
+        start_child(i, trigger_actions);
+      if (!child->complete()) {
+        child->activate(true);
+        child->advance(trigger_actions);
+      }
     }
     return;
   }
   if (_children.empty()) return;
   if (_spec.occurrence_kind == Composition::Sequential) {
     if (_children[_selected]->complete()) {
-      if (_selected + 1 == _children.size()) return;
-      start_child(++_selected, trigger_actions);
+      if (_selected + 1 == _children.size()) {
+        if (_spec.child_mode != pattern::Node::ChildMode::Loop) return;
+        _selected = 0;
+        start_child(_selected, trigger_actions);
+      } else start_child(++_selected, trigger_actions);
     }
   } else {
     bool transition = _children[_selected]->complete();
@@ -262,7 +268,7 @@ void OccurrenceCycler::advance(bool trigger_actions)
   ++_body_position;
   ++_position;
   if (_elapsed < std::numeric_limits<uint32_t>::max()) ++_elapsed;
-  const bool sequence_end = !_spec.cadence && _ramp.empty() &&
+  const bool sequence_end = _spec.child_mode != pattern::Node::ChildMode::Loop && !_spec.cadence && _ramp.empty() &&
       _spec.occurrence_kind == pattern::Node::Composition::Sequential && !_children.empty() &&
       _selected + 1 == _children.size() && _children.back()->complete();
   if (_position >= _span || sequence_end) {
