@@ -18,11 +18,11 @@
   function directCadence(n){return n.kind==='parallel'&&n.cadence!==undefined&&n.children.every(e=>!e.node.kind&&!e.exit);}
   function measure(n,inherited){
     if(!n.kind)return {span:inherited,end:inherited};
-    const span=n.duration===undefined?(inherited===undefined?G.rootDuration(n):inherited):n.duration;
+    const span=n.duration==='inherit'?G.deriveDuration(n).frames:n.duration===undefined?(inherited===undefined?G.rootDuration(n):inherited):n.duration;
     if((n.offset!==undefined&&!directCadence(n))||n.repeat==='forever')return {span:finite(span)?span:null,end:null,reason:'Phase or unbounded timing needs a native trace'};
-    if(!finite(span))return {span:null,end:null,reason:'Inherit needs a parent duration or finite timed subpatterns'};
+    if(!finite(span))return {span:null,end:null,reason:n.duration==='inherit'||inherited===undefined?G.deriveDuration(n).reason:'Parent frames needs an enclosing frame window'};
     let end=span;
-    if(n.kind==='sequential'&&!n.loop_subpatterns&&n.cadence===undefined){
+    if(n.kind==='sequential'&&n.duration!=='inherit'&&!n.loop_subpatterns&&n.cadence===undefined){
       let cursor=0;
       for(const edge of n.children){
         if(cursor>=span)break;

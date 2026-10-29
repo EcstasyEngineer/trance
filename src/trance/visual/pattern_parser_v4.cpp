@@ -85,26 +85,38 @@ namespace
     uint32_t g = std::gcd(a, b);
     return {a / g, b / g};
   }
+  std::optional<uint32_t> derived_span(const J& j, uint32_t depth = 0);
   // Exact finite completion within a known owner window; no scheduler/RNG probing.
-  std::optional<uint64_t> lifetime(const J& j, uint32_t inherited = 0)
+  std::optional<uint64_t> lifetime(const J& j, uint32_t inherited = 0, uint32_t depth = 0)
   {
+    if (depth > 64) return {};
     if (!j.is_object() || !j.contains("kind") || !j.contains("children") ||
         !j["children"].is_array() || j.contains("offset")) return {};
     if (j.contains("repeat") && !j["repeat"].is_number_integer()) return {};
     uint32_t cap = inherited;
+    bool derived = false;
     if (j.contains("duration")) {
-      if (!j["duration"].is_number_integer()) return {};
-      cap = integer(j["duration"], "$.duration", 1);
+      if (j["duration"] == "inherit") {
+        const auto span = derived_span(j, depth);
+        if (!span) return {};
+        cap = *span;
+        derived = true;
+      } else {
+        if (!j["duration"].is_number_integer()) return {};
+        cap = integer(j["duration"], "$.duration", 1);
+      }
     }
     if (!cap) return {};
     uint64_t extent = cap;
-    if (j.value("kind", std::string{}) == "sequential" &&
+    // A derived sequence cap already is the exact finite child sum. Rewalking
+    // it here would duplicate recursive derivation at every nesting level.
+    if (!derived && j.value("kind", std::string{}) == "sequential" &&
         !j.value("loop_subpatterns", false) && !j.contains("cadence")) {
       extent = 0;
       for (const auto& edge : j["children"]) {
         if (extent >= cap) break;
         if (!edge.is_object() || !edge.contains("node")) return {};
-        auto length = lifetime(edge["node"], cap - static_cast<uint32_t>(extent));
+        auto length = lifetime(edge["node"], cap - static_cast<uint32_t>(extent), depth + 1);
         if (!length) return {};
         extent = std::min<uint64_t>(cap, extent + *length);
       }
@@ -113,15 +125,16 @@ namespace
     if (!extent || extent > limit) return {};
     return extent;
   }
-  std::optional<uint32_t> inherited_root_span(const J& j)
+  std::optional<uint32_t> derived_span(const J& j, uint32_t depth)
   {
+    if (depth > 64) return {};
     if (!j.contains("children") || !j["children"].is_array() || j["kind"] == "random") return {};
     uint64_t span = 0;
     for (const auto& edge : j["children"]) {
       if (!edge.is_object() || !edge.contains("node")) return {};
       const auto& child = edge["node"];
       if (child.contains("op")) continue;
-      const auto length = lifetime(child);
+      const auto length = lifetime(child, 0, depth + 1);
       if (!length) return {};
       if (j["kind"] == "sequential") span += *length;
       else span = std::max(span, *length);
@@ -409,10 +422,16 @@ namespace
         if (!j["loop_subpatterns"].is_boolean()) fail(p + ".loop_subpatterns", "expected boolean");
         n.loop_subpatterns = j["loop_subpatterns"].get<bool>();
       }
-      if (j.contains("duration")) n.length = integer(j["duration"], p + ".duration", 1);
+      if (j.contains("duration")) {
+        if (j["duration"] == "inherit") {
+          const auto span = derived_span(j, depth);
+          if (!span) fail(p + ".duration", "Inherit needs finite timed subpatterns with independent durations");
+          n.length = *span;
+        } else n.length = integer(j["duration"], p + ".duration", 1);
+      }
       if (!n.length && !inherited) {
-        const auto span = inherited_root_span(j);
-        if (!span) fail(p + ".duration", "Inherit needs a parent duration or finite timed subpatterns");
+        const auto span = derived_span(j, depth);
+        if (!span) fail(p + ".duration", "Root needs fixed frames or finite timed subpatterns");
         n.length = *span;
       }
       uint32_t span = n.length ? n.length : inherited;

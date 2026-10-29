@@ -42,8 +42,11 @@ local, scene or ancestor scopes.
 **Subpattern behavior** contains a **Loop subpatterns** checkbox. When checked,
 it cycles a sequence or restarts individual parallel subpatterns to their owner's
 boundary. When unchecked, subpatterns complete independently; diagnostics show
-inactive and clipped spans. **Inherit** uses the enclosing pattern's frame window,
-or finite timed subpatterns to determine the root length. There is no separate
+inactive and clipped spans. **Inherit** continuously calculates the parent from
+its timed subpatterns: sum for Sequential, maximum for Parallel. It works at
+every level, updates as subpatterns change, and remains linked in exported source.
+For example, 200 + 300 becomes 500; editing 300 to 400 immediately makes 600.
+**Parent frames** retains the existing nested owner-window behavior. There is no separate
 Wait flag or sampled-duration option. Choosing a type never adds wrappers: use the explicit wrapping
 action and choose its frame count when validation calls for timed outputs.
 

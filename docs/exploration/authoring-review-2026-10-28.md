@@ -1,8 +1,9 @@
 # V4 authoring review and implementation handoff
 
 > Historical record of the October 28 implementation. The October 29 simplification
-> replaces its three-way policy with `loop_subpatterns`, labels omitted duration
-> **Inherit**, and removes sampled duration. See the [current timing contract](../spec-grammar-v4.md#timing).
+> replaces its three-way policy with `loop_subpatterns` and removes sampled
+> duration. **Inherit** now derives duration from subpatterns at every level.
+> See the [current timing contract](../spec-grammar-v4.md#timing).
 
 Baseline review at source `b50fbda68d2222e6558400e5f69a78b60a968ba3`, 2026-10-28.
 The follow-up implementation is authorized and included in this working tree.

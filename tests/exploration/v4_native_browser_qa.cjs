@@ -25,6 +25,8 @@ const {chromium} = require('playwright');
     // Inherit and the boolean loop control use the same native AST route.
     const finite=duration=>({kind:'parallel',duration,children:[{node:{op:'image',source:'primary',visibility:[0,1]}}]});
     const cases=[
+      {root:{kind:'sequential',duration:'inherit',children:[{node:finite(200)},{node:finite(300)}]},extent:500},
+      {root:{kind:'parallel',duration:'inherit',children:[{node:finite(200)},{node:finite(300)}]},extent:300},
       {root:{kind:'sequential',children:[{node:finite(400)},{node:finite(400)}]},extent:800},
       {root:{kind:'sequential',loop_subpatterns:true,children:[{node:finite(400)},{node:finite(400)}]},extent:800},
       {root:{kind:'parallel',loop_subpatterns:true,children:[{node:finite(400)},{node:finite(600)}]},extent:600},
@@ -39,6 +41,20 @@ const {chromium} = require('playwright');
       assert.match(await page.locator('#timeline').textContent(),new RegExp('authored axis '+extent+'f'));
       if(inheritedWindow)assert.ok((await page.locator('.timeline-bar[data-path="[1]"]').first().getAttribute('title')).includes(inheritedWindow));
     }
+    const autoTimed=duration=>({kind:'parallel',duration,children:[{node:{op:'image',source:'primary'}}]});
+    const autoRoot={version:4,root:{kind:'parallel',duration:2000,children:[{node:{kind:'sequential',duration:'inherit',children:[{node:autoTimed(200)},{node:autoTimed(300)}]}}]}};
+    await page.fill('#source',JSON.stringify(autoRoot));await page.click('#apply-source');
+    await page.locator('.block[data-path="[0]"] > .block-head').click();assert.match(await page.locator('[data-duration-preview]').textContent(),/500 frames/);
+    await page.click('#validate');await page.waitForFunction(()=>/compilation (passed|failed)/.test(document.querySelector('#validation-summary').textContent));
+    assert.match(await page.locator('#validation-summary').textContent(),/passed/,await page.locator('#diagnostics').textContent());
+    await page.locator('.block[data-path="[0,1]"] > .block-head').click();
+    await page.fill('#inspector [data-field="duration"]','400');await page.locator('#inspector [data-field="duration"]').dispatchEvent('change');
+    await page.locator('.block[data-path="[0]"] > .block-head').click();assert.match(await page.locator('[data-duration-preview]').textContent(),/600 frames/);
+    assert.equal(JSON.parse(await page.inputValue('#source')).root.children[0].node.duration,'inherit');
+    await page.selectOption('#source-format','text');assert.match(await page.inputValue('#source'),/sequence for inherit/);
+    await page.click('#validate');await page.waitForFunction(()=>/compilation (passed|failed)/.test(document.querySelector('#validation-summary').textContent));
+    assert.match(await page.locator('#validation-summary').textContent(),/passed/,await page.locator('#diagnostics').textContent());
+    await page.selectOption('#source-format','json');
     await page.click('#new-document');
     await page.locator('.palette-piece[data-kind="image"] button').click();
     await page.locator('.palette-piece[data-kind="image"]').dragTo(page.locator('.block[data-path="[]"] > .block-children > .drop-slot').last());

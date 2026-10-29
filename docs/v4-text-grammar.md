@@ -1,8 +1,8 @@
 # Compact V4 text
 
 V4 text is a small spelling of the same JSON AST used by the native compiler.
-It covers the features exercised by the eight built-ins and explicit subpattern
-looping. It does not expose every advanced JSON feature. The
+It covers the features exercised by the eight built-ins and the requested
+subpattern timing controls. It does not expose every advanced JSON feature. The
 composer defaults to text; switching an unsupported AST to text reports an error
 and preserves the document. JSON remains an editable interchange format.
 
@@ -28,7 +28,8 @@ child zero and self-selection off. Other random selector policies remain JSON
 features. Keep explicit wrapper patterns: they own duration and modulation clocks.
 
 Header clauses are `id NAME`, `for N`, `repeat N`, `every N`, `phase N`, and
-`loop_subpatterns true|false`. Omit `for` for **Inherit**.
+`loop_subpatterns true|false`. Use `for inherit` to calculate duration from
+subpatterns, keeping that relationship when their durations change.
 Use `every ramp(from,to,steps,early)` for the cadence ramp used by Accelerate.
 Phase is the existing clock offset, not a media preload or inactive delay.
 
@@ -47,10 +48,22 @@ cycle for 256 cooldown 64 {
 ```
 
 `loop_subpatterns true` on parallel/sequence repeats subpatterns to the owner's
-boundary; omitted or `false` lets them complete independently. Inherit uses the
-enclosing pattern's frame window, or derives a root's finite sum/max from timed
-subpatterns. See the [timing contract](spec-grammar-v4.md#timing) for restrictions.
+boundary; omitted or `false` lets them complete independently. Inherit derives
+the finite sum (sequence) or maximum (parallel) from timed subpatterns at every
+level. Omitting `for` on a nested pattern retains the existing parent-window
+behavior. See the [timing contract](spec-grammar-v4.md#timing) for restrictions.
 The former `child_mode` and sampled-duration syntax are rejected.
+
+```text
+v4;
+sequence for inherit {
+  parallel for 200 { image primary; }
+  parallel for 300 { image secondary; }
+}
+```
+
+This lasts 500 frames. Editing the second duration to 400 makes it 600 frames;
+the authored parent remains `for inherit`.
 
 ## Outputs and values
 

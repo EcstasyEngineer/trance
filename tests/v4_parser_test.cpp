@@ -98,7 +98,7 @@ int main()
     require(inferred.ok && inferred.root.length == 3, "inherited max ignores direct outputs");
     auto invalid = inherit; invalid["children"] = J::array({{{"node", image()}}});
     auto unresolved = patternv4::parse(document(invalid).dump());
-    require(!unresolved.ok && unresolved.error.find("$.root.duration: Inherit needs") == 0,
+    require(!unresolved.ok && unresolved.error.find("$.root.duration: Root needs") == 0,
             "unresolved inheritance needs located explanation");
     invalid = inherit; invalid["children"][0]["node"]["duration"] =
         {{"min", 2}, {"max", 4}, {"step", 1}};
@@ -132,6 +132,55 @@ int main()
     clocks.clear(); scheduler.reset(pattern::compile(nested_parse.root, {}, clocks));
     scheduler->advance();
     require(clocks.at("inherited_child")->length() == 9, "parallel child inherits full owner window");
+    // Explicit Inherit derives from children at every level, independently of
+    // the enclosing window, and keeps that resolved clock when clipped.
+    auto automatic = node("sequential"); automatic["duration"] = "inherit";
+    automatic["children"] = J::array({{{"node", node("parallel", 200)}},
+                                     {{"node", node("parallel", 300)}}});
+    auto automatic_parse = patternv4::parse(document(automatic).dump());
+    require(automatic_parse.ok && automatic_parse.root.length == 500, "explicit inherited sum 200+300");
+    auto outer = node("parallel", 2000);
+    outer["children"] = J::array({{{"node", automatic}}});
+    automatic_parse = patternv4::parse(document(outer).dump());
+    require(automatic_parse.ok && automatic_parse.root.children[0].length == 500,
+            "nested explicit inherit does not use enclosing 2000-frame clock");
+    automatic["children"][1]["node"]["duration"] = 400;
+    automatic["loop_subpatterns"] = true;
+    automatic_parse = patternv4::parse(document(automatic).dump());
+    require(automatic_parse.ok && automatic_parse.root.length == 600,
+            "child edit recalculates looping inherited parent bound");
+    auto upper = automatic; upper["kind"] = "parallel";
+    upper["children"] = J::array({{{"node", automatic}}, {{"node", node("parallel", 250)}}});
+    upper["repeat"] = 2;
+    automatic_parse = patternv4::parse(document(upper).dump());
+    require(automatic_parse.ok && automatic_parse.root.length == 600 &&
+            automatic_parse.root.children[0].length == 600 && automatic_parse.root.repeat_count == 2,
+            "nested bottom-up inherit and parallel max with owner repetition");
+    automatic["repeat"] = 2;
+    upper["children"][0]["node"] = automatic;
+    automatic_parse = patternv4::parse(document(upper).dump());
+    require(automatic_parse.ok && automatic_parse.root.length == 1200,
+            "inherited child finite repeats included once in parent span");
+    auto circular = node(); circular["duration"] = "inherit";
+    circular["children"] = J::array({{{"node", inherited_child}}});
+    rejected(document(circular));
+    invalid = node(); invalid["duration"] = "inherit"; rejected(document(invalid));
+    invalid = automatic; invalid["duration"] = "parent"; rejected(document(invalid));
+    invalid = random_mode; invalid.erase("loop_subpatterns"); invalid["duration"] = "inherit";
+    rejected(document(invalid));
+    automatic.erase("repeat"); automatic.erase("loop_subpatterns");
+    outer["duration"] = 100;
+    outer["children"][0]["node"] = automatic;
+    automatic_parse = patternv4::parse(document(outer).dump());
+    require(automatic_parse.ok && automatic_parse.root.children[0].length == 600,
+            "ancestor clipping preserves resolved inherited clock");
+    auto deep_derived = node("parallel", 2);
+    for (unsigned level = 0; level < 40; ++level)
+      deep_derived = {{"kind", "sequential"}, {"duration", "inherit"},
+                      {"children", J::array({{{"node", deep_derived}}})}};
+    const auto deep_parse = patternv4::parse(document(deep_derived).dump());
+    require(deep_parse.ok && deep_parse.root.length == 2,
+            "deep bottom-up derivation remains bounded without duplicate traversal");
     // Fitting requirements and preroll budgets use the actual remaining window.
     auto short_owner = node("sequential", 10);
     auto fitted = node(); fitted.erase("duration");

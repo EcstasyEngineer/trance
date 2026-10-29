@@ -43,8 +43,8 @@ diagnostic rather than silently choosing another visual.
 V4 has three composition kinds: parallel, sequential and random. One occurrence
 scheduler handles their timing, cadence/ramp, phase offsets, explicit repetition,
 and subpattern looping. A finished finite child remains inactive unless its owner
-loops it. Inherit uses the enclosing frame window, or finite timed subpatterns
-to determine the root length. Random patterns expose random or round-robin order,
+loops it. Inherit calculates a pattern's length from its finite timed subpatterns
+at any nesting level. Omitted durations still use the enclosing window. Random patterns expose random or round-robin order,
 self-selection, cooldown and probability checks on child edges.
 
 Local motion clocks are distinct from total elapsed program duration. Structured

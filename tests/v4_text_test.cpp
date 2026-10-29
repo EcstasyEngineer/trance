@@ -96,6 +96,16 @@ int main() {
         "v4; parallel for 4 loop_subpatterns false { image primary; }");
     require(patternv4::format_text_json(explicit_false).find("loop_subpatterns false") != std::string::npos,
             "explicit false loop behavior lost during formatting");
+    const auto automatic_text =
+        "v4; parallel for 2000 { sequence for inherit { parallel for 200 { image primary; } parallel for 300 { image secondary; } } }";
+    const auto automatic_json = patternv4::parse_text_json(automatic_text);
+    require(J::parse(automatic_json)["root"]["children"][0]["node"]["duration"] == "inherit",
+            "text preserves authored inherit choice");
+    require(J::parse(patternv4::parse_text_json(patternv4::format_text_json(automatic_json))) ==
+                J::parse(automatic_json), "explicit inherit text roundtrip");
+    const auto automatic_native = pattern::parse_source(automatic_text);
+    require(automatic_native.ok && automatic_native.root.children.at(0).length == 500,
+            "text explicit inherit resolves at nested level");
     auto unsupported = J::parse(builtin::pattern_source_v4(1)); unsupported["root"]["weight"] = 1;
     auto before = unsupported.dump(); bool failed = false;
     try { patternv4::format_text_json(unsupported.dump()); } catch (const std::exception&) { failed = true; }

@@ -128,7 +128,8 @@ class Reader {
       auto clause = id(); if (!seen.insert(clause).second) fail("Duplicate clause " + clause);
       if (clause == "id") node["id"] = id();
       else if (clause == "for") {
-        node["duration"] = number(true, 1);
+        if (token == "inherit") { next(); node["duration"] = "inherit"; }
+        else node["duration"] = number(true, 1);
       } else if (clause == "repeat") node["repeat"] = number(true, 1);
       else if (clause == "phase") node["offset"] = number(true, 0);
       else if (clause == "every") {
@@ -240,7 +241,7 @@ std::string composition(const J& j, size_t depth, size_t& bytes, const std::stri
   if (j.contains("id")) text += " id " + id(j["id"]);
   if (j.contains("duration")) {
     auto& d = j["duration"];
-    text += " for " + num(d, true, 1);
+    text += d == "inherit" ? " for inherit" : " for " + num(d, true, 1);
   }
   if (j.contains("repeat")) text += " repeat " + num(j["repeat"], true, 1);
   if (j.contains("cadence")) {

@@ -90,7 +90,7 @@
       while (token.value !== '{') {
         const clause = identifier(); if (seen.has(clause)) error('Duplicate clause ' + clause); seen.add(clause);
         if (clause === 'id') node.id = identifier();
-        else if (clause === 'for') node.duration = number(true, 1); else if (clause === 'repeat') node.repeat = number(true, 1);
+        else if (clause === 'for') {if(token.value==='inherit'){node.duration='inherit';next();}else node.duration = number(true, 1);} else if (clause === 'repeat') node.repeat = number(true, 1);
         else if (clause === 'phase') node.offset = number(true, 0);
         else if (clause === 'every') {
           if (token.value === 'ramp') {
@@ -208,7 +208,7 @@
       if (node.children.length > CHILD_LIMIT) fail('maximum children count is 4096');
       let header = '  '.repeat(depth) + prefix + kind;
       if (own(node, 'id')) header += ' id ' + id(node.id);
-      if (own(node, 'duration')) header += ' for ' + num(node.duration, true, 1);
+      if (own(node, 'duration')) header += ' for ' + (node.duration==='inherit'?'inherit':num(node.duration, true, 1));
       if (own(node, 'repeat')) header += ' repeat ' + num(node.repeat, true, 1);
       if (own(node, 'cadence')) {
         if (typeof node.cadence === 'number') header += ' every ' + num(node.cadence, true, 1);

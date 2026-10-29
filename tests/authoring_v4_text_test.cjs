@@ -16,6 +16,8 @@ for (const fixture of fixtures) {
   assert.equal(JSON.stringify(fixture), before, 'format mutated its input');
 }
 const valid = [
+  'v4; sequence for inherit { parallel for 200 { image primary; } parallel for 300 { image primary; } }',
+  'v4; parallel for 2000 { sequence for inherit { parallel for 200 { image primary; } parallel for 300 { image primary; } } }',
   'v4; parallel for 32 { spiral speed 1e-7 -> -2.5E+3; }',
   'v4; parallel for 32 loop_subpatterns true { parallel for 2 { word primary chance 1/3; } }',
   'v4; sequence { parallel for 2 { image either; } }',

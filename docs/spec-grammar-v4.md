@@ -2,8 +2,8 @@
 
 V4 has a [compact text grammar](v4-text-grammar.md) and a JSON abstract syntax tree
 (AST). Both feed the same native compiler and visual composer. Text deliberately
-covers only features exercised by the eight built-ins, plus explicit subpattern
-looping. Advanced JSON remains supported; formatting an unsupported
+covers only features exercised by the eight built-ins, plus the requested
+subpattern timing controls. Advanced JSON remains supported; formatting an unsupported
 AST as text reports an error without dropping fields. There is no intermediate
 V3 source generation or V3 parser. Unknown properties are errors; V3 is rejected.
 Existing session JSON remains a separate format; upgrading visual patterns does
@@ -72,19 +72,28 @@ timed wrappers give instantaneous outputs that lifetime.
 
 | Property | Meaning |
 | --- | --- |
-| `duration` | Positive integer frames for one iteration. Omit for Inherit. |
+| `duration` | Positive integer frames for one iteration, or `"inherit"` to calculate from subpatterns. |
 | `repeat` | Positive iteration count, or `"forever"` under a bounded owner. |
 | `cadence` | Positive interval between body activations, or `{ "ramp": { "from": 64, "to": 8, "steps": 8, "ease": "linear" } }`. |
 | `offset` | Phase shift in frames; it does not preload images or mean an inactive delay. |
 | `id` | Optional ancestor clock name for structured curves. |
 | `loop_subpatterns` | Boolean on parallel/sequential, default `false`. |
 
-**Inherit** uses the enclosing pattern's available frame window. At the root,
-where there is no enclosing pattern, finite timed subpatterns supply the length:
-the sum for a sequence or maximum for parallel. Direct outputs follow their
-owner and do not supply a duration. A root with no resolvable finite length is
-an error. Random exits, forever repetition and phase shifts cannot supply that
-root bound; use a fixed duration when the length cannot be determined.
+**Inherit** calculates this pattern's duration from its finite timed subpatterns:
+the sum for a sequence or maximum for parallel. For example, sequential
+subpatterns of 200 and 300 frames give their parent 500 frames. Changing 300 to
+400 immediately changes the parent to 600. This works at every nesting level;
+the source keeps `"duration": "inherit"`, and compilation resolves its frame
+count. Nested Inherit modes resolve from the bottom up. Finite child repeats
+count toward the total. Direct outputs follow their owner and do not supply a
+duration. Random exits, forever repetition and unresolved child lifetimes do not
+provide an exact total; use fixed frames when the length cannot be determined.
+
+Omitting `duration` retains the existing owner-window behavior, called **Parent
+frames** in the nested editor. At the root, where there is no parent, omission
+derives a finite subpattern total. A duration-omitted child cannot supply an
+independent total for Inherit because its window depends on that same parent;
+give that child fixed frames or its own Inherit mode.
 
 A parent clips its descendants. Finished finite children stay inactive until their owner restarts
 them; a sequence may finish before its authored cap while retaining that cap as
@@ -102,9 +111,9 @@ duration; looping controls what happens when a subpattern completes early.
 There is no separate Wait setting or frame-calculation action. Sampled durations
 and the former `child_mode` field are rejected.
 
-An inherited window can shrink on later loop or cadence entries. Envelopes need
+A parent-provided window can shrink on later loop or cadence entries. Envelopes need
 a known fitting local clock, and phase pre-roll has a fixed execution budget.
-When those cannot be established for variable inheritance, validation asks for
+When those cannot be established for a variable parent window, validation asks for
 Fixed frames or a fixed cadence. An explicit clock may still be intentionally
 clipped by its parent.
 

@@ -24,8 +24,10 @@ Timing properties belong to occurrences: duration, repetition,
 cadence, ramp and phase offset. A bounded parent clips its descendants. A completed
 child stays inactive until an owner restart unless `loop_subpatterns` is true.
 That boolean cycles sequences or restarts completed parallel children to the
-parent boundary. Omitted duration means Inherit: use the enclosing window, or
-derive a finite root sum/max from timed subpatterns. Unknown root lifetimes fail
+parent boundary. `duration: "inherit"` derives the finite sum/max from timed
+subpatterns recursively, then compiles to an integer clock span. The source
+retains the mode so edits recalculate the duration. Omitted duration retains the
+enclosing-window behavior, or finite root derivation. Unknown root lifetimes fail
 validation. An enclosing duration does not silently repeat a completed sequence.
 Exact inactive/clipped spans are warnings.
 
