@@ -75,7 +75,7 @@ void sequential_and_repeat()
 void child_loops()
 {
   auto seq = node(Kind::Sequential, 11, "root");
-  seq.child_mode = Node::ChildMode::Loop;
+  seq.loop_subpatterns = true;
   seq.children = {node(Kind::Parallel, 2, "a"), node(Kind::Parallel, 3, "b")};
   Run run(seq); run.tick(11);
   check(run.root->complete() && run.root->elapsed_length() == 11, "loop keeps owner cap");
@@ -147,10 +147,10 @@ void selectors()
   get_mersenne_twister().seed(32); Run rational(n); rational.tick(50);
   check(rational.count("b") > 0, "rational chance executes transitions");
 }
-void clocks_offsets_sampling()
+void clocks_offsets()
 {
   auto shifted = node(Kind::Parallel, 12, "shifted"); shifted.cadence = 4; shifted.offset = 2;
-  auto hidden = selector(true); hidden.length = 0; hidden.duration_max = 8;
+  auto hidden = selector(true); hidden.length = 0;
   hidden.child_exits = {{true, 1, 2, 1}, {true, 1, 2, 1}, {true, 1, 2, 1}};
   shifted.children.push_back(hidden);
   get_mersenne_twister().seed(123);
@@ -169,14 +169,6 @@ void clocks_offsets_sampling()
   n.children.push_back(node(Kind::Parallel, 0, "inherited"));
   Run inherited(n); inherited.tick(12);
   check(inherited.count("inherited") == 3, "inherited children restart on cadence boundary");
-  n = node(Kind::Parallel, 30, "root");
-  auto sample = node(Kind::Parallel, 4, "sample"); sample.duration_max = 10;
-  sample.duration_step = 2;
-  n.children.push_back(sample); Run sampled(n); sampled.tick();
-  auto* clock = sampled.clocks.at("sample"); const auto duration = clock->length();
-  check(duration >= 4 && duration <= 10 && duration % 2 == 0, "sample aligned inclusive range");
-  sampled.tick(duration - 1); check(clock->length() == duration, "duration sampled once per activation");
-  sampled.tick(10); check(sampled.count("sample") == 1 && !clock->active(), "sampled child tail inactive");
   n = node(Kind::Parallel, 24, "root"); n.cadence_ramp_from = 8;
   n.cadence_ramp_to = 2; n.cadence_ramp_steps = 4;
   Run ramp(n); ramp.tick(24);
@@ -187,7 +179,7 @@ int main()
 {
   try {
     nesting_and_completion(); sequential_and_repeat(); child_loops(); throwing_factory();
-    selectors(); clocks_offsets_sampling();
+    selectors(); clocks_offsets();
     std::cout << "V4 native occurrence runtime: all checks passed\n"; return 0;
   } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

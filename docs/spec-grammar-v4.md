@@ -2,8 +2,8 @@
 
 V4 has a [compact text grammar](v4-text-grammar.md) and a JSON abstract syntax tree
 (AST). Both feed the same native compiler and visual composer. Text deliberately
-covers only features exercised by the eight built-ins, plus explicit child
-completion policies. Advanced JSON remains supported; formatting an unsupported
+covers only features exercised by the eight built-ins, plus explicit subpattern
+looping. Advanced JSON remains supported; formatting an unsupported
 AST as text reports an error without dropping fields. There is no intermediate
 V3 source generation or V3 parser. Unknown properties are errors; V3 is rejected.
 Existing session JSON remains a separate format; upgrading visual patterns does
@@ -72,33 +72,41 @@ timed wrappers give instantaneous outputs that lifetime.
 
 | Property | Meaning |
 | --- | --- |
-| `duration` | Positive integer frames for one iteration, or `{ "min": 64, "max": 128, "step": 8 }` sampled once per activation. |
-| `repeat` | Positive iteration count, or `"forever"` under a bounded owner. Requires an explicit duration. |
+| `duration` | Positive integer frames for one iteration. Omit for Inherit. |
+| `repeat` | Positive iteration count, or `"forever"` under a bounded owner. |
 | `cadence` | Positive interval between body activations, or `{ "ramp": { "from": 64, "to": 8, "steps": 8, "ease": "linear" } }`. |
 | `offset` | Phase shift in frames; it does not preload images or mean an inactive delay. |
 | `id` | Optional ancestor clock name for structured curves. |
-| `child_mode` | On parallel/sequential: `independent` (default), `loop`, or `wait`. |
+| `loop_subpatterns` | Boolean on parallel/sequential, default `false`. |
 
-The root needs a finite lifetime. In independent mode a parent clips its
-descendants. Finished finite children stay inactive until their owner restarts
+**Inherit** uses the enclosing pattern's available frame window. At the root,
+where there is no enclosing pattern, finite timed subpatterns supply the length:
+the sum for a sequence or maximum for parallel. Direct outputs follow their
+owner and do not supply a duration. A root with no resolvable finite length is
+an error. Random exits, forever repetition and phase shifts cannot supply that
+root bound; use a fixed duration when the length cannot be determined.
+
+A parent clips its descendants. Finished finite children stay inactive until their owner restarts
 them; a sequence may finish before its authored cap while retaining that cap as
 its modulation-clock span. A longer parent does not implicitly repeat a sequence.
 Exact inactive or clipped spans produce advisory diagnostics with AST paths;
 inactivity does not necessarily mean the entire screen is blank.
 
-Loop mode keeps a sequential child list cycling, or restarts each completed
+**Loop subpatterns** keeps a sequential child list cycling, or restarts each completed
 parallel child independently, until the parent's duration/cadence boundary. It
 does not add an idle transition tick. Repeating the parent and looping its
 children are separate choices.
 
-Wait mode derives the iteration clock from finite timed children: the sum for a
-sequence or maximum for parallel. Direct outputs follow the owner and do not
-gate completion; at least one timed composition child is required. The wait
-owner must omit `duration`, `repeat`, `cadence` and `offset`. Only exact static
-child lifetimes are accepted; sampled, random, forever or phase-controlled
-gating lifetimes are rejected rather than sampled speculatively. Nested wait
-groups and finite repeated children are supported. An outer bounded parent can
-still clip a wait group. There is no separate frame-calculation action.
+With the checkbox off, subpatterns complete independently. Inherit controls
+duration; looping controls what happens when a subpattern completes early.
+There is no separate Wait setting or frame-calculation action. Sampled durations
+and the former `child_mode` field are rejected.
+
+An inherited window can shrink on later loop or cadence entries. Envelopes need
+a known fitting local clock, and phase pre-roll has a fixed execution budget.
+When those cannot be established for variable inheritance, validation asks for
+Fixed frames or a fixed cadence. An explicit clock may still be intentionally
+clipped by its parent.
 
 Repeat is explicit. Ramp intervals are scaled and
 rounded to fill the explicit duration, with at least one frame per step.
@@ -129,7 +137,7 @@ finite child completion. A transition frame does not perform a second chance
 check. Inactive children do not select media or consume random values.
 
 Super Fast uses round robin between rapid cuts that exit by chance every eight
-frames and a held image with a sampled 64–128 frame lifetime. These are ordinary
+frames and a held image with a fixed 96-frame lifetime. These are ordinary
 nested patterns, not privileged default and interrupt phases.
 
 ## Output operations
@@ -198,7 +206,7 @@ fields, invalid scalar scopes, out-of-range values and impossible timing.
 Limits include four MiB source, 64 composition nesting levels, 4,096 children per
 composition, 32 scalar nesting levels, two through eight sum terms, and signed
 32-bit positive frame ranges. Ramp steps are bounded to 65,536. Phase pre-roll is
-bounded to one million frames; nested sampled or ramp offsets can be rejected
+bounded to one million frames; nested ramp offsets can be rejected
 conservatively. Errors identify the relevant AST path. Text syntax errors identify
 line and column and enforce source, nesting and child limits before recursion.
 

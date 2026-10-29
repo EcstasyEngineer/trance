@@ -8,14 +8,47 @@
     if (!outputs.includes(type)) throw Error('Unknown piece');
     return type==='spiral'?{op:type,speed:1}:{op:type,source:'either'};
   }
+  const frames=v=>Number.isSafeInteger(v)&&v>0&&v<=2147483647;
+  // Exact finite completion only. A nested omitted duration uses the available
+  // owner window; only the root can derive a window from independent children.
+  function lifetime(n,inherited=0){
+    if(!n.kind||n.offset!==undefined||n.repeat==='forever')return null;
+    const cap=n.duration===undefined?inherited:n.duration;if(!frames(cap))return null;
+    let end=cap;
+    if(n.kind==='sequential'&&!n.loop_subpatterns&&n.cadence===undefined){
+      let cursor=0;
+      for(const edge of n.children){
+        if(cursor>=cap)break;
+        if(edge.exit)return null;
+        const length=lifetime(edge.node,cap-cursor);if(!frames(length))return null;
+        cursor+=length;
+      }
+      end=Math.min(cap,cursor);
+    }
+    const result=end*(n.repeat===undefined?1:n.repeat);return frames(result)?result:null;
+  }
+  function rootDuration(n){
+    if(n.duration!==undefined)return frames(n.duration)?n.duration:null;
+    if(!['parallel','sequential'].includes(n.kind))return null;
+    const timed=n.children.filter(e=>e.node.kind);if(!timed.length)return null;
+    const lengths=timed.map(e=>e.exit?null:lifetime(e.node));
+    if(!lengths.every(frames))return null;
+    const span=n.kind==='sequential'?lengths.reduce((sum,v)=>sum+v,0):Math.max(...lengths);
+    return frames(span)?span:null;
+  }
   function parse(source) {
     const doc=JSON.parse(source);
     if (!doc || doc.version!==4 || !doc.root || !kinds.includes(doc.root.kind)) throw Error('Expected version 4 and a composition root.');
-    function visit(n,depth=0) {
-      if(depth>64)throw Error('Maximum pattern nesting depth is 64.');
-      if (!n || typeof n!=='object') throw Error('A child must contain a node.');
-      if (n.kind) {if (!kinds.includes(n.kind)||!Array.isArray(n.children)) throw Error('Invalid composition kind or children.'); n.children.forEach(e=>{if(!e||typeof e!=='object')throw Error('A child entry needs a node.');visit(e.node,depth+1);});}
-      else if (!outputs.includes(n.op)) throw Error('Unknown output operation.');
+    function visit(n,depth=0,path='root') {
+      if(depth>64)throw Error(path+': Maximum pattern nesting depth is 64.');
+      if (!n || typeof n!=='object') throw Error(path+': A child must contain a node.');
+      if ('child_mode' in n) throw Error(path+'.child_mode: Unsupported field; use loop_subpatterns true or false.');
+      if ('duration' in n && !frames(n.duration)) throw Error(path+'.duration: Use a positive whole number of frames or omit duration for Inherit.');
+      if ('loop_subpatterns' in n && (typeof n.loop_subpatterns!=='boolean'||!['parallel','sequential'].includes(n.kind)))throw Error(path+'.loop_subpatterns: Use true or false on Parallel or Sequential.');
+      if (n.kind) {
+        if (!kinds.includes(n.kind)||!Array.isArray(n.children)) throw Error(path+': Invalid composition kind or children.');
+        n.children.forEach((e,i)=>{if(!e||typeof e!=='object')throw Error(path+': A child entry needs a node.');visit(e.node,depth+1,path+'.children['+i+'].node');});
+      } else if (!outputs.includes(n.op)) throw Error(path+': Unknown output operation.');
     }
     visit(doc.root); return doc;
   }
@@ -25,26 +58,12 @@
     const errors=[],seen=new Set(),integer=(v,min=0)=>Number.isSafeInteger(v)&&v>=min&&v<=2147483647;
     const fail=(path,message)=>errors.push(path+': '+message);
     try{parse(JSON.stringify(doc));}catch(e){return [e.message];}
-    function exactFinite(n){
-      if(!n.kind||n.kind==='random'||n.offset!==undefined||n.repeat==='forever'||(n.duration!==undefined&&!integer(n.duration,1)))return false;
-      if(n.child_mode==='wait')return n.children.some(e=>e.node.kind)&&n.children.filter(e=>e.node.kind).every(e=>!e.exit&&exactFinite(e.node));
-      if(n.kind==='sequential'&&n.child_mode!=='loop'&&n.cadence===undefined&&!n.children.every(e=>!e.exit&&exactFinite(e.node)))return false;
-      return integer(n.duration,1);
-    }
     function visit(n,path,parent,edge){
       if(n.kind){
         if(!n.children.length||n.children.length>4096)fail(path,'Pattern needs 1–4096 children.');
         if(n.id!==undefined){if(typeof n.id!=='string'||!n.id.length||seen.has(n.id))fail(path,'Scope IDs must be nonempty and unique.');seen.add(n.id);}
-        if(!parent&&n.duration===undefined&&n.child_mode!=='wait')fail(path,'Root requires a finite duration or Wait for children.');
-        if(n.duration!==undefined){const d=n.duration;if(typeof d==='object'&&d){if(!integer(d.min,1)||!integer(d.max,d.min)||!integer(d.step,1)||(d.max-d.min)%d.step)fail(path,'Sampled duration needs aligned positive min, max and step.');}else if(!integer(d,1))fail(path,'Duration must be a positive whole number of frames.');}
-        if(n.child_mode!==undefined&&(!['independent','loop','wait'].includes(n.child_mode)||n.kind==='random'))fail(path,'Child policy must be independent, loop or wait on Parallel or Sequential.');
-        if(n.child_mode==='wait'){
-          for(const p of ['duration','cadence','offset','repeat'])if(n[p]!==undefined)fail(path+'.'+p,'Wait for children omits owner '+p+'.');
-          const gates=n.children.filter(e=>e.node.kind);
-          if(!gates.length)fail(path,'Wait for children needs at least one timed child composition.');
-          if(gates.some(e=>e.exit||!exactFinite(e.node)))fail(path,'Wait for children needs exact finite child completion; sampled, random, phase and unbounded gates are unsupported.');
-        }
-        if(n.repeat!==undefined){if(n.duration===undefined)fail(path,'Repeat requires an explicit duration.');if(n.repeat!=='forever'&&!integer(n.repeat,1))fail(path,'Repeat must be a positive count or forever.');}
+        if(!parent&&n.duration===undefined&&!frames(rootDuration(n)))fail(path,'Inherit needs a parent duration or finite timed subpatterns.');
+        if(n.repeat!==undefined){if(n.repeat!=='forever'&&!integer(n.repeat,1))fail(path,'Repeat must be a positive count or forever.');if(!parent&&n.repeat==='forever')fail(path,'Root repeat must be finite.');}
         if(n.offset!==undefined&&!integer(n.offset))fail(path,'Offset must be a nonnegative whole number of frames.');
         if(n.cadence!==undefined){if(typeof n.cadence==='number'){if(!integer(n.cadence,1))fail(path,'Cadence must be a positive whole number.');}else{const r=n.cadence&&n.cadence.ramp;if(!r||!integer(r.from,1)||!integer(r.to,1)||!integer(r.steps,1)||!['linear','early','late'].includes(r.ease)||!integer(n.duration,1)||r.steps>n.duration)fail(path,'Ramp needs valid endpoints, easing, steps and a fixed duration fitting all steps.');}}
         if(n.kind==='random'){const s=n.select;if(!s||!['random','round_robin'].includes(s.order)||typeof s.allow_self!=='boolean'||!integer(s.first)||s.first>=n.children.length)fail(path,'Random pattern needs a selection policy and valid first child.');else if(s.order==='round_robin'&&s.allow_self)fail(path,'Round robin cannot select itself.');}
@@ -57,7 +76,8 @@
         if(n.opacity!==undefined&&n.envelope!==undefined)fail(path,'Choose opacity or envelope.');
       }
       if(edge&&edge.exit){if(parent.kind!=='random')fail(path,'Chance exit belongs to a Random child.');if(!integer(edge.exit.check_every,1))fail(path,'Chance exit check interval must be positive.');}
-      if(parent&&parent.kind!=='parallel'&&n.kind&&(parent.kind==='sequential'||!edge.exit)&&((n.duration===undefined&&n.child_mode!=='wait')||n.repeat==='forever'))fail(path,'Child needs finite duration, or a Random chance exit.');
+      if(parent&&parent.kind!=='parallel'&&n.kind&&(parent.kind==='sequential'||!edge.exit)&&n.repeat==='forever')fail(path,'Subpattern repeat must be finite here, or use a Random chance exit.');
+
     }
     visit(doc.root,'root',null,null);return errors;
   }
@@ -74,12 +94,12 @@
     references(copied);return copied;
   }
   function properties(n) {
-    if(n.kind)return [...(n.child_mode==='wait'?[]:['duration','repeat','cadence','offset']),'id',...(n.kind==='random'?['select']:[])];
+    if(n.kind)return ['duration','repeat','cadence','offset','id',...(n.kind==='random'?['select']:[])];
     if(n.op==='spiral')return ['speed'];
     if(n.op==='image')return ['source','visibility','zoom','zoom_baseline',...(!n.envelope?['opacity']:[]),...(!('opacity'in n)?['envelope']:[]),'animation','selection_probability',...(n.source==='alternate'?['flip_probability']:[])];
     return ['source','visibility','selection_probability',...(['caption','subtext'].includes(n.op)?[...(!n.envelope?['opacity']:[]),...(!('opacity'in n)?['envelope']:[])]:[])];
   }
   const defaults={duration:128,repeat:2,cadence:64,offset:0,id:'scope',select:{order:'random',allow_self:false,first:0,cooldown:0},zoom:{curve:{from:0,to:0.5,scope:'local',ease:'linear'}},zoom_baseline:0,opacity:1,speed:1,visibility:[0,1],animation:{every:4},envelope:{in:8,hold:16,out:8},flip_probability:0.5,selection_probability:1,source:'either'};
-  const api={kinds,outputs,clone,create,parse,validate,at,edge,defaults,ids,uniqueId,ancestorIds,cloneForInsert,properties};
+  const api={kinds,outputs,clone,create,parse,validate,frames,lifetime,rootDuration,at,edge,defaults,ids,uniqueId,ancestorIds,cloneForInsert,properties};
   root.TranceV4=api; if(typeof module!=='undefined') module.exports=api;
 })(typeof window!=='undefined'?window:globalThis);

@@ -1,5 +1,8 @@
 # Composer implementation and verification
 
+> Historical implementation record. The [current composer](authoring/README.md)
+> uses Inherit and a Loop subpatterns checkbox; the three-way policy and sampled duration were removed.
+
 Implemented 2026-10-28. The composer uses the canonical V4 AST and the native
 parser/compiler for acceptance. Text lowers to the same AST; it is the default
 source view for all eight built-ins. Advanced JSON remains available explicitly.

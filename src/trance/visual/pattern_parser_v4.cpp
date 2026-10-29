@@ -85,45 +85,50 @@ namespace
     uint32_t g = std::gcd(a, b);
     return {a / g, b / g};
   }
-  // Exact static lifetime only. This never samples or touches the scheduler/RNG.
+  // Exact finite completion within a known owner window; no scheduler/RNG probing.
   std::optional<uint64_t> lifetime(const J& j, uint32_t inherited = 0)
   {
     if (!j.is_object() || !j.contains("kind") || !j.contains("children") ||
-        !j["children"].is_array()) return {};
-    const auto kind = j.value("kind", std::string{});
-    const auto mode = j.value("child_mode", std::string("independent"));
-    if (kind == "random" || j.contains("offset")) return {};
+        !j["children"].is_array() || j.contains("offset")) return {};
     if (j.contains("repeat") && !j["repeat"].is_number_integer()) return {};
     uint32_t cap = inherited;
     if (j.contains("duration")) {
       if (!j["duration"].is_number_integer()) return {};
-      cap = integer(j["duration"], "$", 1);
+      cap = integer(j["duration"], "$.duration", 1);
     }
-    uint64_t extent = 0;
-    bool timed = false;
-    if (mode == "wait" || (kind == "sequential" && mode != "loop" && !j.contains("cadence"))) {
+    if (!cap) return {};
+    uint64_t extent = cap;
+    if (j.value("kind", std::string{}) == "sequential" &&
+        !j.value("loop_subpatterns", false) && !j.contains("cadence")) {
+      extent = 0;
       for (const auto& edge : j["children"]) {
+        if (extent >= cap) break;
         if (!edge.is_object() || !edge.contains("node")) return {};
-        const auto& child = edge["node"];
-        if (child.contains("op")) continue;
-        timed = true;
-        auto length = lifetime(child, mode == "wait" ? 0 : cap);
+        auto length = lifetime(edge["node"], cap - static_cast<uint32_t>(extent));
         if (!length) return {};
-        if (kind == "sequential") extent += *length;
-        else extent = std::max(extent, *length);
+        extent = std::min<uint64_t>(cap, extent + *length);
       }
-      if (!timed) return {};
-      if (mode != "wait") {
-        if (!cap) return {};
-        extent = std::min<uint64_t>(extent, cap);
-      }
-    } else {
-      if (!cap) return {};
-      extent = cap;
     }
-    if (j.contains("repeat")) extent *= integer(j["repeat"], "$", 1);
+    if (j.contains("repeat")) extent *= integer(j["repeat"], "$.repeat", 1);
     if (!extent || extent > limit) return {};
     return extent;
+  }
+  std::optional<uint32_t> inherited_root_span(const J& j)
+  {
+    if (!j.contains("children") || !j["children"].is_array() || j["kind"] == "random") return {};
+    uint64_t span = 0;
+    for (const auto& edge : j["children"]) {
+      if (!edge.is_object() || !edge.contains("node")) return {};
+      const auto& child = edge["node"];
+      if (child.contains("op")) continue;
+      const auto length = lifetime(child);
+      if (!length) return {};
+      if (j["kind"] == "sequential") span += *length;
+      else span = std::max(span, *length);
+      if (span > limit) return {};
+    }
+    if (!span) return {};
+    return static_cast<uint32_t>(span);
   }
   struct Parser {
     std::set<std::string> ids, generated;
@@ -370,7 +375,7 @@ namespace
         object(v, p, {"in", "hold", "out"});
         uint32_t a = integer(v["in"], p, 1), b = integer(v["hold"], p), c = integer(v["out"], p, 1);
         if (!local_duration || uint64_t(a) + b + c > local_duration)
-          fail(p, "envelope needs known fitting local duration");
+          fail(p, "envelope needs known fitting local duration; choose Fixed frames (explicit duration) or fixed cadence for variable inheritance");
         std::string f = local + ".frame";
         r.alpha = "max(0,min(min(" + f + "/" + num(a) + ",(" + num(double(a) + b + c) + "-" + f +
             ")/" + num(c) + "),1))";
@@ -378,12 +383,12 @@ namespace
       render.push_back(r);
     }
     N node(const J& j, const std::string& p, std::vector<std::string> ancestors, uint32_t inherited,
-           uint32_t depth = 0, bool inherited_exact = false)
+           uint32_t depth = 0, bool variable_window = false)
     {
       if (depth > 64)
         fail(p, "maximum nesting depth is 64");
       object(j, p, {"kind", "children"},
-             {"id", "duration", "repeat", "cadence", "offset", "select", "child_mode"});
+             {"id", "duration", "repeat", "cadence", "offset", "select", "loop_subpatterns"});
       N n;
       n.id = name(j);
       if (scene.empty())
@@ -399,38 +404,22 @@ namespace
         n.occurrence_kind = N::Composition::Random;
       else
         fail(p, "only parallel, sequential, random are composition kinds");
-      if (j.contains("child_mode")) {
-        const auto mode = str(j["child_mode"], p + ".child_mode");
-        if (kind == "random") fail(p, "child_mode belongs to parallel or sequential only");
-        if (mode == "loop") n.child_mode = N::ChildMode::Loop;
-        else if (mode == "wait") n.child_mode = N::ChildMode::Wait;
-        else if (mode != "independent") fail(p, "unknown child_mode");
+      if (j.contains("loop_subpatterns")) {
+        if (kind == "random") fail(p + ".loop_subpatterns", "belongs to parallel or sequential only");
+        if (!j["loop_subpatterns"].is_boolean()) fail(p + ".loop_subpatterns", "expected boolean");
+        n.loop_subpatterns = j["loop_subpatterns"].get<bool>();
       }
-      if (n.child_mode == N::ChildMode::Wait) {
-        for (const auto field : {"duration", "cadence", "offset", "repeat"})
-          if (j.contains(field)) fail(p, std::string("wait must omit ") + field);
-        auto span = lifetime(j);
-        if (!span) fail(p, "wait needs at least one timed child with an exact finite lifetime");
-        n.length = static_cast<uint32_t>(*span);
-      }
-      if (j.contains("duration")) {
-        auto& d = j["duration"];
-        if (d.is_object()) {
-          object(d, p, {"min", "max", "step"});
-          n.length = integer(d["min"], p, 1);
-          n.duration_max = integer(d["max"], p, n.length);
-          n.duration_step = integer(d["step"], p, 1);
-          if ((n.duration_max - n.length) % n.duration_step)
-            fail(p, "sample endpoints must align to step");
-        } else
-          n.length = integer(d, p, 1);
+      if (j.contains("duration")) n.length = integer(j["duration"], p + ".duration", 1);
+      if (!n.length && !inherited) {
+        const auto span = inherited_root_span(j);
+        if (!span) fail(p + ".duration", "Inherit needs a parent duration or finite timed subpatterns");
+        n.length = *span;
       }
       uint32_t span = n.length ? n.length : inherited;
-      const bool span_exact = n.child_mode == N::ChildMode::Wait ||
-          (j.contains("duration") ? j["duration"].is_number_integer() : inherited_exact);
+      // Explicit duration makes this occurrence's clock independent of the
+      // available ancestor window, even when that ancestor clips its output.
+      variable_window = variable_window && !n.length;
       if (j.contains("repeat")) {
-        if (!j.contains("duration"))
-          fail(p, "repeat needs bounded iteration duration");
         if (j["repeat"].is_string() && j["repeat"] == "forever")
           n.repeat_forever = true;
         else
@@ -455,16 +444,16 @@ namespace
                                                  : -1;
           if (n.cadence_ramp_ease < 0)
             fail(p, "unknown ramp easing");
-          if (!j.contains("duration") || !j["duration"].is_number_integer() ||
-              n.cadence_ramp_steps > n.length)
+          if (!j.contains("duration") || n.cadence_ramp_steps > n.length)
             fail(p, "ramp needs integer duration with one frame per step");
         } else
           n.cadence = integer(c, p, 1);
       }
       if (n.offset) {
-        const uint32_t period = n.cadence ? n.cadence : n.duration_max ? n.duration_max : span;
-        if ((!n.cadence && n.duration_max > 1000000u) ||
-            (n.cadence_ramp_steps && span > 1000000u) ||
+        if (variable_window && !n.cadence)
+          fail(p + ".offset", "phase with a variable inherited window needs Fixed frames (explicit duration) or fixed cadence");
+        const uint32_t period = n.cadence ? n.cadence : span;
+        if ((n.cadence_ramp_steps && span > 1000000u) ||
             (!n.cadence_ramp_steps && period && (period - n.offset % period) % period > 1000000u))
           fail(p, "phase offset requires more than one million pre-roll frames");
       }
@@ -491,6 +480,9 @@ namespace
       } else if (j.contains("select"))
         fail(p, "selection policy belongs to random composition");
       uint32_t local = n.cadence ? n.cadence : n.cadence_ramp_steps ? 0 : span;
+      const bool changing_body = variable_window || n.loop_subpatterns || kind == "random" ||
+          n.offset || n.cadence_ramp_steps || (n.cadence && span % n.cadence);
+      std::optional<uint64_t> sequence_cursor = 0;
       for (size_t i = 0; i < children.size(); ++i) {
         auto& edge = children[i];
         std::string q = p + ".children[" + std::to_string(i) + "]";
@@ -513,24 +505,35 @@ namespace
         if (child.contains("op")) {
           if (kind != "parallel" || edge.contains("exit"))
             fail(q, "outputs belong directly to parallel only");
-          output(child, q + ".node", n, ancestors, local);
+          // Envelope size is a compile-time fitting requirement. Dynamic
+          // inherited clocks still drive curves, but cannot promise that fit.
+          output(child, q + ".node", n, ancestors,
+                 variable_window && !n.cadence ? 0 : local);
         } else {
-          N k = node(child, q + ".node", ancestors, local ? local : span, depth + 1,
-                     span_exact && !n.cadence_ramp_steps);
+          uint32_t available = local ? local : span;
+          if (kind == "sequential" && sequence_cursor && *sequence_cursor < available)
+            available -= static_cast<uint32_t>(*sequence_cursor);
+          const bool changing_child = changing_body || (kind == "sequential" && !sequence_cursor);
+          N k = node(child, q + ".node", ancestors, available, depth + 1, changing_child);
+          if (kind == "sequential" && sequence_cursor) {
+            const auto length = lifetime(child, available);
+            if (length) *sequence_cursor += *length;
+            else sequence_cursor.reset();
+          }
           if ((kind == "sequential" || (kind == "random" && !exit.enabled)) &&
-              ((!child.contains("duration") && k.child_mode != N::ChildMode::Wait) || k.repeat_forever))
+              k.repeat_forever)
             fail(q, "child needs finite duration and repeat, or random chance exit");
           n.children.push_back(std::move(k));
           n.child_exits.push_back(exit);
         }
       }
       if (!n.repeat_forever && n.repeat_count > 1 && !lifetime(j, inherited) &&
-          uint64_t(n.duration_max ? n.duration_max : span) * n.repeat_count > limit)
+          uint64_t(span) * n.repeat_count > limit)
         fail(p, "repeated span overflows runtime frame range");
       // Advisory only: intentional clipping is valid. Emit exact, local spans
       // only when cadence/phase/repetition cannot change these boundaries.
-      if (n.child_mode == N::ChildMode::Independent && kind != "random" && !j.contains("cadence") &&
-          !j.contains("offset") && span_exact && span) {
+      if (!n.loop_subpatterns && kind != "random" && !j.contains("cadence") &&
+          !j.contains("offset") && span && (j.contains("duration") || !depth)) {
         uint64_t cursor = 0;
         bool exact = true;
         for (size_t i = 0; i < children.size(); ++i) {

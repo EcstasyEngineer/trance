@@ -90,10 +90,7 @@
       while (token.value !== '{') {
         const clause = identifier(); if (seen.has(clause)) error('Duplicate clause ' + clause); seen.add(clause);
         if (clause === 'id') node.id = identifier();
-        else if (clause === 'for') {
-          if (token.value === 'sample') { next(); const [min, max, step] = tuple(3, true); node.duration = {min, max, step}; }
-          else node.duration = number(true, 1);
-        } else if (clause === 'repeat') node.repeat = number(true, 1);
+        else if (clause === 'for') node.duration = number(true, 1); else if (clause === 'repeat') node.repeat = number(true, 1);
         else if (clause === 'phase') node.offset = number(true, 0);
         else if (clause === 'every') {
           if (token.value === 'ramp') {
@@ -102,13 +99,11 @@
             node.cadence = {ramp: {from, to, steps, ease: 'early'}};
           } else node.cadence = number(true, 1);
         } else if (clause === 'cooldown' && kind === 'cycle') node.select.cooldown = number(true, 0);
-        else if (clause === 'child_mode' && kind !== 'cycle') {
-          node.child_mode = identifier();
-          if (!['independent', 'loop', 'wait'].includes(node.child_mode)) error('Unknown child_mode');
+        else if (clause === 'loop_subpatterns' && kind !== 'cycle') {
+          if (!['true','false'].includes(token.value)) error('Loop subpatterns requires true or false');
+          node.loop_subpatterns = token.value === 'true'; next();
         } else error('Unknown composition clause ' + clause);
       }
-      if (node.child_mode === 'wait' && ['duration', 'cadence', 'offset', 'repeat'].some(k => own(node, k)))
-        error('Wait owner cannot have for, every, phase or repeat');
       next();
       while (token.value !== '}') {
         if (!token.value) error('Expected }');
@@ -205,7 +200,7 @@
     }
     function composition(node, depth, prefix = '') {
       if (depth >= DEPTH_LIMIT) fail('maximum composition depth is 64');
-      shape(node, ['kind', 'children'], ['id', 'duration', 'repeat', 'cadence', 'offset', 'select', 'child_mode']);
+      shape(node, ['kind', 'children'], ['id', 'duration', 'repeat', 'cadence', 'offset', 'select', 'loop_subpatterns']);
       const kinds = {parallel: 'parallel', sequential: 'sequence', random: 'cycle'};
       const kind = own(kinds, node.kind) ? kinds[node.kind] : null;
       if (!kind) fail('composition kind');
@@ -213,10 +208,7 @@
       if (node.children.length > CHILD_LIMIT) fail('maximum children count is 4096');
       let header = '  '.repeat(depth) + prefix + kind;
       if (own(node, 'id')) header += ' id ' + id(node.id);
-      if (own(node, 'duration')) {
-        if (typeof node.duration === 'number') header += ' for ' + num(node.duration, true, 1);
-        else { shape(node.duration, ['min', 'max', 'step']); header += ' for sample(' + ['min', 'max', 'step'].map(k => num(node.duration[k], true, 0)).join(', ') + ')'; }
-      }
+      if (own(node, 'duration')) header += ' for ' + num(node.duration, true, 1);
       if (own(node, 'repeat')) header += ' repeat ' + num(node.repeat, true, 1);
       if (own(node, 'cadence')) {
         if (typeof node.cadence === 'number') header += ' every ' + num(node.cadence, true, 1);
@@ -231,12 +223,11 @@
         shape(node.select, ['order', 'allow_self', 'first'], ['cooldown']);
         if (node.select.order !== 'round_robin' || node.select.allow_self !== false || node.select.first !== 0) fail('cycle selector');
         if (own(node.select, 'cooldown')) header += ' cooldown ' + num(node.select.cooldown, true, 0);
-        if (own(node, 'child_mode')) fail('cycle child_mode');
+        if (own(node, 'loop_subpatterns')) fail('cycle loop_subpatterns');
       } else if (own(node, 'select')) fail('selector on non-cycle');
-      if (own(node, 'child_mode')) {
-        if (!['independent', 'loop', 'wait'].includes(node.child_mode)) fail('child_mode');
-        if (node.child_mode !== 'independent') header += ' child_mode ' + node.child_mode;
-        if (node.child_mode === 'wait' && ['duration', 'repeat', 'cadence', 'offset'].some(k => own(node, k))) fail('wait owner timing');
+      if (own(node, 'loop_subpatterns')) {
+        if (typeof node.loop_subpatterns !== 'boolean') fail('loop_subpatterns needs true or false');
+        header += ' loop_subpatterns ' + node.loop_subpatterns;
       }
       const lines = [budget(header + ' {\n').slice(0, -1)];
       for (const edge of node.children) {

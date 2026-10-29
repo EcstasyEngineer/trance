@@ -23,7 +23,7 @@ public:
   // true.
   virtual uint32_t length() const = 0;
   // Completed traversal duration, for director selection policy. Usually equal
-  // to length(); sampled/repeated occurrences keep a separate local clock.
+  // to length(); repeated occurrences keep a separate local clock.
   virtual uint32_t elapsed_length() const { return length(); }
   // The current cycle head position.
   virtual uint32_t position() const = 0;
@@ -105,9 +105,8 @@ public:
   const char* type_name() const override;
   std::vector<const Cycler*> children() const override;
   Cycler* local_clock();
-  // Called on activation, not construction: sampled durations consume RNG only
-  // for a branch that actually becomes eligible to run.
-  void prepare(uint32_t inherited_span, bool trigger_actions);
+  // Called on activation so inherited duration uses the available owner window.
+  void prepare(uint32_t inherited_span);
 
 private:
   class LocalClock final : public Cycler {
@@ -120,9 +119,9 @@ private:
   private:
     OccurrenceCycler& _owner;
   };
-  void begin_iteration(bool trigger_actions);
-  void begin_body(bool trigger_actions);
-  void start_child(uint32_t child, bool trigger_actions);
+  void begin_iteration();
+  void begin_body();
+  void start_child(uint32_t child);
   void run_body(bool trigger_actions);
   uint32_t body_remaining() const;
   bool has_next_iteration() const;

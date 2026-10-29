@@ -20,13 +20,14 @@ child after another. Random advances one selected child, with completion or
 chance exits driving transitions. Every composition can nest every other mode.
 Inactive branches do not consume content selections or random values.
 
-Timing properties belong to occurrences: duration, sampled duration, repetition,
+Timing properties belong to occurrences: duration, repetition,
 cadence, ramp and phase offset. A bounded parent clips its descendants. A completed
-child stays inactive until an owner restart in independent mode. `child_mode`
-selects independent, looping children to the parent boundary, or waiting for
-exact finite children to finish. Wait supplies a resolved iteration clock;
-unknown lifetimes fail validation. An enclosing duration does not silently
-repeat a completed independent sequence. Exact inactive/clipped spans are warnings.
+child stays inactive until an owner restart unless `loop_subpatterns` is true.
+That boolean cycles sequences or restarts completed parallel children to the
+parent boundary. Omitted duration means Inherit: use the enclosing window, or
+derive a finite root sum/max from timed subpatterns. Unknown root lifetimes fail
+validation. An enclosing duration does not silently repeat a completed sequence.
+Exact inactive/clipped spans are warnings.
 
 ## Clocks and persistent state
 

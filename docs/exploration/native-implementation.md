@@ -1,5 +1,8 @@
 # Native timing and numeric implementation
 
+> Historical implementation record. The [current timing contract](../spec-grammar-v4.md#timing)
+> uses `loop_subpatterns` and Inherit; the enum and sampled-duration machinery below were removed.
+
 Implemented 2026-10-28. Verification results belong in the main implementation
 handoff after the supported Release build; the implementation agent did not run
 an independent or simultaneous CMake build.

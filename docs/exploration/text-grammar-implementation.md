@@ -1,5 +1,8 @@
 # Minimal V4 text frontend implementation
 
+> Historical implementation record. See the [current text grammar](../v4-text-grammar.md)
+> for `loop_subpatterns`, Inherit and fixed durations; sampled duration was removed.
+
 The text frontend implements the eight literal production built-ins, retaining
 every authored composition and ordered edge. Text syntax converts to the same
 V4 JSON AST passed to the production native parser and scheduler. Existing V4

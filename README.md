@@ -32,8 +32,8 @@ Use the [visual composer](https://ecstasyengineer.github.io/trance/) to edit and
 export patterns, or read the [V4 grammar](docs/spec-grammar-v4.md).
 
 The composer includes a frame timeline with an overview, zoom, pan and selectable
-nested lanes. Choose independent children, loop children to the parent boundary,
-or wait for finite children to finish. Diagnostics identify inactive spans and
+nested lanes. Use **Inherit** or fixed frames for duration, and **Loop subpatterns**
+to repeat subpatterns to the parent boundary. Diagnostics identify inactive spans and
 clipping; uncertain schedules remain labeled rather than guessed.
 
 ```powershell

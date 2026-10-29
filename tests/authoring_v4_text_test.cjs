@@ -17,9 +17,9 @@ for (const fixture of fixtures) {
 }
 const valid = [
   'v4; parallel for 32 { spiral speed 1e-7 -> -2.5E+3; }',
-  'v4; parallel for 32 child_mode loop { parallel for 2 { word primary chance 1/3; } }',
-  'v4; sequence child_mode wait { parallel for 2 { image either; } }',
-  'v4; parallel child_mode independent { spiral; }',
+  'v4; parallel for 32 loop_subpatterns true { parallel for 2 { word primary chance 1/3; } }',
+  'v4; sequence { parallel for 2 { image either; } }',
+  'v4; parallel loop_subpatterns false { spiral; }',
   '\ufeffv4; parallel { spiral speed .1; }',
 ];
 for (const source of valid) assert.equal(T.format(T.parse(T.format(T.parse(source)))), T.format(T.parse(source)));
@@ -37,16 +37,20 @@ const invalid = [
   'v4; parallel { image either zoom 0 -> 1 zoom 0 -> 2; }',
   'v4; parallel { word primary selection_probability 0.5; }',
   'v4; parallel { line primary; }', 'v4; parallel { caption primary opacity 0.5; }',
-  'v4; cycle child_mode loop {}', 'v4; sequence { image either; }',
+  'v4; cycle loop_subpatterns false {}', 'v4; sequence { image either; }',
   'v4; parallel { exit 1/3 every 8: parallel {} }',
-  'v4; parallel child_mode wait for 8 {}', 'v4; parallel child_mode wait repeat 2 {}',
-  'v4; parallel child_mode wait phase 2 {}', 'v4; parallel child_mode wait every 2 {}',
+  'v4; parallel child_mode loop {}', 'v4; parallel child_mode independent {}',
+  'v4; parallel for sample(64,128,8) {}', 'v4; parallel loop_subpatterns 1 {}',
+  'v4; parallel loop_subpatterns true loop_subpatterns false {}',
   'v4; parallel every ramp(8,2,4,late) {}', 'v4; parallel repeat forever {}',
 ];
 for (const source of invalid) assert.throws(() => T.parse(source), /line \d+, column \d+/, source);
 const unsupported = [
   d => d.name = 'invented',
   d => d.root.weight = 2,
+  d => d.root.child_mode = 'loop',
+  d => d.root.duration = {min:64,max:128,step:8},
+  d => d.root.loop_subpatterns = 'true',
   d => d.root.children[0].weight = 2,
   d => d.root.children[0].node.children[0].node.zoom = {curve: {from: 0, to: 1, ease: 'early'}},
   d => d.root.children[0].node.children[0].node.zoom = {sum: [{curve: {from: 0, to: 1}}]},

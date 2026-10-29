@@ -24,7 +24,7 @@ ctest --test-dir build/windows-msvc -C Release --output-on-failure
 |---|---|---|
 | `grammar_lint` | Production V4 builtin validation and sampled render-expression checks. | Does not explore every transition or random outcome. |
 | `v4_parser_test` | Native AST acceptance, diagnostics and execution bounds. | Is not a media decoder or pixel comparison. |
-| `v4_runtime_test` | Parallel/sequential/random nesting, durations, repetitions, cadence, offsets, sampled holds, exits and clipping. | Finite test cases do not prove every possible AST. |
+| `v4_runtime_test` | Parallel/sequential/random nesting, inherited/fixed durations, subpattern looping, repetitions, cadence, offsets, exits and clipping. | Finite test cases do not prove every possible AST. |
 | `v4_native_execution_test` | Production compiler/render behavior assertions for Parallel/Flash Text/Super Parallel, private images and theme/animation coherence. | Recording calls do not establish decoded media or final GPU pixels. |
 | `compiled_visual_test` | Production capture and refresh effects, stale selections and repeat-render invariance. | Uses recording media/render APIs. |
 | `playlist_runner_test`, `session_json_test` | Playlist transitions, session serialization and validation. | Not complete live-loop or filesystem coverage. |

@@ -64,17 +64,38 @@ int main() {
     }
     auto exponent = J::parse(patternv4::parse_text_json("v4; parallel for 32 { spiral speed 1e-7 -> -2.5E+3; }"));
     require(exponent["root"]["children"][0]["node"]["speed"]["curve"]["from"] == 1e-7, "exponent incorrectly tokenized");
-    require(pattern::parse_source("v4; parallel for 32 child_mode loop { parallel for 2 { image either; } }").ok,
+    require(pattern::parse_source("v4; parallel for 32 loop_subpatterns true { parallel for 2 { image either; } }").ok,
             "loop clause did not reach native parser");
-    require(pattern::parse_source("v4; parallel child_mode wait { parallel for 2 { image either; } }").ok,
-            "wait clause did not reach native parser");
+    require(pattern::parse_source("v4; parallel loop_subpatterns false { parallel for 2 { image either; } }").ok,
+            "inherited duration did not reach native parser");
     for (const auto* source : {"", "v3; parallel {}", "v4; parallel {} junk", "v4; parallel {", "v4; parallel for 2 for 4 {}",
          "v4; parallel for 1e999 {}", "v4; parallel for 2bad {}", "v4; parallel { spiral speed 1e+; }",
          "v4; parallel { spiral speed 1.2.3; }", "v4; parallel { word primary chance 1/0; }",
          "v4; parallel { image primary flip 0.5; }", "v4; parallel { image either zoom 0.5; }",
          "v4; parallel { image either opacity 0 -> 1; }", "v4; parallel { line primary; }",
          "v4; sequence { image either; }", "v4; parallel child_mode wait repeat 2 {}",
-         "v4; parallel every ramp(8,2,4,late) {}", "v4; cycle child_mode loop {}"}) reject(source);
+         "v4; parallel every ramp(8,2,4,late) {}", "v4; cycle loop_subpatterns true {}", "v4; parallel for sample(64,128,8) {}",
+         "v4; parallel for 32 child_mode loop {}", "v4; parallel for 2 loop_subpatterns 1 {}"}) reject(source);
+    const auto fixed_hold = pattern::parse_source(builtin::pattern_source_v4(8));
+    require(fixed_hold.ok && fixed_hold.root.children.at(0).children.at(1).length == 96,
+            "Super Fast must have one fixed 96-frame hold");
+    auto hold_root = fixed_hold.root;
+    hold_root.children.at(0).select_first = 1;
+    std::unique_ptr<Cycler> hold_schedule(pattern::compile(hold_root));
+    for (unsigned tick = 0; tick < 96; ++tick) hold_schedule->advance();
+    require(hold_schedule->children().at(0)->index() == 1,
+            "fixed hold must remain selected for exactly 96 ticks");
+    hold_schedule->advance();
+    require(hold_schedule->children().at(0)->index() == 0,
+            "fixed hold must finish without a boundary tick");
+    auto inherited_repeat = pattern::parse_source(
+        "v4; sequence repeat 2 { parallel for 2 { image primary; } parallel for 3 { image primary; } }");
+    require(inherited_repeat.ok && inherited_repeat.root.length == 5 &&
+            inherited_repeat.root.repeat_count == 2, "root inherited repeat bound");
+    const auto explicit_false = patternv4::parse_text_json(
+        "v4; parallel for 4 loop_subpatterns false { image primary; }");
+    require(patternv4::format_text_json(explicit_false).find("loop_subpatterns false") != std::string::npos,
+            "explicit false loop behavior lost during formatting");
     auto unsupported = J::parse(builtin::pattern_source_v4(1)); unsupported["root"]["weight"] = 1;
     auto before = unsupported.dump(); bool failed = false;
     try { patternv4::format_text_json(unsupported.dump()); } catch (const std::exception&) { failed = true; }

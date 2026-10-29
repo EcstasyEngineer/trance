@@ -676,11 +676,7 @@ std::string pattern_source_v4(uint32_t visual_type)
                     }
                   }
                 ],
-                "duration": {
-                  "min": 64,
-                  "max": 128,
-                  "step": 8
-                }
+                "duration": 96
               }
             }
           ],

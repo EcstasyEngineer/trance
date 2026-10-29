@@ -128,8 +128,7 @@ class Reader {
       auto clause = id(); if (!seen.insert(clause).second) fail("Duplicate clause " + clause);
       if (clause == "id") node["id"] = id();
       else if (clause == "for") {
-        if (token == "sample") { next(); auto v = tuple(3, true); node["duration"] = {{"min", v[0]}, {"max", v[1]}, {"step", v[2]}}; }
-        else node["duration"] = number(true, 1);
+        node["duration"] = number(true, 1);
       } else if (clause == "repeat") node["repeat"] = number(true, 1);
       else if (clause == "phase") node["offset"] = number(true, 0);
       else if (clause == "every") {
@@ -139,12 +138,12 @@ class Reader {
           node["cadence"] = {{"ramp", {{"from", from}, {"to", to}, {"steps", steps}, {"ease", "early"}}}};
         } else node["cadence"] = number(true, 1);
       } else if (clause == "cooldown" && kind == "cycle") node["select"]["cooldown"] = number(true, 0);
-      else if (clause == "child_mode" && kind != "cycle") {
-        auto mode = id(); if (mode != "independent" && mode != "loop" && mode != "wait") fail("Unknown child_mode"); node["child_mode"] = mode;
+      else if (clause == "loop_subpatterns" && kind != "cycle") {
+        auto value = id();
+        if (value != "true" && value != "false") fail("loop_subpatterns needs true or false");
+        node["loop_subpatterns"] = value == "true";
       } else fail("Unknown composition clause " + clause);
     }
-    if (node.value("child_mode", "") == "wait" && (node.contains("duration") || node.contains("cadence") || node.contains("offset") || node.contains("repeat")))
-      fail("Wait owner cannot have for, every, phase or repeat");
     next();
     while (token != "}") {
       if (token.empty()) fail("Expected }");
@@ -231,7 +230,7 @@ void budget(size_t& bytes, const std::string& text) {
 }
 std::string composition(const J& j, size_t depth, size_t& bytes, const std::string& prefix = "") {
   if (depth >= depth_limit) unsupported("maximum composition depth is 64");
-  shape(j, {"kind", "children"}, {"id", "duration", "repeat", "cadence", "offset", "select", "child_mode"});
+  shape(j, {"kind", "children"}, {"id", "duration", "repeat", "cadence", "offset", "select", "loop_subpatterns"});
   std::string kind;
   if (j["kind"] == "parallel") kind = "parallel"; else if (j["kind"] == "sequential") kind = "sequence";
   else if (j["kind"] == "random") kind = "cycle"; else unsupported("composition kind");
@@ -241,8 +240,7 @@ std::string composition(const J& j, size_t depth, size_t& bytes, const std::stri
   if (j.contains("id")) text += " id " + id(j["id"]);
   if (j.contains("duration")) {
     auto& d = j["duration"];
-    if (d.is_number()) text += " for " + num(d, true, 1);
-    else { shape(d, {"min", "max", "step"}); text += " for sample(" + num(d["min"], true, 0) + ", " + num(d["max"], true, 0) + ", " + num(d["step"], true, 0) + ")"; }
+    text += " for " + num(d, true, 1);
   }
   if (j.contains("repeat")) text += " repeat " + num(j["repeat"], true, 1);
   if (j.contains("cadence")) {
@@ -260,12 +258,12 @@ std::string composition(const J& j, size_t depth, size_t& bytes, const std::stri
     shape(s, {"order", "allow_self", "first"}, {"cooldown"});
     if (s["order"] != "round_robin" || s["allow_self"] != false || s["first"] != 0) unsupported("cycle selector");
     if (s.contains("cooldown")) text += " cooldown " + num(s["cooldown"], true, 0);
-    if (j.contains("child_mode")) unsupported("cycle child_mode");
+    if (j.contains("loop_subpatterns")) unsupported("cycle loop_subpatterns");
   } else if (j.contains("select")) unsupported("selector on non-cycle");
-  if (j.contains("child_mode")) {
-    auto& m = j["child_mode"]; if (m != "independent" && m != "loop" && m != "wait") unsupported("child_mode");
-    if (m != "independent") text += " child_mode " + m.get<std::string>();
-    if (m == "wait" && (j.contains("duration") || j.contains("cadence") || j.contains("offset") || j.contains("repeat"))) unsupported("wait owner timing");
+  if (j.contains("loop_subpatterns")) {
+    const auto& value = j["loop_subpatterns"];
+    if (!value.is_boolean()) unsupported("loop_subpatterns must be boolean");
+    text += std::string(" loop_subpatterns ") + (value.get<bool>() ? "true" : "false");
   }
   text += " {\n";
   budget(bytes, text);

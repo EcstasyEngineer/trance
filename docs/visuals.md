@@ -1,6 +1,7 @@
 # Visuals
 
-All eight builtins use the native V4 AST compiler. Custom visuals accept V4 JSON exclusively through the same source loader. A program supplies themes,
+All eight builtins use the native V4 AST compiler. Custom visuals accept V4 text
+or JSON through the same source loader. A program supplies themes,
 speed, colors and entrainment. See the [V4 grammar](spec-grammar-v4.md),
 [native runtime](engine-today.md), and
 [composer](exploration/authoring/README.md).
@@ -9,7 +10,7 @@ speed, colors and entrainment. See the [V4 grammar](spec-grammar-v4.md),
 
 | CLI name | JSON type | Behavior |
 |---|---|---|
-| `accelerate` | `accelerate` | Increasing image cadence through a sampled ramp. |
+| `accelerate` | `accelerate` | Increasing image cadence through a cadence ramp. |
 | `slow_flash` | `slow_flash` | Slow and fast flashing phases. |
 | `sub_text` | `sub_text` | Image with scrolling subtext. |
 | `flash_text` | `flash_text` | Image crossfade with text. |
@@ -41,8 +42,9 @@ diagnostic rather than silently choosing another visual.
 
 V4 has three composition kinds: parallel, sequential and random. One occurrence
 scheduler handles their timing, cadence/ramp, phase offsets, explicit repetition,
-sampled lifetimes and child completion. A finished finite child remains inactive
-until its owner restarts it. Random patterns expose random or round-robin order,
+and subpattern looping. A finished finite child remains inactive unless its owner
+loops it. Inherit uses the enclosing frame window, or finite timed subpatterns
+to determine the root length. Random patterns expose random or round-robin order,
 self-selection, cooldown and probability checks on child edges.
 
 Local motion clocks are distinct from total elapsed program duration. Structured
@@ -51,7 +53,7 @@ curves can read local, scene or named ancestor progress.
 ## Pipeline and diagnostics
 
 ```text
-V4 JSON AST → native compiler → occurrence scheduler + output state
+V4 text / JSON AST → native compiler → occurrence scheduler + output state
             → per-frame rendering
 ```
 

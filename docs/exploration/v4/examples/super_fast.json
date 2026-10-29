@@ -59,11 +59,7 @@
                     }
                   }
                 ],
-                "duration": {
-                  "max": 128,
-                  "min": 64,
-                  "step": 8
-                },
+                "duration": 96,
                 "kind": "parallel"
               }
             }

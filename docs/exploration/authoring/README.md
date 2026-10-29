@@ -32,23 +32,24 @@ delete it; undo and redo preserve the AST. Import/export reads and writes the sa
 semantic AST used by the native player. Full JSON remains editable, and invalid
 drafts stay visible rather than being replaced with the last valid document.
 
-Timing controls include duration, sampled duration, repetition, cadence, ramps
+Timing controls include Inherit or Fixed frames, repetition, cadence, ramps
 and phase offset. Random exposes round-robin/random order, initial child,
 cooldown and optional self-selection; child edges can exit by probability on a
 specified check interval. There are no default/interrupt phases or public
 controller clock names. Motion uses constants, curves, triangles and sums with
 local, scene or ancestor scopes.
 
-The Children selector is mutually exclusive: Independent, Loop children, or
-Wait for children. Independent reports exact inactive/clipped spans. Loop cycles
-the sequence or individual parallel children to their owner's boundary. Wait
-removes owner timing and uses exact finite timed children; unresolved lifetimes
-are rejected. Choosing a type never adds wrappers: use the explicit wrapping
+**Subpattern behavior** contains a **Loop subpatterns** checkbox. When checked,
+it cycles a sequence or restarts individual parallel subpatterns to their owner's
+boundary. When unchecked, subpatterns complete independently; diagnostics show
+inactive and clipped spans. **Inherit** uses the enclosing pattern's frame window,
+or finite timed subpatterns to determine the root length. There is no separate
+Wait flag or sampled-duration option. Choosing a type never adds wrappers: use the explicit wrapping
 action and choose its frame count when validation calls for timed outputs.
 
 The timeline shares one proportional content-frame axis across nested lanes.
 Use the whole-pattern overview, zoom, pan and frame inspector; selecting a bar
-selects its block. Random/sample-controlled internals are labeled unresolved.
+selects its block. Random-controlled internals are labeled unresolved.
 It is a bounded schedule view, not animated media playback or a pixel guarantee.
 
 ## Media and built-ins

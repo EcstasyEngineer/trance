@@ -1,8 +1,8 @@
 # Compact V4 text
 
 V4 text is a small spelling of the same JSON AST used by the native compiler.
-It covers the features exercised by the eight built-ins and the explicit child
-completion policies. It does not expose every advanced JSON feature. The
+It covers the features exercised by the eight built-ins and explicit subpattern
+looping. It does not expose every advanced JSON feature. The
 composer defaults to text; switching an unsupported AST to text reports an error
 and preserves the document. JSON remains an editable interchange format.
 
@@ -27,9 +27,9 @@ round-robin random compositions. `cycle cooldown N` fixes round robin, first
 child zero and self-selection off. Other random selector policies remain JSON
 features. Keep explicit wrapper patterns: they own duration and modulation clocks.
 
-Header clauses are `id NAME`, `for N`, `repeat N`, `every N`, and `phase N`.
-Use `for sample(min,max,step)` for sampled duration and
-`every ramp(from,to,steps,early)` for the cadence ramp used by Accelerate.
+Header clauses are `id NAME`, `for N`, `repeat N`, `every N`, `phase N`, and
+`loop_subpatterns true|false`. Omit `for` for **Inherit**.
+Use `every ramp(from,to,steps,early)` for the cadence ramp used by Accelerate.
 Phase is the existing clock offset, not a media preload or inactive delay.
 
 Chance exits attach to the selected child edge:
@@ -40,17 +40,17 @@ cycle for 256 cooldown 64 {
   exit 1/12 every 8: parallel {
     parallel every 8 { image either zoom 0.0625 -> 0.1875; }
   }
-  parallel for sample(64,128,8) {
+  parallel for 96 {
     image either zoom 0.1 -> 0.7 animation 1;
   }
 }
 ```
 
-`child_mode loop` or `child_mode wait` is the separately supported completion
-extension on parallel/sequence. Omitted mode is independent. Loop repeats
-children to the owner boundary. Wait must omit its own `for`, `repeat`, `every`
-and `phase`; finite timed children supply its exact sum/max duration. See the
-[timing contract](spec-grammar-v4.md#timing) for validation restrictions.
+`loop_subpatterns true` on parallel/sequence repeats subpatterns to the owner's
+boundary; omitted or `false` lets them complete independently. Inherit uses the
+enclosing pattern's frame window, or derives a root's finite sum/max from timed
+subpatterns. See the [timing contract](spec-grammar-v4.md#timing) for restrictions.
+The former `child_mode` and sampled-duration syntax are rejected.
 
 ## Outputs and values
 

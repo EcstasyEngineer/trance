@@ -60,16 +60,17 @@ V4 text -> JSON AST -> pattern::Node + RenderStmt -> Cycler tree + captures -> r
 - `pattern_text_v4.cpp` provides the deliberately small text frontend;
   `pattern_parser_v4.cpp` validates the shared AST. Built-ins in
   `builtin_patterns_v4.cpp` use that native path. Text only exposes features used
-  by those eight recipes plus the explicit child completion policy extension.
+  by those eight recipes plus the explicit subpattern-looping boolean.
   V3 source is rejected. Unsupported JSON must never be formatted lossily.
 - `pattern_compiler.cpp` maps schedule nodes to runtime cyclers.
   `CompiledVisual` executes ordered effects; `render_eval` reads clocks and
   registers to draw. Keep scheduling and rendering separate.
 - Local occurrence ownership and modulation clocks are separate. A curve can
   read an ancestor without changing its schedule. Independent sequences may end
-  early while retaining their authored clock span. Loop children and wait for
-  children are mutually exclusive policies, not booleans. Wait uses exact finite
-  child completion; do not sample ahead or invent unknown totals. Cadence bodies
+  early while retaining their authored clock span. `loop_subpatterns` is one
+  boolean, default false. Omitted duration means Inherit: use the enclosing frame
+  window or derive a root's finite sum/max from timed subpatterns. Do not invent
+  unknown totals. There is no Wait policy or sampled-duration feature. Cadence bodies
   restart with cadence, and parent bounds clip descendants. Report inactive and
   clipped spans without equating child inactivity with blank pixels.
 - Re-entry does not mean all scalar/image state is erased. State lifetime must

@@ -70,14 +70,23 @@ const {chromium}=require('playwright');
     doc=await source();assert.equal(doc.root.children[2].node.kind,'parallel');assert.ok(doc.root.children[2].node.children.every(e=>e.node.op==='image'));
     assert.equal(JSON.stringify(doc).includes('sequential'),false);
     await page.locator('.block[data-path="[2]"] > .block-head').click();
-    await before('Duration mode','duration');
-    await page.selectOption('#inspector [data-field="Duration mode"]','sampled');
-    await before('Duration mode','min');
+    await before('Duration','duration');
+    assert.deepEqual(await page.locator('#inspector [data-field="Duration"] option').evaluateAll(es=>es.map(e=>[e.value,e.textContent])),[['inherit','Inherit'],['fixed','Fixed frames']]);
+    await page.selectOption('#inspector [data-field="Duration"]','inherit');
+    assert.equal((await source()).root.children[2].node.duration,undefined);
+    assert.match(await page.locator('.timeline-bar[data-path="[2]"]').first().getAttribute('title'),/\[0, 256\)/);
+    assert.equal(await page.locator('#inspector [data-field="duration"]').count(),0);
+    await page.selectOption('#inspector [data-field="Duration"]','fixed');
     await page.selectOption('#inspector [data-field="Cadence mode"]','fixed');
     await before('Cadence mode','cadence');
     await page.selectOption('#inspector [data-field="Repeat mode"]','count');
     await before('Repeat mode','repeat');
+    const childrenBeforeRandom=(await source()).root.children[2].node.children;
+    await page.locator('#inspector [data-field="Loop subpatterns"]').check();
     await page.selectOption('#inspector [data-field="Pattern type"]','random');
+    assert.equal('loop_subpatterns' in (await source()).root.children[2].node,false);
+    assert.deepEqual((await source()).root.children[2].node.children,childrenBeforeRandom);
+
     await before('order','allow self');
     await page.selectOption('#inspector [data-field="order"]','round_robin');
     assert.equal(await page.locator('#inspector [data-field="allow self"]').count(),0);
@@ -116,10 +125,46 @@ const {chromium}=require('playwright');
     }
     await page.setViewportSize({width:1500,height:1000});
     await page.locator('.block[data-path="[]"] > .block-head').click();
-    await page.selectOption('#inspector [data-field="Child policy"]','wait');
-    doc=await source();assert.equal(doc.root.duration,undefined);assert.equal(doc.root.child_mode,'wait');
+    assert.equal(await page.locator('#inspector h3').filter({hasText:'Subpattern behavior'}).count(),1);
+    assert.equal(await page.locator('#inspector [data-field="Loop subpatterns"]').isChecked(),false);
+    await page.selectOption('#inspector [data-field="Duration"]','inherit');
+    doc=await source();assert.equal(doc.root.duration,undefined);assert.equal('loop_subpatterns' in doc.root,false);
     assert.match(await page.locator('#timeline').textContent(),/authored axis 800f/);
+    await page.locator('#inspector [data-field="Loop subpatterns"]').check();
+    doc=await source();assert.equal(doc.root.loop_subpatterns,true);assert.equal(doc.root.duration,undefined);
+    assert.match(await page.locator('#timeline').textContent(),/authored axis 800f/);
+    for(const width of [1500,320]){
+      await page.setViewportSize({width,height:1000});
+      await page.locator('.inspector-panel').evaluate(e=>e.scrollTop=0);
+      await page.locator('.inspector-panel').screenshot({path:path.resolve(__dirname,'../../build/composer-qa/inherit-inspector-'+width+'.png')});
+      await page.screenshot({path:path.resolve(__dirname,'../../build/composer-qa/inherit-composer-'+width+'.png')});
+    }
+    await page.setViewportSize({width:1500,height:1000});
+    await page.click('#undo');assert.equal((await source()).root.loop_subpatterns,undefined);
     await page.click('#undo');assert.equal((await source()).root.duration,1000);
+    await page.locator('#inspector [data-field="Loop subpatterns"]').check();
+    assert.equal(await page.locator('.timeline-bar[data-path="[0]"]').count(),2,'loop restarts the list within the fixed window');
+    await page.locator('#inspector [data-field="Loop subpatterns"]').uncheck();
+    assert.equal((await source()).root.loop_subpatterns,false);
+    assert.equal(await page.locator('.timeline-bar[data-path="[0]"]').count(),1);
+    assert.equal(await page.locator('#inspector [data-field="Child policy"]').count(),0);
+    assert.doesNotMatch(await page.locator('#inspector').textContent(),/Wait|Sample once|sampled/);
+    for(const legacy of [{child_mode:'loop'},{duration:{min:64,max:128,step:8}}]){
+      const invalid=JSON.stringify({version:4,root:{...schedule.root,...legacy}});
+      await page.fill('#source',invalid);await page.click('#apply-source');
+      assert.equal(await page.inputValue('#source'),invalid);
+      assert.match(await page.locator('#diagnostics').textContent(),/root\.(child_mode|duration):/);
+      assert.equal((await page.locator('.block.selected').getAttribute('data-path')),'[]');
+    }
+    await page.fill('#source',JSON.stringify(schedule));await page.click('#apply-source');
+    const noBound={version:4,root:{kind:'parallel',children:[{node:{op:'image',source:'primary'}}]}};
+    await page.fill('#source',JSON.stringify(noBound));await page.click('#apply-source');await page.click('#validate');
+    assert.match(await page.locator('#diagnostics').textContent(),/root: Inherit needs a parent duration or finite timed subpatterns/);
+    await page.fill('#source',JSON.stringify(schedule));await page.click('#apply-source');
+    const unbounded={version:4,root:{kind:'sequential',duration:10,children:[{node:{kind:'parallel',duration:2,repeat:'forever',children:[{node:{op:'image',source:'primary'}}]}}]}};
+    await page.fill('#source',JSON.stringify(unbounded));await page.click('#apply-source');await page.click('#validate');
+    assert.match(await page.locator('#diagnostics').textContent(),/root.children\[0\].node: Subpattern repeat must be finite/);
+    await page.fill('#source',JSON.stringify(schedule));await page.click('#apply-source');
     // Source edits survive block selection, new-document attempts and format switches.
     await page.fill('#source','broken draft');await page.click('#new-document');
     await page.selectOption('#source-format','text');assert.equal(await page.inputValue('#source-format'),'json');
@@ -141,6 +186,6 @@ const {chromium}=require('playwright');
     assert.equal(requests.some(r=>r.startsWith('POST ')),false);
     assert.ok(requests.includes('GET /trance/builtins-v4.json'));
     assert.deepEqual(errors,[]);
-    console.log('PASS: static subpath and eight built-ins; preserved type-conversion drafts and chosen-duration wrapping; proportional timeline, completion/tails, zoom/pan/selection and Wait; safe dirty source and explicit format switching; 100-entry history; no overflow or page errors at 1500/736/320px.');
+    console.log('PASS: static subpath and eight built-ins; preserved type-conversion drafts and chosen-duration wrapping; proportional timeline, completion/tails, zoom/pan/selection, boolean loops and Inherit; safe dirty source and explicit format switching; 100-entry history; no overflow or page errors at 1500/736/320px.');
   }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(e=>{console.error(e);process.exitCode=1;});

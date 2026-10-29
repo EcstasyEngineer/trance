@@ -76,61 +76,106 @@ int main()
         }
       require(exact, "probability missing");
     }
-    // Wait is opt-in and supplies its exact effective clock span.
-    J wait = {{"kind", "sequential"}, {"child_mode", "wait"},
-              {"children", J::array({{{"node", node("parallel", 2)}},
-                                      {{"node", node("parallel", 3)}}})}};
-    auto inferred = patternv4::parse(document(wait).dump());
+    // Inherit on the root resolves independently finite timed subpatterns.
+    J inherit = {{"kind", "sequential"},
+                 {"children", J::array({{{"node", node("parallel", 2)}},
+                                         {{"node", node("parallel", 3)}}})}};
+    auto inferred = patternv4::parse(document(inherit).dump());
     require(inferred.ok, inferred.error.c_str());
-    require(inferred.root.length == 5, "wait sequence sum");
+    require(inferred.root.length == 5, "inherited sequence sum");
     pattern::NodeMap clocks;
     std::unique_ptr<Cycler> scheduler(pattern::compile(inferred.root, {}, clocks));
     for (unsigned i = 0; i < 5; ++i) scheduler->advance();
-    require(scheduler->complete() && scheduler->elapsed_length() == 5, "wait execution extent");
-    wait["kind"] = "parallel";
-    wait["children"].push_back({{"node", image()}});
-    inferred = patternv4::parse(document(wait).dump());
-    require(inferred.ok && inferred.root.length == 3, "wait max ignores output leaves");
-    for (const auto field : {"duration", "cadence", "offset", "repeat"}) {
-      auto invalid = wait; invalid[field] = 1; rejected(document(invalid));
-    }
-    auto invalid = wait; invalid["children"] = J::array({{{"node", image()}}});
-    rejected(document(invalid));
-    invalid = wait; invalid["children"][0]["node"]["duration"] =
+    require(scheduler->complete() && scheduler->elapsed_length() == 5, "inherited execution extent");
+    inherit["loop_subpatterns"] = true;
+    inferred = patternv4::parse(document(inherit).dump());
+    require(inferred.ok && inferred.root.length == 5 && inferred.root.loop_subpatterns,
+            "looping inherited root has a finite natural bound");
+    inherit["kind"] = "parallel";
+    inherit["loop_subpatterns"] = false;
+    inherit["children"].push_back({{"node", image()}});
+    inferred = patternv4::parse(document(inherit).dump());
+    require(inferred.ok && inferred.root.length == 3, "inherited max ignores direct outputs");
+    auto invalid = inherit; invalid["children"] = J::array({{{"node", image()}}});
+    auto unresolved = patternv4::parse(document(invalid).dump());
+    require(!unresolved.ok && unresolved.error.find("$.root.duration: Inherit needs") == 0,
+            "unresolved inheritance needs located explanation");
+    invalid = inherit; invalid["children"][0]["node"]["duration"] =
         {{"min", 2}, {"max", 4}, {"step", 1}};
     rejected(document(invalid));
-    invalid = wait; invalid["children"][0]["node"]["repeat"] = "forever";
+    invalid = inherit; invalid["children"][0]["node"]["repeat"] = "forever";
     rejected(document(invalid));
-    invalid = wait; invalid["children"][0]["node"].erase("duration");
+    invalid = inherit; invalid["children"][0]["node"].erase("duration");
     rejected(document(invalid));
-    invalid = wait; invalid["children"][0]["node"]["offset"] = 1;
-    rejected(document(invalid));
+    for (const auto mode : {"independent", "loop", "wait"}) {
+      invalid = node(); invalid["child_mode"] = mode; rejected(document(invalid));
+    }
+    invalid = node(); invalid["loop_subpatterns"] = "true"; rejected(document(invalid));
     auto random_mode = node("random");
     random_mode["select"] = {{"order", "random"}, {"allow_self", true}, {"first", 0}};
     random_mode["children"] = J::array({{{"node", node()}}});
-    random_mode["child_mode"] = "independent";
+    random_mode["loop_subpatterns"] = false;
     rejected(document(random_mode));
-    auto clipped_wait = node("parallel", 2);
-    clipped_wait["children"] = J::array({{{"node", wait}}});
-    auto clipped_parse = patternv4::parse(document(clipped_wait).dump());
-    require(clipped_parse.ok, clipped_parse.error.c_str());
-    clocks.clear(); scheduler.reset(pattern::compile(clipped_parse.root, {}, clocks));
-    scheduler->advance(); scheduler->advance();
-    require(scheduler->complete() && scheduler->elapsed_length() == 2,
-            "independent ancestor clips longer wait child");
-    auto nested = wait; nested["kind"] = "sequential"; nested["children"].erase(2);
-    nested["children"][0]["node"] = wait;
-    inferred = patternv4::parse(document(nested).dump());
-    require(inferred.ok && inferred.root.length == 6, "nested wait exact lifetime");
+    auto nested = node("sequential", 9);
+    auto inherited_child = node(); inherited_child.erase("duration");
+    inherited_child["id"] = "inherited_child";
+    nested["children"] = J::array({{{"node", node("parallel", 2)}}, {{"node", inherited_child}}});
+    auto nested_parse = patternv4::parse(document(nested).dump());
+    require(nested_parse.ok, nested_parse.error.c_str());
+    clocks.clear(); scheduler.reset(pattern::compile(nested_parse.root, {}, clocks));
+    for (unsigned i = 0; i < 9; ++i) scheduler->advance();
+    require(scheduler->complete() && clocks.at("inherited_child")->length() == 7,
+            "sequential inherited child uses remaining owner window");
+    nested["kind"] = "parallel";
+    nested_parse = patternv4::parse(document(nested).dump());
+    require(nested_parse.ok, nested_parse.error.c_str());
+    clocks.clear(); scheduler.reset(pattern::compile(nested_parse.root, {}, clocks));
+    scheduler->advance();
+    require(clocks.at("inherited_child")->length() == 9, "parallel child inherits full owner window");
+    // Fitting requirements and preroll budgets use the actual remaining window.
+    auto short_owner = node("sequential", 10);
+    auto fitted = node(); fitted.erase("duration");
+    fitted["children"][0]["node"]["envelope"] = {{"in", 2}, {"hold", 2}, {"out", 2}};
+    short_owner["children"] = J::array({{{"node", node("parallel", 8)}}, {{"node", fitted}}});
+    rejected(document(short_owner));
+    fitted["duration"] = 6;
+    short_owner["children"][1]["node"] = fitted;
+    auto explicit_clipped = patternv4::parse(document(short_owner).dump());
+    require(explicit_clipped.ok, "explicit fitting duration may be intentionally clipped");
+    auto phase_owner = node("sequential", 4000000);
+    auto phased = node(); phased.erase("duration"); phased["offset"] = 3999999;
+    phase_owner["children"] = J::array({{{"node", node("parallel", 1000000)}}, {{"node", phased}}});
+    rejected(document(phase_owner));
+    phase_owner["children"][1]["node"]["offset"] = 1;
+    rejected(document(phase_owner));
+    phase_owner["children"][1]["node"]["offset"] = 2999999;
+    require(patternv4::parse(document(phase_owner).dump()).ok, "safe exact remaining-window phase");
+    auto variable = node("parallel", 10);
+    variable["loop_subpatterns"] = true;
+    fitted.erase("duration");
+    variable["children"] = J::array({{{"node", fitted}}});
+    rejected(document(variable));
+    variable["children"][0]["node"]["duration"] = 6;
+    require(patternv4::parse(document(variable).dump()).ok, "fixed duration resolves variable envelope");
+    variable["children"][0]["node"].erase("duration");
+    variable["children"][0]["node"]["cadence"] = 6;
+    require(patternv4::parse(document(variable).dump()).ok, "fixed cadence resolves variable envelope");
+    variable["children"][0]["node"] = phased;
+    rejected(document(variable));
+    variable["children"][0]["node"]["cadence"] = 8;
+    require(patternv4::parse(document(variable).dump()).ok, "fixed cadence resolves variable phase");
+    variable.erase("loop_subpatterns"); variable["cadence"] = 6;
+    variable["children"][0]["node"] = fitted;
+    rejected(document(variable));
     auto capped = node("sequential", 20);
     capped["children"] = J::array({{{"node", node("parallel", 2)}},
                                    {{"node", node("parallel", 3)}}});
     capped["repeat"] = 2;
-    wait["children"] = J::array({{{"node", capped}}});
-    inferred = patternv4::parse(document(wait).dump());
-    require(inferred.ok && inferred.root.length == 10, "wait uses actual repeated sequence lifetime");
+    inherit["children"] = J::array({{{"node", capped}}});
+    inferred = patternv4::parse(document(inherit).dump());
+    require(inferred.ok && inferred.root.length == 10, "inherit uses actual repeated lifetime");
     auto warned = patternv4::parse(document(capped).dump());
-    require(warned.ok && !warned.warnings.empty(), "independent unused span advisory");
+    require(warned.ok && !warned.warnings.empty(), "unused span advisory");
     capped["duration"] = 4;
     warned = patternv4::parse(document(capped).dump());
     require(warned.ok && !warned.warnings.empty() &&

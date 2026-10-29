@@ -22,14 +22,22 @@ const {chromium} = require('playwright');
       assert.match(await page.locator('#validation-summary').textContent(),/passed/,`Built-in ${i}: ${await page.locator('#diagnostics').textContent()}`);
     }
     await page.selectOption('#source-format','json');
-    // Both policy schedules lower through the same canonical native AST route.
+    // Inherit and the boolean loop control use the same native AST route.
     const finite=duration=>({kind:'parallel',duration,children:[{node:{op:'image',source:'primary',visibility:[0,1]}}]});
-    for(const policy of ['wait','loop']){
-      const root={kind:'sequential',child_mode:policy,children:[{node:finite(400)},{node:finite(400)}],...(policy==='loop'?{duration:1000}:{})};
+    const cases=[
+      {root:{kind:'sequential',children:[{node:finite(400)},{node:finite(400)}]},extent:800},
+      {root:{kind:'sequential',loop_subpatterns:true,children:[{node:finite(400)},{node:finite(400)}]},extent:800},
+      {root:{kind:'parallel',loop_subpatterns:true,children:[{node:finite(400)},{node:finite(600)}]},extent:600},
+      {root:{kind:'sequential',duration:9,children:[{node:finite(2)},{node:{kind:'parallel',children:[{node:{op:'image',source:'primary'}}]}}]},extent:9,inheritedWindow:'[2, 9)'},
+      {root:{kind:'parallel',duration:9,children:[{node:finite(2)},{node:{kind:'parallel',children:[{node:{op:'image',source:'primary'}}]}}]},extent:9,inheritedWindow:'[0, 9)'},
+      {root:{kind:'sequential',repeat:2,children:[{node:finite(400)},{node:finite(400)}]},extent:1600},
+    ];
+    for(const {root,extent,inheritedWindow} of cases){
       await page.fill('#source',JSON.stringify({version:4,root}));await page.click('#apply-source');await page.click('#validate');
       await page.waitForFunction(()=>/compilation (passed|failed)/.test(document.querySelector('#validation-summary').textContent));
       assert.match(await page.locator('#validation-summary').textContent(),/passed/,await page.locator('#diagnostics').textContent());
-      assert.match(await page.locator('#timeline').textContent(),policy==='wait'?/authored axis 800f/:/authored axis 1000f/);
+      assert.match(await page.locator('#timeline').textContent(),new RegExp('authored axis '+extent+'f'));
+      if(inheritedWindow)assert.ok((await page.locator('.timeline-bar[data-path="[1]"]').first().getAttribute('title')).includes(inheritedWindow));
     }
     await page.click('#new-document');
     await page.locator('.palette-piece[data-kind="image"] button').click();
@@ -80,12 +88,14 @@ const {chromium} = require('playwright');
     await page.click('#undo');
     ast=JSON.parse(await page.inputValue('#source'));assert.equal(ast.root.children[0].node.children.length,3);
     await page.locator('.block[data-path="[0,0]"] > .block-head').click();
-    await page.locator('#inspector select[data-field="Duration mode"]').selectOption('sampled');
+    await page.locator('#inspector select[data-field="Duration"]').selectOption('fixed');
+    await page.locator('#inspector input[data-field="duration"]').fill('96');
+    await page.locator('#inspector input[data-field="duration"]').dispatchEvent('change');
     await page.locator('#inspector input[data-field="Enable chance exit"]').check();
     await page.locator('#inspector input[data-field="check every"]').fill('4');
     await page.locator('#inspector input[data-field="check every"]').dispatchEvent('change');
     ast=JSON.parse(await page.inputValue('#source'));
-    assert.deepEqual(ast.root.children[0].node.children[0].node.duration,{min:64,max:128,step:8});
+    assert.equal(ast.root.children[0].node.children[0].node.duration,96);
     assert.equal(ast.root.children[0].node.children[0].exit.check_every,4);
     const valid=await page.inputValue('#source');
     const downloadEvent=page.waitForEvent('download');await page.click('#export');
@@ -103,6 +113,6 @@ const {chromium} = require('playwright');
     await page.click('#validate');await page.waitForFunction(()=>/compilation (passed|failed)/.test(document.querySelector('#validation-summary').textContent));
     assert.match(await page.locator('#validation-summary').textContent(),/passed/,await page.locator('#diagnostics').textContent());
     assert.deepEqual(errors,[]);
-    console.log('PASS: eight readable-text native V4 built-ins compile; Wait and Loop policies + image visibility compile; explicit conversion wrapping; drag nesting/moving; selector editing; sampled duration and chance exit; duplicate/delete/undo; JSON import/export; invalid source retained.');
+    console.log('PASS: eight readable-text native V4 built-ins compile; root/nested Inherit, bounded boolean loops, inherited repeats + image visibility compile; explicit conversion wrapping; drag nesting/moving; selector editing; fixed duration and chance exit; duplicate/delete/undo; JSON import/export; invalid source retained.');
   } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

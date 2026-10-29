@@ -117,23 +117,19 @@ bool OccurrenceCycler::has_next_iteration() const
   return _spec.repeat_forever || _iteration + 1 < _spec.repeat_count;
 }
 
-void OccurrenceCycler::prepare(uint32_t inherited_span, bool trigger_actions)
+void OccurrenceCycler::prepare(uint32_t inherited_span)
 {
   reset();
   _inherited = std::max(1u, inherited_span);
-  begin_iteration(trigger_actions);
+  begin_iteration();
   _prepared = true;
 }
 
-void OccurrenceCycler::begin_iteration(bool trigger_actions)
+void OccurrenceCycler::begin_iteration()
 {
   _position = 0;
   _iteration_done = false;
   _span = _spec.length ? _spec.length : _inherited;
-  if (trigger_actions && _spec.duration_max > _span) {
-    const uint32_t step = std::max(1u, _spec.duration_step);
-    _span += step * random(1u + (_spec.duration_max - _span) / step);
-  }
   _span = std::max(1u, _span);
   _ramp.clear();
   if (_spec.cadence_ramp_steps) {
@@ -172,24 +168,23 @@ uint32_t OccurrenceCycler::body_remaining() const
 {
   return std::min(_body_length - _body_position, _span - _position);
 }
-void OccurrenceCycler::start_child(uint32_t child, bool trigger_actions)
+void OccurrenceCycler::start_child(uint32_t child)
 {
   auto* value = _children.at(child).get();
   if (auto* occurrence = dynamic_cast<OccurrenceCycler*>(value))
-    occurrence->prepare(std::max(1u, body_remaining()), trigger_actions);
+    occurrence->prepare(std::max(1u, body_remaining()));
   else value->reset();
 }
-void OccurrenceCycler::begin_body(bool trigger_actions)
+void OccurrenceCycler::begin_body()
 {
   const uint32_t phase = _body_position;
   if (phase > 1000000) throw std::invalid_argument("offset phase exceeds schedule preroll budget");
   _body_position = 0;
   _selected = _spec.select_first;
   _cooldown_until = 0;
-  const bool enter_actions = trigger_actions && !phase;
   if (_spec.occurrence_kind == pattern::Node::Composition::Parallel) {
-    for (uint32_t i = 0; i < _children.size(); ++i) start_child(i, enter_actions);
-  } else if (!_children.empty()) start_child(_selected, enter_actions);
+    for (uint32_t i = 0; i < _children.size(); ++i) start_child(i);
+  } else if (!_children.empty()) start_child(_selected);
   _body_started = true;
   // A phase shift advances clocks without actions or random choices.
   for (uint32_t i = 0; i < phase; ++i) {
@@ -206,8 +201,8 @@ void OccurrenceCycler::run_body(bool trigger_actions)
   if (_spec.occurrence_kind == Composition::Parallel) {
     for (uint32_t i = 0; i < _children.size(); ++i) {
       auto& child = _children[i];
-      if (child->complete() && _spec.child_mode == pattern::Node::ChildMode::Loop)
-        start_child(i, trigger_actions);
+      if (child->complete() && _spec.loop_subpatterns)
+        start_child(i);
       if (!child->complete()) {
         child->activate(true);
         child->advance(trigger_actions);
@@ -219,10 +214,10 @@ void OccurrenceCycler::run_body(bool trigger_actions)
   if (_spec.occurrence_kind == Composition::Sequential) {
     if (_children[_selected]->complete()) {
       if (_selected + 1 == _children.size()) {
-        if (_spec.child_mode != pattern::Node::ChildMode::Loop) return;
+        if (!_spec.loop_subpatterns) return;
         _selected = 0;
-        start_child(_selected, trigger_actions);
-      } else start_child(++_selected, trigger_actions);
+        start_child(_selected);
+      } else start_child(++_selected);
     }
   } else {
     bool transition = _children[_selected]->complete();
@@ -244,7 +239,7 @@ void OccurrenceCycler::run_body(bool trigger_actions)
           _selected = choice >= _selected ? choice + 1 : choice;
         }
       }
-      start_child(_selected, trigger_actions);
+      start_child(_selected);
       _cooldown_until = _body_position + _spec.select_cooldown;
     }
   }
@@ -255,20 +250,20 @@ void OccurrenceCycler::run_body(bool trigger_actions)
 void OccurrenceCycler::advance(bool trigger_actions)
 {
   if (_done) reset(); // External root advancement repeats the whole program.
-  if (!_prepared) prepare(_spec.length ? _spec.length : _inherited, trigger_actions);
-  if (_iteration_done) { ++_iteration; begin_iteration(trigger_actions); }
+  if (!_prepared) prepare(_spec.length ? _spec.length : _inherited);
+  if (_iteration_done) { ++_iteration; begin_iteration(); }
   activate(true);
   if (_body_position == _body_length) {
     _body_position = 0;
     if (!_ramp.empty() && _segment + 1 < _ramp.size()) _body_length = _ramp[++_segment];
     _body_started = false;
   }
-  if (!_body_started) begin_body(trigger_actions);
+  if (!_body_started) begin_body();
   run_body(trigger_actions);
   ++_body_position;
   ++_position;
   if (_elapsed < std::numeric_limits<uint32_t>::max()) ++_elapsed;
-  const bool sequence_end = _spec.child_mode != pattern::Node::ChildMode::Loop && !_spec.cadence && _ramp.empty() &&
+  const bool sequence_end = !_spec.loop_subpatterns && !_spec.cadence && _ramp.empty() &&
       _spec.occurrence_kind == pattern::Node::Composition::Sequential && !_children.empty() &&
       _selected + 1 == _children.size() && _children.back()->complete();
   if (_position >= _span || sequence_end) {

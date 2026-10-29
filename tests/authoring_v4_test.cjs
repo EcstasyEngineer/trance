@@ -27,19 +27,61 @@ assert.equal(model.rows.filter(r=>r.path.length===1).length,2,'Root is not autom
 model=T.layout({version:4,root:sequence(1000,600,600)});
 assert.equal(model.rows.find(r=>r.path.length===1&&r.path[0]===1).clipped,200);
 assert.ok(model.notes.some(n=>/200 authored frames clipped/.test(n)));
-const loop=sequence(1000,300,300);loop.child_mode='loop';
+const loop=sequence(1000,300,300);loop.loop_subpatterns=true;
 model=T.layout({version:4,root:loop});
 assert.deepEqual(model.rows.filter(r=>r.path.length===1).map(r=>[r.start,r.end]),[[0,300],[300,600],[600,900],[900,1000]]);
-const wait={kind:'sequential',child_mode:'wait',children:[{node:timed(100)},{node:timed(250)}]};
-assert.equal(T.measure(wait).end,350);assert.deepEqual(G.validate({version:4,root:wait}),[]);
-assert.equal(T.measure({...wait,kind:'parallel'}).end,250);
-assert.ok(G.validate({version:4,root:{...wait,duration:400}}).some(e=>/omits owner duration/.test(e)));
-assert.ok(G.validate({version:4,root:{kind:'parallel',child_mode:'wait',children:[{node:image()}]}}).some(e=>/at least one timed child/.test(e)));
-assert.ok(G.validate({version:4,root:{...wait,children:[{node:{...timed(100),duration:{min:1,max:2,step:1}}}]}}).some(e=>/exact finite/.test(e)));
-model=T.layout({version:4,root:{kind:'parallel',duration:{min:64,max:128,step:8},children:[{node:image()}]}});
-assert.equal(model.exact,false);assert.equal(model.rows.length,1);assert.equal(model.extent,128);assert.match(model.rows[0].range,/64.*128f/);
+const inherited={kind:'sequential',children:[{node:timed(100)},{node:timed(250)}]};
+assert.equal(T.measure(inherited).end,350);assert.deepEqual(G.validate({version:4,root:inherited}),[]);
+assert.equal(T.measure({...inherited,kind:'parallel'}).end,250);
+assert.equal(T.measure({...inherited,loop_subpatterns:true}).end,350,'root loop has a finite natural sum');
+for(const kind of ['parallel','sequential']){
+  model=T.layout({version:4,root:{...inherited,kind,repeat:2}});
+  const iteration=kind==='parallel'?250:350;
+  assert.equal(model.extent,iteration*2);assert.equal(model.rows[0].authored,iteration*2,'root derives one iteration before applying repeat');
+  assert.deepEqual(model.rows.filter(r=>r.path.join('.')==='0').map(r=>r.start),[0,iteration]);
+  assert.equal(model.rows[0].clipped,0);assert.equal(model.rows[0].inactive,undefined);
+}
+const parallelLoop={...inherited,kind:'parallel',loop_subpatterns:true};
+model=T.layout({version:4,root:parallelLoop});
+assert.equal(model.extent,250);assert.deepEqual(model.rows.filter(r=>r.path.join('.')==='0').map(r=>[r.start,r.end]),[[0,100],[100,200],[200,250]]);
+assert.deepEqual(G.validate({version:4,root:parallelLoop}),[]);
+const nested={kind:'parallel',children:[{node:image()}]};
+assert.equal(T.measure(nested,600).end,600,'nested Inherit uses its owner window');
+model=T.layout({version:4,root:{kind:'sequential',duration:1000,children:[{node:timed(400)},{node:nested}]}});
+assert.deepEqual(model.rows.filter(r=>r.path.length===1).map(r=>[r.start,r.end]),[[0,400],[400,1000]]);
+const inheritedList={kind:'sequential',children:[{node:timed(400)},{node:timed(400)}]};
+model=T.layout({version:4,root:{kind:'parallel',duration:1000,loop_subpatterns:true,children:[{node:inheritedList}]}});
+const inheritedVisits=model.rows.filter(r=>r.path.join('.')==='0');
+assert.deepEqual(inheritedVisits.map(r=>[r.start,r.end]),[[0,1000],[800,1000]]);
+assert.equal(inheritedVisits[1].authored,200,'restarted inherited child receives the remaining owner window');
+assert.equal(inheritedVisits[1].clipped,0);
+assert.deepEqual(G.validate({version:4,root:{kind:'parallel',children:[{node:image()}]}}),['root: Inherit needs a parent duration or finite timed subpatterns.']);
+assert.equal(G.rootDuration({kind:'parallel',children:[{node:{kind:'parallel',children:[{node:timed(100)}]}}]}),null,'an inherited child does not invent an independent root bound');
+for(const legacy of [{child_mode:'loop'},{duration:{min:64,max:128,step:8}},{loop_subpatterns:'true'}]){
+  assert.throws(()=>G.parse(JSON.stringify({version:4,root:{...timed(128),...legacy}})),/root\.(child_mode|duration|loop_subpatterns):/);
+}
+assert.throws(()=>G.parse(JSON.stringify({version:4,root:{kind:'random',duration:128,loop_subpatterns:false,children:[]}})),/loop_subpatterns/);
 assert.ok(G.properties(image()).includes('visibility'));
-console.log('PASS: exact sequence completion, tails, clipping, bounded loop occurrences, Wait sum/max and gate constraints, unresolved sampling, image visibility.');
+console.log('PASS: exact sequence completion, tails, clipping, bounded loop occurrences, Inherit root sum/max, nested owner windows and boolean loops, explicit legacy rejection, image visibility.');
+for(const kind of ['parallel','sequential']){
+  const inheritedChild={kind:'parallel',children:[{node:image()}]};
+  const declaredOwner={kind,duration:10,children:[{node:inheritedChild}]};
+  model=T.layout({version:4,root:{kind:'parallel',duration:5,children:[{node:declaredOwner}]}});
+  const clippedInherited=model.rows.find(r=>r.path.join('.')==='0.0');
+  assert.deepEqual([clippedInherited.start,clippedInherited.end,clippedInherited.authored,clippedInherited.clipped],[0,5,10,5],kind+' uses logical owner clock independently of ancestor clipping');
+}
+model=T.layout({version:4,root:{kind:'parallel',duration:5,children:[{node:{kind:'parallel',duration:10,cadence:8,children:[{node:image()}]}}]}});
+assert.equal(model.rows.find(r=>r.path.join('.')==='0.0').authored,8,'cadence output retains the logical body interval behind an ancestor clip');
+const astraLoop={kind:'parallel',duration:10,loop_subpatterns:true,children:[{node:{kind:'sequential',children:[{node:timed(3)},{node:timed(3)}]}}]};
+model=T.layout({version:4,root:astraLoop});
+assert.deepEqual(model.rows.filter(r=>r.path.join('.')==='0').map(r=>[r.start,r.authored,r.end,r.clipped]),[[0,10,10,0],[6,4,10,0]]);
+assert.equal(model.rows.find(r=>r.path.join('.')==='0.1'&&r.start===9).clipped,2,'second finite child clips inside the four-frame inherited restart');
+const forever={...timed(2),repeat:'forever'};
+assert.ok(G.validate({version:4,root:{kind:'sequential',duration:10,children:[{node:forever}]}}).some(e=>/repeat must be finite/.test(e)));
+const randomRoot={kind:'random',duration:10,select:{order:'random',allow_self:false,first:0},children:[{node:forever}]};
+assert.ok(G.validate({version:4,root:randomRoot}).some(e=>/repeat must be finite/.test(e)));
+randomRoot.children[0].exit={probability:{numerator:1,denominator:2},check_every:1};
+assert.deepEqual(G.validate({version:4,root:randomRoot}),[],'Random chance exit can terminate a forever child');
 const cadenceRoot=(duration,cadence,offset)=>({kind:'parallel',duration,cadence,...(offset===undefined?{}:{offset}),children:[{node:image()}]});
 model=T.layout({version:4,root:cadenceRoot(256,64)});
 assert.deepEqual(model.rows.filter(r=>r.path.length).map(r=>[r.start,r.end]),[[0,64],[64,128],[128,192],[192,256]]);
